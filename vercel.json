@@ -1,7 +1,7 @@
 {
   "version": 2,
   "functions": {
-    "vercel-app.js": {
+    "api/index.js": {
       "maxDuration": 10,
       "memory": 512
     }
@@ -9,7 +9,7 @@
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "vercel-app.js"
+      "dest": "/api/index.js"
     }
   ],
   "env": {
