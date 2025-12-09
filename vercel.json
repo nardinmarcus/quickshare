@@ -1,11 +1,11 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "app.js",
-      "use": "@vercel/node"
+  "functions": {
+    "app.js": {
+      "maxDuration": 10,
+      "memory": 512
     }
-  ],
+  },
   "routes": [
     {
       "src": "/(.*)",
@@ -14,12 +14,6 @@
   ],
   "env": {
     "NODE_ENV": "production"
-  },
-  "functions": {
-    "app.js": {
-      "maxDuration": 10,
-      "memory": 512
-    }
   },
   "regions": ["hkg1", "sfo1"]
 }
