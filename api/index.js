@@ -1,7 +1,27 @@
 // Vercel 部署版本的 app.js
-require('dotenv').config();
 
-const express = require('express');
+// 捕获未处理的异常
+process.on('uncaughtException', (error) => {
+  console.error('未捕获的异常:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('未处理的 Promise 拒绝:', reason);
+});
+
+try {
+  require('dotenv').config();
+} catch (error) {
+  console.error('加载 .env 失败:', error);
+}
+
+let express;
+try {
+  express = require('express');
+} catch (error) {
+  console.error('加载 Express 失败:', error);
+  throw new Error('Failed to load Express module');
+}
 const path = require('path');
 const bodyParser = require('body-parser');
 const morgan = require('morgan');
@@ -20,31 +40,41 @@ let initDatabase = null;
 
 if (isVercel) {
   // Vercel 环境
-  VercelKVStore = require('./session/vercel-kv-store');
-  VercelPagesModel = require('./models/vercel-pages');
-  const vercelDb = require('./models/vercel-db');
+  VercelKVStore = require('../session/vercel-kv-store');
+  VercelPagesModel = require('../models/vercel-pages');
+  const vercelDb = require('../models/vercel-db');
   initDatabase = vercelDb.initDatabase;
 } else {
   // 本地环境
-  VercelPagesModel = require('./models/pages');
-  const localDb = require('./models/db');
+  VercelPagesModel = require('../models/pages');
+  const localDb = require('../models/db');
   initDatabase = localDb.initDatabase;
 }
 
 // 导入认证中间件
-const { isAuthenticated } = require('./middleware/auth');
+const { isAuthenticated } = require('../middleware/auth');
 
 // 导入配置
-const config = require('./config');
+const config = require('../config');
 
 // 路由导入
-const pagesRoutes = require('./routes/pages');
+const pagesRoutes = require('../routes/pages');
 
 // 创建 Express 应用
 const app = express();
 
 // 端口配置 - Vercel 环境使用环境变量 PORT
 const PORT = isVercel ? (process.env.PORT || 3000) : config.port;
+
+// 添加调试信息
+console.log('=== 应用启动信息 ===');
+console.log('环境:', process.env.NODE_ENV);
+console.log('是否 Vercel 环境:', isVercel);
+console.log('认证启用:', config.authEnabled);
+console.log('数据库配置:', {
+  hasPostgresUrl: !!process.env.POSTGRES_URL,
+  hasKV: !!process.env.KV_URL
+});
 
 // 将配置添加到应用本地变量中
 app.locals.config = config;
@@ -56,7 +86,7 @@ app.use(cors());
 app.use(bodyParser.json({ limit: '15mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '15mb' }));
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, '../public')));
 
 // 会话存储配置
 let sessionStore;
@@ -91,7 +121,7 @@ app.use(session({
 }));
 
 // 设置视图引擎
-app.set('views', path.join(__dirname, 'views'));
+app.set('views', path.join(__dirname, '../views'));
 app.set('view engine', 'ejs');
 
 // 数据库初始化状态
@@ -295,7 +325,7 @@ app.get('/view/:id', ensureDatabase, async (req, res) => {
     }
 
     // 导入渲染工具
-    const { renderContent } = require('./utils/contentRenderer');
+    const { renderContent } = require('../utils/contentRenderer');
 
     // 渲染内容
     const contentType = page.code_type || 'html';
@@ -327,7 +357,17 @@ app.use((req, res) => {
 });
 
 // 导出应用供 Vercel 使用
-module.exports = app;
+try {
+  module.exports = app;
+} catch (error) {
+  console.error('导出应用失败:', error);
+  module.exports = (req, res) => {
+    res.status(500).json({
+      error: 'Server initialization failed',
+      message: error.message
+    });
+  };
+}
 
 // 本地开发时的启动逻辑
 if (!isVercel && require.main === module) {
