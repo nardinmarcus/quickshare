@@ -1,12 +1,20 @@
 {
   "version": 2,
   "functions": {
+    "api/test.js": {
+      "maxDuration": 10,
+      "memory": 512
+    },
     "api/index.js": {
       "maxDuration": 10,
       "memory": 512
     }
   },
   "routes": [
+    {
+      "src": "/test",
+      "dest": "/api/test.js"
+    },
     {
       "src": "/(.*)",
       "dest": "/api/index.js"
