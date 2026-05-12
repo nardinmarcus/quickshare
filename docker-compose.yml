@@ -9,17 +9,11 @@ services:
     restart: unless-stopped
     ports:
       - "8888:8888"
-    volumes:
-      - html-go-data:/usr/src/app/data
     environment:
       - NODE_ENV=production
       - PORT=8888
     networks:
       - html-go-network
-
-volumes:
-  html-go-data:
-    driver: local
 
 networks:
   html-go-network:

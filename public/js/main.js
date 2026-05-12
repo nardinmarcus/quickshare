@@ -36,6 +36,24 @@ function showSuccessToast(message) {
 // 使用延迟加载确保所有元素已经完全渲染好
 document.addEventListener('DOMContentLoaded', () => {
   console.log('DOM完全加载，初始化应用...');
+
+  function getCsrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute('content') : '';
+  }
+
+  function jsonHeaders() {
+    const headers = {
+      'Content-Type': 'application/json',
+    };
+    const csrfToken = getCsrfToken();
+
+    if (csrfToken) {
+      headers['X-CSRF-Token'] = csrfToken;
+    }
+
+    return headers;
+  }
   
   // DOM 元素
   const htmlInput = document.getElementById('html-input');
@@ -207,15 +225,26 @@ document.addEventListener('DOMContentLoaded', () => {
         // 更新数据库状态为需要密码才能访问
         try {
           const urlId = resultUrl.dataset.originalUrl.split('/').pop();
-          await fetch(`/api/pages/${urlId}/protect`, {
+          const response = await fetch(`/api/pages/${urlId}/protect`, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
+            headers: jsonHeaders(),
             body: JSON.stringify({ isProtected: true }),
           });
+          const data = await response.json();
+
+          if (!response.ok || !data.success) {
+            throw new Error(data.error || '更新保护状态失败');
+          }
+
+          if (generatedPassword && data.password) {
+            generatedPassword.textContent = data.password;
+          }
         } catch (error) {
           console.error('更新保护状态错误:', error);
+          passwordToggle.checked = false;
+          if (passwordInfo) passwordInfo.style.display = 'none';
+          if (copyPasswordLink) copyPasswordLink.style.display = 'none';
+          showErrorToast('开启密码保护失败');
         }
       } else {
         // 隐藏密码区域和复制按钮
@@ -225,15 +254,26 @@ document.addEventListener('DOMContentLoaded', () => {
         // 更新数据库状态为不需要密码就能访问
         try {
           const urlId = resultUrl.dataset.originalUrl.split('/').pop();
-          await fetch(`/api/pages/${urlId}/protect`, {
+          const response = await fetch(`/api/pages/${urlId}/protect`, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
+            headers: jsonHeaders(),
             body: JSON.stringify({ isProtected: false }),
           });
+          const data = await response.json();
+
+          if (!response.ok || !data.success) {
+            throw new Error(data.error || '更新保护状态失败');
+          }
+
+          if (generatedPassword) {
+            generatedPassword.textContent = '';
+          }
         } catch (error) {
           console.error('更新保护状态错误:', error);
+          passwordToggle.checked = true;
+          if (passwordInfo) passwordInfo.style.display = 'block';
+          if (copyPasswordLink) copyPasswordLink.style.display = 'inline-block';
+          showErrorToast('关闭密码保护失败');
         }
       }
     });
@@ -551,14 +591,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // 调用 API 生成链接
         const response = await fetch('/api/pages/create', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: jsonHeaders(),
           body: JSON.stringify({ htmlContent, isProtected, codeType }),
         });
         
         const data = await response.json();
-        console.log('API响应数据:', data); // 调试输出
+        console.log('API响应数据:', { success: data.success, urlId: data.urlId, isProtected: data.isProtected, codeType: data.codeType });
         
         if (data.success) {
           const url = `${window.location.origin}/view/${data.urlId}`;
@@ -572,14 +610,12 @@ document.addEventListener('DOMContentLoaded', () => {
             resultUrl.dataset.originalUrl = url;
           }
           
-          // 无论是否启用了密码保护，都保存密码
           if (generatedPassword) {
-            generatedPassword.textContent = data.password;
+            generatedPassword.textContent = data.password || '';
           }
-          console.log('生成的密码:', data.password); // 调试输出
           
           // 根据开关状态显示或隐藏密码区域
-          if (passwordToggle && passwordToggle.checked) {
+          if (passwordToggle && passwordToggle.checked && data.password) {
             if (passwordInfo) passwordInfo.style.display = 'block';
             if (copyPasswordLink) copyPasswordLink.style.display = 'inline-block';
           } else {
@@ -713,8 +749,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       
       const textToCopy = generatedPassword.textContent;
-      console.log('要复制的密码:', textToCopy); // 调试输出
-      
       // 使用传统的复制方法
       const copyToClipboard = (text) => {
         try {
@@ -767,8 +801,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       
       const textToCopy = `链接: ${resultUrl.dataset.originalUrl}\n密码: ${generatedPassword.textContent}`;
-      console.log('要复制的内容:', textToCopy); // 调试输出
-      
       // 使用传统的复制方法
       const copyToClipboard = (text) => {
         try {

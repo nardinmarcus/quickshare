@@ -1,21 +1,20 @@
     </div>
-    
-    <!-- 主题切换按钮 -->
-    <div class="theme-toggle">
-      <button id="theme-toggle-btn" class="theme-toggle-btn">
-        <i class="fas fa-moon"></i>
-      </button>
-    </div>
-    
-    <!-- 错误提示 -->
+
+    <% if (typeof page === 'undefined' || page !== 'password-page') { %>
+      <div class="theme-toggle">
+        <button id="theme-toggle-btn" class="theme-toggle-btn" aria-label="切换主题">
+          <i class="fas fa-moon"></i>
+        </button>
+      </div>
+    <% } %>
+
     <div id="error-toast" class="toast error-toast">
       <div class="toast-content">
         <i class="fas fa-exclamation-circle toast-icon"></i>
         <span id="error-message" class="toast-message"></span>
       </div>
     </div>
-    
-    <!-- 成功提示 -->
+
     <div id="success-toast" class="toast success-toast">
       <div class="toast-content">
         <i class="fas fa-check-circle toast-icon"></i>
@@ -23,17 +22,17 @@
       </div>
     </div>
   </div>
-  
+
   <script src="https://cdn.jsdelivr.net/npm/particles.js@2.0.0/particles.min.js"></script>
-  <!-- 语法高亮 JavaScript -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
-  <!-- 额外的语言支持 -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/languages/javascript.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/languages/css.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/languages/html.min.js"></script>
   <script src="/js/theme.js"></script>
   <script src="/js/particles-config.js"></script>
-  <script src="/js/main.js?v=<%= Date.now() %>"></script>
-  <script src="/js/syntax-highlight.js"></script>
+  <% if (typeof page === 'undefined' || page !== 'login-page') { %>
+    <script src="/js/main.js?v=<%= Date.now() %>"></script>
+    <script src="/js/syntax-highlight.js"></script>
+  <% } %>
 </body>
 </html>

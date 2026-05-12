@@ -13,9 +13,9 @@ RUN npm install
 # 复制应用程序代码
 COPY . .
 
-# 创建数据目录并设置权限
-RUN mkdir -p /usr/src/app/data && \
-    chmod -R 777 /usr/src/app/data
+# 创建应用运行目录
+RUN mkdir -p /usr/src/app/tmp && \
+    chmod -R 777 /usr/src/app/tmp
 
 # 暴露端口
 EXPOSE 8888
@@ -25,4 +25,4 @@ ENV NODE_ENV=production \
     PORT=8888
 
 # 启动应用
-CMD ["node", "app.js"]
+CMD ["node", "server.js"]
