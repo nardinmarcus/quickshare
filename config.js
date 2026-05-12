@@ -1,42 +1,31 @@
-/**
- * 应用配置文件
- * 根据不同环境加载不同的配置
- */
+const env = process.env.NODE_ENV || 'development';
+const isProduction = env === 'production';
 
-// 加载 .env 文件中的环境变量（如果存在）
 try {
   require('dotenv').config();
-} catch (e) {
-  console.log('未找到 dotenv 模块或 .env 文件，使用默认环境变量');
+} catch (error) {
+  // dotenv is optional in managed deployment environments.
 }
 
-const env = process.env.NODE_ENV || 'development';
+const defaultPort = isProduction ? 3000 : 5678;
+const authEnabled = process.env.AUTH_ENABLED !== 'false';
+const adminPasswordHash = process.env.ADMIN_PASSWORD_HASH || '';
+const authPassword = process.env.AUTH_PASSWORD || (isProduction ? '' : 'admin123');
 
-const config = {
-  // 开发环境配置
-  development: {
-    port: process.env.PORT || 5678,
-    logLevel: 'dev',
-    authEnabled: process.env.AUTH_ENABLED === 'true',
-    authPassword: process.env.AUTH_PASSWORD || 'admin123'
-  },
+if (isProduction && authEnabled && !adminPasswordHash && !authPassword) {
+  throw new Error('ADMIN_PASSWORD_HASH or AUTH_PASSWORD is required when auth is enabled in production');
+}
 
-  // 生产环境配置
-  production: {
-    port: process.env.PORT || 8888,
-    logLevel: 'combined',
-    authEnabled: process.env.AUTH_ENABLED === 'true',
-    authPassword: process.env.AUTH_PASSWORD || 'admin123'
-  },
-
-  // 测试环境配置
-  test: {
-    port: process.env.PORT || 3000,
-    logLevel: 'dev',
-    authEnabled: process.env.AUTH_ENABLED === 'true',
-    authPassword: process.env.AUTH_PASSWORD || 'admin123'
-  }
+module.exports = {
+  env,
+  port: Number.parseInt(process.env.PORT || String(defaultPort), 10),
+  logLevel: process.env.LOG_LEVEL || (isProduction ? 'combined' : 'dev'),
+  authEnabled,
+  adminPasswordHash,
+  authPassword,
+  secureCookies: process.env.SECURE_COOKIES
+    ? process.env.SECURE_COOKIES === 'true'
+    : isProduction,
+  baseUrl: process.env.BASE_URL || '',
+  shareBaseUrl: process.env.SHARE_BASE_URL || process.env.BASE_URL || ''
 };
-
-// 导出当前环境的配置
-module.exports = config[env] || config.development;

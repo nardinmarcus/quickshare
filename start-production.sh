@@ -10,4 +10,4 @@ mkdir -p sessions
 chmod 777 sessions
 
 # 启动应用
-node --max-old-space-size=1024 app.js
+node --max-old-space-size=1024 server.js

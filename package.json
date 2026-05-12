@@ -2,12 +2,13 @@
   "name": "html-go-express",
   "version": "1.0.0",
   "description": "HTML代码分享工具 - Express版本",
-  "main": "app.js",
+  "main": "server.js",
   "scripts": {
-    "start": "NODE_ENV=production node --max-old-space-size=1024 app.js",
-    "dev": "NODE_ENV=development nodemon app.js",
-    "test": "NODE_ENV=test node app.js",
-    "prod": "NODE_ENV=production node --max-old-space-size=1024 app.js"
+    "start": "NODE_ENV=production node --max-old-space-size=1024 server.js",
+    "dev": "NODE_ENV=development nodemon server.js",
+    "test": "NODE_ENV=test node --test test/*.test.js",
+    "prod": "NODE_ENV=production node --max-old-space-size=1024 server.js",
+    "hash-password": "node scripts/hash-password.js"
   },
   "keywords": [
     "html",
@@ -18,28 +19,17 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@mermaid-js/mermaid-cli": "^11.4.2",
-    "@vercel/kv": "^3.0.0",
-    "@vercel/node": "^3.2.24",
-    "@vercel/postgres": "^0.10.0",
     "body-parser": "^1.20.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
-    "crypto-js": "^4.2.0",
     "dotenv": "^16.4.7",
     "ejs": "^3.1.10",
     "express": "^4.21.2",
-    "express-session": "^1.18.1",
-    "jsdom": "^26.0.0",
     "marked": "^15.0.7",
-    "memorystore": "^1.6.7",
-    "mermaid": "^11.6.0",
-    "mermaid-render": "^1.0.9",
     "morgan": "^1.10.0",
-    "session-file-store": "^1.5.0",
-    "sqlite3": "^5.1.7"
+    "pg": "^8.13.1"
   },
   "devDependencies": {
-    "nodemon": "^2.0.22"
+    "nodemon": "^3.1.14"
   }
 }

@@ -1,4 +1,4 @@
-<%- include('partials/header', { title }) %>
+<%- include('partials/header', { title, page, csrfToken }) %>
 
 <div class="main-container">
   <header class="app-header">
@@ -94,4 +94,4 @@
   </footer>
 </div>
 
-<%- include('partials/footer') %>
+<%- include('partials/footer', { page }) %>

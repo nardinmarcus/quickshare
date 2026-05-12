@@ -4,11 +4,13 @@
  */
 
 const { marked } = require('marked');
-const { JSDOM } = require('jsdom');
 const { CODE_TYPES } = require('./codeDetector');
 
-// 使用 mermaid-render 包来渲染 Mermaid 图表
-const { renderMermaid: mermaidRenderer } = require('mermaid-render');
+function debugLog(...args) {
+  if (process.env.DEBUG_RENDERER === 'true') {
+    console.log(...args);
+  }
+}
 
 /**
  * u6e32u67d3HTMLu5185u5bb9
@@ -109,21 +111,7 @@ async function renderMarkdown(content) {
     gfm: true,
     breaks: true,
     smartLists: true,
-    smartypants: true,
-    highlight: function(code, lang) {
-      // 特殊处理 Mermaid 代码块
-      if (lang === 'mermaid') {
-        return `<div class="mermaid">${code}</div>`;
-      }
-      
-      const hljs = require('highlight.js');
-      if (lang && hljs.getLanguage(lang)) {
-        try {
-          return hljs.highlight(code, { language: lang }).value;
-        } catch (err) {}
-      }
-      return hljs.highlightAuto(code).value;
-    }
+    smartypants: true
   });
   
   // 自定义 renderer 来处理代码块
@@ -459,9 +447,9 @@ function renderSvg(content) {
  * @returns {Promise<string>} - u6e32u67d3u540eu7684HTML
  */
 async function renderMermaid(content) {
-  console.log('[DEBUG] renderMermaid 被调用');
-  console.log(`[DEBUG] Mermaid 原始内容长度: ${content.length}`);
-  console.log(`[DEBUG] Mermaid 原始内容前100字符: ${content.substring(0, 100)}...`);
+  debugLog('[DEBUG] renderMermaid 被调用');
+  debugLog(`[DEBUG] Mermaid 原始内容长度: ${content.length}`);
+  debugLog(`[DEBUG] Mermaid 原始内容前100字符: ${content.substring(0, 100)}...`);
   
   try {
     // 处理可能的Markdown包裹
@@ -485,12 +473,12 @@ async function renderMermaid(content) {
     const isPureMermaid = mermaidPatterns.some(pattern => pattern.test(content.trim()));
     
     if (!content.includes('```mermaid') && isPureMermaid) {
-      console.log('[DEBUG] 检测到纯 Mermaid 语法');
+      debugLog('[DEBUG] 检测到纯 Mermaid 语法');
       mermaidCode = content.trim();
     }
     // 处理 Markdown 包裹的 Mermaid
     else if (content.includes('```mermaid')) {
-      console.log('[DEBUG] 检测到 Markdown 包裹的 Mermaid 内容');
+      debugLog('[DEBUG] 检测到 Markdown 包裹的 Mermaid 内容');
       // 更健壮的提取方式，处理多个 ```mermaid 块
       const matches = content.match(/```mermaid\n([\s\S]+?)\n```/g);
       if (matches && matches.length > 0) {
@@ -498,24 +486,24 @@ async function renderMermaid(content) {
         const firstMatch = matches[0].match(/```mermaid\n([\s\S]+?)\n```/);
         if (firstMatch && firstMatch[1]) {
           mermaidCode = firstMatch[1].trim();
-          console.log(`[DEBUG] 提取的 Mermaid 代码长度: ${mermaidCode.length}`);
+          debugLog(`[DEBUG] 提取的 Mermaid 代码长度: ${mermaidCode.length}`);
         } else {
-          console.log('[DEBUG] 无法提取 Mermaid 代码');
+          debugLog('[DEBUG] 无法提取 Mermaid 代码');
         }
       } else {
-        console.log('[DEBUG] 无法匹配 Mermaid 代码块');
+        debugLog('[DEBUG] 无法匹配 Mermaid 代码块');
       }
     }
     
-    console.log('[DEBUG] 使用客户端渲染方式处理 Mermaid 图表');
+    debugLog('[DEBUG] 使用客户端渲染方式处理 Mermaid 图表');
     
     // 对 Mermaid 代码进行转义，以便在 HTML 中安全使用
     const escapedMermaidCode = escapeHtml(mermaidCode);
     
     // 记录最终要渲染的代码
-    console.log(`[DEBUG] 最终要渲染的 Mermaid 代码: ${escapedMermaidCode.substring(0, 100)}...`);
+    debugLog(`[DEBUG] 最终要渲染的 Mermaid 代码: ${escapedMermaidCode.substring(0, 100)}...`);
     
-    console.log('[DEBUG] 准备生成客户端渲染 HTML');
+    debugLog('[DEBUG] 准备生成客户端渲染 HTML');
     
     // 生成包含 Mermaid 图表的 HTML，使用客户端渲染
     return `
@@ -654,8 +642,8 @@ ${escapedMermaidCode}
     `;
   } catch (error) {
     console.error('Mermaid渲染错误:', error);
-    console.log(`[DEBUG] Mermaid 渲染错误详情: ${error.message}`);
-    console.log(`[DEBUG] 错误堆栈: ${error.stack}`);
+    debugLog(`[DEBUG] Mermaid 渲染错误详情: ${error.message}`);
+    debugLog(`[DEBUG] 错误堆栈: ${error.stack}`);
     // u5982u679cu6e32u67d3u5931u8d25uff0cu8fd4u56deu9519u8befu4fe1u606f
     return `
       <!DOCTYPE html>
@@ -754,27 +742,27 @@ function escapeHtml(unsafe) {
  * @returns {Promise<string>} - u6e32u67d3u540eu7684HTML
  */
 async function renderContent(content, contentType) {
-  console.log(`[DEBUG] renderContent 被调用，内容类型: ${contentType}`);
-  console.log(`[DEBUG] 内容长度: ${content.length} 字符`);
+  debugLog(`[DEBUG] renderContent 被调用，内容类型: ${contentType}`);
+  debugLog(`[DEBUG] 内容长度: ${content.length} 字符`);
   
   switch (contentType) {
     case CODE_TYPES.HTML:
-      console.log('[DEBUG] 使用 HTML 渲染器');
+      debugLog('[DEBUG] 使用 HTML 渲染器');
       return renderHtml(content);
     case CODE_TYPES.MARKDOWN:
-      console.log('[DEBUG] 使用 Markdown 渲染器');
+      debugLog('[DEBUG] 使用 Markdown 渲染器');
       const markdownResult = await renderMarkdown(content);
-      console.log(`[DEBUG] Markdown 渲染完成，结果长度: ${markdownResult.length} 字符`);
+      debugLog(`[DEBUG] Markdown 渲染完成，结果长度: ${markdownResult.length} 字符`);
       return markdownResult;
     case CODE_TYPES.SVG:
-      console.log('[DEBUG] 使用 SVG 渲染器');
+      debugLog('[DEBUG] 使用 SVG 渲染器');
       return renderSvg(content);
     case CODE_TYPES.MERMAID:
-      console.log('[DEBUG] 使用 Mermaid 渲染器');
+      debugLog('[DEBUG] 使用 Mermaid 渲染器');
       return await renderMermaid(content);
     default:
       // 默认使用Markdown渲染器，与代码检测逻辑保持一致
-      console.log(`[DEBUG] 使用默认渲染器 (Markdown)，因为内容类型 '${contentType}' 未知`);
+      debugLog(`[DEBUG] 使用默认渲染器 (Markdown)，因为内容类型 '${contentType}' 未知`);
       return await renderMarkdown(content);
   }
 }
@@ -808,7 +796,7 @@ async function preprocessMarkdown(content) {
   
   // 如果是独立的 Mermaid 代码，直接将其包裹在 mermaid 类中
   if (!content.includes('```') && isMermaidContent(content)) {
-    console.log('[DEBUG] 检测到独立的 Mermaid 代码');
+    debugLog('[DEBUG] 检测到独立的 Mermaid 代码');
     return {
       markdown: `<div class="mermaid">
 ${content}

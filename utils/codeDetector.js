@@ -11,6 +11,12 @@ const CODE_TYPES = {
   UNKNOWN: 'unknown'
 };
 
+function debugLog(...args) {
+  if (process.env.DEBUG_RENDERER === 'true') {
+    console.log(...args);
+  }
+}
+
 /**
  * 检测代码类型
  * @param {string} code - 输入的代码内容
@@ -22,7 +28,7 @@ function detectCodeType(code) {
   }
   
   const trimmedCode = code.trim();
-  console.log(`[DEBUG] 内容长度: ${trimmedCode.length} 字符`);
+  debugLog(`[DEBUG] 内容长度: ${trimmedCode.length} 字符`);
   
   // 第一级检测: 文档开头的明确标记
   // 这些检查有最高优先级，只检查文档开头
@@ -30,23 +36,23 @@ function detectCodeType(code) {
   // 1.1 检查是否是完整的HTML文档
   if (trimmedCode.startsWith('<!DOCTYPE html>') || 
       trimmedCode.startsWith('<html')) {
-    console.log('[DEBUG] 检测到完整HTML文档');
+    debugLog('[DEBUG] 检测到完整HTML文档');
     return CODE_TYPES.HTML;
   }
   
   // 1.2 检查是否以特定代码块标记开头
   if (trimmedCode.startsWith('```html')) {
-    console.log('[DEBUG] 检测到内容以```html开头');
+    debugLog('[DEBUG] 检测到内容以```html开头');
     return CODE_TYPES.HTML;
   }
   
   if (trimmedCode.startsWith('```mermaid')) {
-    console.log('[DEBUG] 检测到内容以```mermaid开头');
+    debugLog('[DEBUG] 检测到内容以```mermaid开头');
     return CODE_TYPES.MERMAID;
   }
   
   if (trimmedCode.startsWith('```svg')) {
-    console.log('[DEBUG] 检测到内容以```svg开头');
+    debugLog('[DEBUG] 检测到内容以```svg开头');
     return CODE_TYPES.SVG;
   }
   
@@ -54,7 +60,7 @@ function detectCodeType(code) {
   if (trimmedCode.startsWith('<svg') && 
       trimmedCode.includes('</svg>') && 
       trimmedCode.includes('xmlns="http://www.w3.org/2000/svg"')) {
-    console.log('[DEBUG] 检测到纯SVG文档');
+    debugLog('[DEBUG] 检测到纯SVG文档');
     return CODE_TYPES.SVG;
   }
   
@@ -65,20 +71,20 @@ function detectCodeType(code) {
   if (trimmedCode.includes('```mermaid')) {
     // 如果文档中包含```mermaid标记，首先检查是否有明确的Markdown特征
     if (isDefinitelyMarkdown(trimmedCode)) {
-      console.log('[DEBUG] 检测到Mermaid代码块，但内容是Markdown');
+      debugLog('[DEBUG] 检测到Mermaid代码块，但内容是Markdown');
       return CODE_TYPES.MARKDOWN;
     }
-    console.log('[DEBUG] 检测到Mermaid代码块');
+    debugLog('[DEBUG] 检测到Mermaid代码块');
     return CODE_TYPES.MERMAID;
   }
   
   if (trimmedCode.includes('```svg')) {
     // 如果文档中包含```svg标记，首先检查是否有明确的Markdown特征
     if (isDefinitelyMarkdown(trimmedCode)) {
-      console.log('[DEBUG] 检测到SVG代码块，但内容是Markdown');
+      debugLog('[DEBUG] 检测到SVG代码块，但内容是Markdown');
       return CODE_TYPES.MARKDOWN;
     }
-    console.log('[DEBUG] 检测到SVG代码块');
+    debugLog('[DEBUG] 检测到SVG代码块');
     return CODE_TYPES.SVG;
   }
   
@@ -99,7 +105,7 @@ function detectCodeType(code) {
   const isPureMermaid = mermaidPatterns.some(pattern => pattern.test(trimmedCode));
   
   if (isPureMermaid && !containsMarkdownFeatures(trimmedCode)) {
-    console.log('[DEBUG] 检测到纯 Mermaid 语法');
+    debugLog('[DEBUG] 检测到纯 Mermaid 语法');
     return CODE_TYPES.MERMAID;
   }
   
@@ -117,19 +123,19 @@ function detectCodeType(code) {
      trimmedCode.includes('<meta'));
   
   if (hasHtmlTags) {
-    console.log('[DEBUG] 检测到HTML标签');
+    debugLog('[DEBUG] 检测到HTML标签');
     return CODE_TYPES.HTML;
   }
   
   // 第三级检测: 内容特征分析
   // 3.1 检测明确的Markdown特征
   if (isDefinitelyMarkdown(trimmedCode)) {
-    console.log('[DEBUG] 检测到明确的Markdown特征');
+    debugLog('[DEBUG] 检测到明确的Markdown特征');
     return CODE_TYPES.MARKDOWN;
   }
   
   // 3.2 默认返回HTML
-  console.log('[DEBUG] 无法确定内容类型，默认返回HTML');
+  debugLog('[DEBUG] 无法确定内容类型，默认返回HTML');
   return CODE_TYPES.HTML;
 }
 
@@ -238,7 +244,7 @@ function extractCodeBlocks(content) {
     });
   }
   
-  console.log(`[DEBUG] 提取到${blocks.length}个代码块`);
+  debugLog(`[DEBUG] 提取到${blocks.length}个代码块`);
   return blocks;
 }
 

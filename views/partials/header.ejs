@@ -1,43 +1,40 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN"<% if (typeof page !== 'undefined') { %> data-page="<%= page %>"<% } %>>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title><%= title %></title>
-  
-  <!-- 网站图标 -->
+  <title><%= typeof title !== 'undefined' ? title : 'HTML-Go' %></title>
+  <% if (typeof csrfToken !== 'undefined' && csrfToken) { %>
+    <meta name="csrf-token" content="<%= csrfToken %>">
+  <% } %>
+
   <link rel="icon" href="/icon/web/favicon.ico" sizes="any">
   <link rel="apple-touch-icon" href="/icon/web/apple-touch-icon.png">
   <link rel="icon" type="image/png" sizes="192x192" href="/icon/web/icon-192.png">
   <link rel="icon" type="image/png" sizes="512x512" href="/icon/web/icon-512.png">
   <meta name="theme-color" content="#6366f1">
-  
-  <!-- iOS 特殊设置 -->
+
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="HTML-GO">
-  
-  <!-- Open Graph / 社交媒体元数据 -->
+
   <meta property="og:title" content="HTML-GO | 分享AI生成内容的最佳方式">
   <meta property="og:description" content="一个简单、高效的HTML代码分享平台">
   <meta property="og:type" content="website">
   <meta property="og:image" content="/icon/web/icon-512.png">
+
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
   <link rel="stylesheet" href="/css/styles.css">
-  <!-- 语法高亮 CSS -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-dark.min.css">
+  <% if (typeof page !== 'undefined' && page === 'login-page') { %>
+    <link rel="stylesheet" href="/css/login.css">
+  <% } %>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700&family=Roboto:wght@300;400;500;700&family=Fira+Code:wght@300;400;500&display=swap" rel="stylesheet">
 </head>
 <body>
   <div class="app-container">
-    <!-- 背景元素 -->
     <div class="grid-background"></div>
     <div id="particles-js"></div>
-    
-    <!-- 主内容 -->
     <div class="content-container">
-  </div>
-</body>
-</html>
