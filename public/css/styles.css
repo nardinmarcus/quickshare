@@ -51,9 +51,9 @@
   --bg-input: #f4f4f5;
   --text-primary: #18181b;
   --text-secondary: #71717a;
-  --border-color: rgba(0, 0, 0, 0.08);
+  --border-color: rgba(0, 0, 0, 0.12);
   --gradient-bg: #fafafa;
-  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
   --button-hover: rgba(0, 0, 0, 0.04);
   --result-bg: rgba(0, 0, 0, 0.02);
   --file-drop-bg: rgba(241, 245, 249, 0.8);
@@ -434,6 +434,8 @@ body {
   justify-content: center;
   transition: all 0.2s ease;
   border: none;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .cyber-btn i.mr-1 {
@@ -479,10 +481,12 @@ label[for="html-file"] {
   align-items: center;
   justify-content: center;
   padding: 0.75rem 1.5rem;
-  border-radius: 6px;
+  border-radius: 8px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* 结果区域 */
@@ -725,6 +729,8 @@ label[for="html-file"] {
 
   .main-container {
     padding: 1.5rem 1rem;
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
   }
 
   .cyber-tabs {
@@ -733,6 +739,12 @@ label[for="html-file"] {
 
   .cyber-tab {
     padding: 0.75rem 1rem;
+  }
+
+  /* iOS Safari 在 font-size < 16px 的输入控件聚焦时会自动放大页面，强制 16px */
+  .cyber-input,
+  #html-input {
+    font-size: 16px;
   }
 }
 
@@ -745,9 +757,37 @@ label[for="html-file"] {
     padding: 1rem;
   }
 
+  /* 主操作行：上传按钮独占一行，清除/生成等宽并列 */
+  .button-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+
+  .button-row > div:first-child,
+  .button-row > div:first-child > label[for="html-file"] {
+    width: 100%;
+  }
+
+  .button-group {
+    width: 100%;
+  }
+
+  .button-group > .cyber-btn {
+    flex: 1;
+  }
+
+  .cyber-btn,
+  label[for="html-file"] {
+    padding: 0.7rem 1rem;
+    font-size: 0.95rem;
+    min-height: 44px;
+  }
+
+  /* 结果区域纵向堆叠 */
   .result-container {
     flex-direction: column;
-    align-items: flex-start;
+    align-items: stretch;
   }
 
   .action-buttons {
@@ -755,8 +795,11 @@ label[for="html-file"] {
     margin-top: 0.5rem;
   }
 
-  .cyber-btn {
-    padding: 0.5rem 1rem;
+  .theme-toggle {
+    top: 0.75rem;
+    right: 0.75rem;
+    width: 2.5rem;
+    height: 2.5rem;
   }
 }
 
@@ -848,24 +891,7 @@ label[for="html-file"] {
   color: var(--primary);
 }
 
-/* 响应式调整 */
-@media (max-width: 640px) {
-  .app-title {
-    font-size: 1.75rem;
-  }
-
-  .action-buttons {
-    flex-direction: column;
-    gap: 0.3rem;
-  }
-
-  .theme-toggle {
-    top: 0.75rem;
-    right: 0.75rem;
-    width: 2.25rem;
-    height: 2.25rem;
-  }
-}
+/* 响应式调整已合并到主断点（768 / 480） */
 
 /* 代码预览容器 */
 .preview-container {
