@@ -1,4 +1,4 @@
-# HTML-Go / QuickShare
+# QuickShare
 
 一个基于 Express + EJS 的内容分享工具，用来快速分享 HTML、Markdown、SVG 和 Mermaid 内容。
 

@@ -234,7 +234,7 @@ function renderSandboxedDocument(renderedContent, contentType) {
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <meta name="code-type" content="${escapeHtml(contentType)}">
-      <title>HTML-GO Viewer</title>
+      <title>QuickShare Viewer</title>
       <style>
         html, body {
           width: 100%;
@@ -268,7 +268,7 @@ app.get('/login', (req, res) => {
   }
 
   return res.render('login', {
-    title: 'HTML-Go | Login',
+    title: 'QuickShare | 登录',
     page: 'login-page',
     error: null
   });
@@ -283,7 +283,7 @@ app.post('/login', async (req, res) => {
 
   if (!isValid) {
     return res.status(401).render('login', {
-      title: 'HTML-Go | Login',
+      title: 'QuickShare | 登录',
       page: 'login-page',
       error: '密码错误，请重试'
     });
@@ -489,7 +489,7 @@ app.get('/view/:id', async (req, res) => {
 
     if (page.is_protected === 1 && !hasPageAccess(req, req.params.id)) {
       return res.render('password', {
-        title: 'HTML-Go | 密码保护',
+        title: 'QuickShare | 密码保护',
         page: 'password-page',
         id: req.params.id,
         passwordLength: DEFAULT_PASSWORD_LENGTH,

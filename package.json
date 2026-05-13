@@ -1,7 +1,7 @@
 {
-  "name": "html-go-express",
+  "name": "quickshare",
   "version": "1.0.0",
-  "description": "HTML代码分享工具 - Express版本",
+  "description": "QuickShare content sharing tool - Express version",
   "main": "server.js",
   "scripts": {
     "start": "NODE_ENV=production node --max-old-space-size=1024 server.js",

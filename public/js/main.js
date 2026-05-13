@@ -1,5 +1,5 @@
-// HTML-GO 主要JavaScript文件
-// 处理所有用户交互和功能
+// QuickShare main JavaScript file.
+// Handles user interactions and application behavior.
 
 // 错误提示功能
 function showErrorToast(message) {

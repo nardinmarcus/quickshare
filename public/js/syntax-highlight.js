@@ -1,6 +1,6 @@
 /**
- * HTML-Go 语法高亮功能
- * 使用 highlight.js 为代码添加语法高亮
+ * QuickShare syntax highlighting.
+ * Uses highlight.js to add syntax highlighting to code blocks.
  */
 document.addEventListener('DOMContentLoaded', () => {
   // 初始化语法高亮

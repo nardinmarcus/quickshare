@@ -31,7 +31,7 @@ function renderHtml(content) {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>HTML-GO 查看器</title>
+      <title>QuickShare 查看器</title>
       
       <!-- 网站图标 -->
       <link rel="icon" href="/icon/web/favicon.ico" sizes="any">
@@ -43,7 +43,7 @@ function renderHtml(content) {
       <!-- iOS 特殊设置 -->
       <meta name="apple-mobile-web-app-capable" content="yes">
       <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-      <meta name="apple-mobile-web-app-title" content="HTML-GO">
+      <meta name="apple-mobile-web-app-title" content="QuickShare">
       
       <link rel="stylesheet" href="/css/styles.css">
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-dark.min.css">
@@ -314,7 +314,7 @@ async function renderMarkdown(content) {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>HTML-GO Markdown查看器</title>
+      <title>QuickShare Markdown查看器</title>
       
       <!-- 网站图标 -->
       <link rel="icon" href="/icon/web/favicon.ico" sizes="any">
@@ -326,7 +326,7 @@ async function renderMarkdown(content) {
       <!-- iOS 特殊设置 -->
       <meta name="apple-mobile-web-app-capable" content="yes">
       <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-      <meta name="apple-mobile-web-app-title" content="HTML-GO">
+      <meta name="apple-mobile-web-app-title" content="QuickShare">
       
       <link rel="stylesheet" href="/css/markdown-bytedance.css">
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-dark.min.css">
@@ -380,7 +380,7 @@ function renderSvg(content) {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>HTML-GO SVG查看器</title>
+      <title>QuickShare SVG查看器</title>
       
       <!-- 网站图标 -->
       <link rel="icon" href="/icon/web/favicon.ico" sizes="any">
@@ -392,7 +392,7 @@ function renderSvg(content) {
       <!-- iOS 特殊设置 -->
       <meta name="apple-mobile-web-app-capable" content="yes">
       <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-      <meta name="apple-mobile-web-app-title" content="HTML-GO">
+      <meta name="apple-mobile-web-app-title" content="QuickShare">
       
       <style>
         body {
@@ -512,7 +512,7 @@ async function renderMermaid(content) {
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>HTML-GO Mermaid查看器</title>
+        <title>QuickShare Mermaid查看器</title>
         
         <!-- 网站图标 -->
         <link rel="icon" href="/icon/web/favicon.ico" sizes="any">
@@ -524,7 +524,7 @@ async function renderMermaid(content) {
         <!-- iOS 特殊设置 -->
         <meta name="apple-mobile-web-app-capable" content="yes">
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-        <meta name="apple-mobile-web-app-title" content="HTML-GO">
+        <meta name="apple-mobile-web-app-title" content="QuickShare">
         
         <!-- 引入 Mermaid 库 -->
         <script src="https://cdn.jsdelivr.net/npm/mermaid@11.6.0/dist/mermaid.min.js"></script>
@@ -651,7 +651,7 @@ ${escapedMermaidCode}
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>HTML-GO Mermaidu9519u8bef</title>
+        <title>QuickShare Mermaidu9519u8bef</title>
         <style>
           body {
             font-family: 'Roboto', sans-serif;

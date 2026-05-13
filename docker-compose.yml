@@ -1,11 +1,11 @@
 version: '3.8'
 
 services:
-  html-go-express:
+  quickshare:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: html-go-express
+    container_name: quickshare
     restart: unless-stopped
     ports:
       - "8888:8888"
@@ -13,8 +13,8 @@ services:
       - NODE_ENV=production
       - PORT=8888
     networks:
-      - html-go-network
+      - quickshare-network
 
 networks:
-  html-go-network:
+  quickshare-network:
     driver: bridge
