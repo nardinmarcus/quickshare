@@ -39,25 +39,9 @@ http://localhost:5678
 
 如果 `.env` 中没有 `DATABASE_URL`，本地会使用内存仓库；重启后本地数据会清空。
 
-## Vercel 部署
+## 部署
 
-建议在 Vercel 中配置以下环境变量：
-
-```bash
-NODE_ENV=production
-AUTH_ENABLED=true
-ADMIN_PASSWORD_HASH=<generated-password-hash>
-SESSION_SECRET=<long-random-secret>
-DATABASE_URL=<postgres-connection-string>
-```
-
-生成管理员密码 hash：
-
-```bash
-npm run hash-password -- "your-admin-password"
-```
-
-最低可用配置也支持 `AUTH_PASSWORD`，但生产环境推荐使用 `ADMIN_PASSWORD_HASH`。
+部署指南见 [docs/deployment.md](docs/deployment.md)，包含 Vercel（推荐）和 Docker 两种方式。
 
 ## 主要脚本
 
@@ -71,17 +55,16 @@ npm run hash-password -- "your-admin-password"
 ## 关键目录
 
 ```text
-api/index.js              Vercel function entry
-app.js                    Express app factory and routes
-server.js                 Local server entry
-models/pageRepository.js  Repository selector
-models/postgres-pages.js  Postgres repository
-models/memory-pages.js    Local in-memory repository
-utils/security.js         Token, CSRF, password hashing helpers
-utils/contentRenderer.js  Content rendering helpers
-views/                    EJS templates
-public/                   Static assets
-test/                     Node test files
+api/              Vercel function 入口
+app.js            Express app 工厂和路由
+config.js         环境变量聚合
+server.js         本地服务器入口
+models/           数据层（Repository 选择器 + Postgres / 内存实现）
+views/            EJS 模板
+public/           静态资源
+utils/            security.js, contentRenderer.js, codeDetector.js
+scripts/          hash-password.js
+test/             Node test runner
 ```
 
 ## 当前安全边界
