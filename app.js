@@ -39,6 +39,7 @@ app.locals.pageRepository = pageRepository;
 
 app.set('views', path.join(__dirname, 'views'));
 app.set('view engine', 'ejs');
+app.set('trust proxy', 1);
 
 app.use(morgan(config.logLevel));
 app.use(cors({ origin: false }));
