@@ -27,5 +27,6 @@ module.exports = {
     ? process.env.SECURE_COOKIES === 'true'
     : isProduction,
   baseUrl: process.env.BASE_URL || '',
-  shareBaseUrl: process.env.SHARE_BASE_URL || process.env.BASE_URL || ''
+  shareBaseUrl: process.env.SHARE_BASE_URL || process.env.BASE_URL || '',
+  shareApiKey: process.env.SHARE_API_KEY || ''
 };

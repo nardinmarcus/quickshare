@@ -27,6 +27,7 @@ const ADMIN_COOKIE = 'admin_session';
 const ADMIN_TTL_MS = 24 * 60 * 60 * 1000;
 const PAGE_ACCESS_TTL_MS = 24 * 60 * 60 * 1000;
 const VALID_CODE_TYPES = new Set(['html', 'markdown', 'svg', 'mermaid']);
+const timingSafeEqual = require('crypto').timingSafeEqual;
 
 const app = express();
 const pageRepository = createPageRepository();
@@ -114,6 +115,25 @@ function requireCsrf(req, res, next) {
       success: false,
       error: 'Invalid CSRF token'
     });
+  }
+
+  return next();
+}
+
+function requireApiKey(req, res, next) {
+  if (!config.shareApiKey) {
+    return res.status(503).json({ success: false, error: 'API key not configured' });
+  }
+
+  const key = req.get('x-api-key');
+  if (!key) {
+    return res.status(401).json({ success: false, error: 'Missing X-API-Key header' });
+  }
+
+  const expected = Buffer.from(config.shareApiKey);
+  const provided = Buffer.from(key);
+  if (expected.length !== provided.length || !timingSafeEqual(expected, provided)) {
+    return res.status(401).json({ success: false, error: 'Invalid API key' });
   }
 
   return next();
@@ -348,6 +368,47 @@ app.post('/api/pages/create', requireApiAdmin, requireCsrf, async (req, res) => 
       success: false,
       error: '服务器错误'
     });
+  }
+});
+
+app.post('/api/v1/share', requireApiKey, async (req, res) => {
+  try {
+    await ensureDatabase();
+
+    const { htmlContent, codeType, title, description, isProtected } = req.body;
+
+    if (!htmlContent || typeof htmlContent !== 'string') {
+      return res.status(400).json({ success: false, error: '请提供内容' });
+    }
+
+    const normalizedCodeType = normalizeCodeType(htmlContent, codeType);
+    const password = isProtected ? generateNumericPassword(DEFAULT_PASSWORD_LENGTH) : null;
+    const passwordHash = password ? await hashSecret(password) : null;
+    const id = await createPageWithRetry({
+      htmlContent,
+      passwordHash,
+      isProtected: Boolean(isProtected),
+      codeType: normalizedCodeType,
+      title,
+      description,
+      createdAt: Date.now(),
+      expiresAt: null
+    });
+
+    const base = config.shareBaseUrl || `${req.protocol}://${req.get('host')}`;
+    const url = `${base.replace(/\/+$/, '')}/view/${id}`;
+
+    return res.json({
+      success: true,
+      url,
+      urlId: id,
+      password,
+      isProtected: Boolean(password),
+      codeType: normalizedCodeType
+    });
+  } catch (error) {
+    console.error('Share API failed:', error);
+    return res.status(500).json({ success: false, error: '服务器错误' });
   }
 });
 
