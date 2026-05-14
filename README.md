@@ -91,3 +91,17 @@ npm test
 - 密码 hash 校验。
 - signed token scope 校验。
 - CSRF token 绑定校验。
+- Share API（创建、鉴权拒绝、空内容、类型自动检测、密码保护）。
+
+## Share API
+
+`POST /api/v1/share` — 通过 API Key 鉴权创建分享页面，供 CLI 和 Agent Skill 调用。
+
+```bash
+curl -s -X POST "$QUICKSHARE_URL/api/v1/share" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $QUICKSHARE_API_KEY" \
+  -d '{"htmlContent":"<h1>Hello</h1>"}'
+```
+
+详见 [docs/deployment.md](docs/deployment.md) 环境变量表中的 `SHARE_API_KEY`。

@@ -42,3 +42,4 @@ Thumbs.db
 *.swo
 .vercel
 .env*.local
+.gstack/

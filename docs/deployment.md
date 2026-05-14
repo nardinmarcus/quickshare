@@ -39,6 +39,8 @@ npm run hash-password -- "your-admin-password"
 - 密码保护页面不会把密码放入 URL query。
 - 分享内容在 sandbox iframe 中渲染。
 - 未登录无法调用管理写接口。
+- `POST /api/v1/share` 带有效 `X-API-Key` 可创建分享并返回 URL。
+- `POST /api/v1/share` 不带或带错误 key 返回 401。
 
 ### 本地预检
 
@@ -107,3 +109,4 @@ docker-compose up -d --build # 更新并重启
 | `SHARE_BASE_URL` | 否 | 分享页公开 URL，默认同 `BASE_URL` |
 | `SECURE_COOKIES` | 否 | 默认生产环境为 `true` |
 | `LOG_LEVEL` | 否 | 默认 `dev`（开发）/ `combined`（生产） |
+| `SHARE_API_KEY` | 否 | `POST /api/v1/share` 的 API Key 鉴权，未设置则该端点返回 503 |
