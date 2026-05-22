@@ -1,0 +1,72 @@
+<%- include('partials/header', { title, page }) %>
+
+<div class="admin-container">
+  <header class="admin-header">
+    <div>
+      <p class="admin-kicker">Shared Page</p>
+      <h1 class="admin-title"><%= sharedPage.title || sharedPage.id %></h1>
+      <p class="admin-subtitle"><%= sharedPage.id %></p>
+    </div>
+    <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/pages">
+      <i class="fas fa-arrow-left" aria-hidden="true"></i>
+      <span>Back</span>
+    </a>
+  </header>
+
+  <section class="card admin-card">
+    <dl class="admin-detail-grid">
+      <div>
+        <dt>Public URL</dt>
+        <dd><a href="<%= publicUrl %>" target="_blank" rel="noopener noreferrer"><%= publicUrl %></a></dd>
+      </div>
+      <div>
+        <dt>Type</dt>
+        <dd><span class="admin-pill"><%= sharedPage.codeType || 'html' %></span></dd>
+      </div>
+      <div>
+        <dt>Created</dt>
+        <dd><time datetime="<%= new Date(Number(sharedPage.createdAt)).toISOString() %>"><%= new Date(Number(sharedPage.createdAt)).toLocaleString('zh-CN', { hour12: false }) %></time></dd>
+      </div>
+      <div>
+        <dt>Status</dt>
+        <dd>
+          <% if (sharedPage.isProtected) { %>
+            <span class="admin-status protected">Protected</span>
+          <% } else { %>
+            <span class="admin-status public">Public</span>
+          <% } %>
+        </dd>
+      </div>
+      <% if (sharedPage.isProtected) { %>
+        <div>
+          <dt>Password</dt>
+          <dd>
+            <% if (sharedPage.password) { %>
+              <code class="admin-password-value"><%= sharedPage.password %></code>
+            <% } else { %>
+              <span class="admin-muted">Unavailable for legacy share</span>
+            <% } %>
+          </dd>
+        </div>
+      <% } %>
+      <% if (sharedPage.description) { %>
+        <div class="admin-detail-wide">
+          <dt>Description</dt>
+          <dd><%= sharedPage.description %></dd>
+        </div>
+      <% } %>
+    </dl>
+  </section>
+
+  <section class="card admin-card">
+    <div class="admin-content-header">
+      <h2>Content</h2>
+      <a class="admin-icon-link" href="<%= publicUrl %>" target="_blank" rel="noopener noreferrer" aria-label="Open public page">
+        <i class="fas fa-external-link-alt" aria-hidden="true"></i>
+      </a>
+    </div>
+    <textarea class="admin-content-viewer" readonly><%= sharedPage.htmlContent %></textarea>
+  </section>
+</div>
+
+<%- include('partials/footer', { page }) %>

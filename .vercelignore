@@ -1,0 +1,10 @@
+.env
+.env.local
+.env.production
+.env.vercel
+.env*.local
+.git
+.gstack
+node_modules
+coverage
+*.log

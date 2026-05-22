@@ -15,6 +15,8 @@ const {
   DEFAULT_PASSWORD_LENGTH,
   createCsrfToken,
   createScopedToken,
+  decryptSecret,
+  encryptSecret,
   generateId,
   generateNumericPassword,
   hashSecret,
@@ -24,6 +26,7 @@ const {
 } = require('./utils/security');
 
 const ADMIN_COOKIE = 'admin_session';
+const DASHBOARD_ADMIN_COOKIE = 'dashboard_admin_session';
 const ADMIN_TTL_MS = 24 * 60 * 60 * 1000;
 const PAGE_ACCESS_TTL_MS = 24 * 60 * 60 * 1000;
 const VALID_CODE_TYPES = new Set(['html', 'markdown', 'svg', 'mermaid']);
@@ -70,6 +73,20 @@ function getAdminSession(req) {
   };
 }
 
+function getDashboardAdminSession(req) {
+  const token = req.cookies?.[DASHBOARD_ADMIN_COOKIE];
+  const payload = verifyScopedToken(token, 'dashboard-admin');
+
+  if (!payload) {
+    return null;
+  }
+
+  return {
+    payload,
+    token
+  };
+}
+
 function requireAdmin(req, res, next) {
   if (!config.authEnabled) {
     return next();
@@ -100,6 +117,21 @@ function requireApiAdmin(req, res, next) {
   }
 
   req.adminSession = session;
+  return next();
+}
+
+function requireDashboardAdmin(req, res, next) {
+  if (!config.authEnabled) {
+    return next();
+  }
+
+  const session = getDashboardAdminSession(req);
+
+  if (!session) {
+    return res.redirect('/admin/login');
+  }
+
+  req.dashboardAdminSession = session;
   return next();
 }
 
@@ -156,6 +188,22 @@ async function verifyAdminPassword(password) {
   return verifySecret(password, config.authPassword);
 }
 
+async function verifyDashboardAdminPassword(password) {
+  if (!password) {
+    return false;
+  }
+
+  if (config.adminDashboardPasswordHash) {
+    return verifySecret(password, config.adminDashboardPasswordHash);
+  }
+
+  if (!config.adminDashboardPassword) {
+    return false;
+  }
+
+  return verifySecret(password, config.adminDashboardPassword);
+}
+
 function setAdminCookie(res) {
   const token = createScopedToken('admin', {}, ADMIN_TTL_MS);
 
@@ -169,8 +217,29 @@ function setAdminCookie(res) {
   return token;
 }
 
+function setDashboardAdminCookie(res) {
+  const token = createScopedToken('dashboard-admin', {}, ADMIN_TTL_MS);
+
+  res.cookie(DASHBOARD_ADMIN_COOKIE, token, {
+    maxAge: ADMIN_TTL_MS,
+    httpOnly: true,
+    secure: config.secureCookies,
+    sameSite: 'lax'
+  });
+
+  return token;
+}
+
 function clearAdminCookie(res) {
   res.clearCookie(ADMIN_COOKIE, {
+    httpOnly: true,
+    secure: config.secureCookies,
+    sameSite: 'lax'
+  });
+}
+
+function clearDashboardAdminCookie(res) {
+  res.clearCookie(DASHBOARD_ADMIN_COOKIE, {
     httpOnly: true,
     secure: config.secureCookies,
     sameSite: 'lax'
@@ -283,6 +352,50 @@ function renderSandboxedDocument(renderedContent, contentType) {
   `;
 }
 
+function parsePagination(query) {
+  const page = Number.parseInt(query.page || '1', 10);
+  const safePage = Number.isFinite(page) && page > 0 ? page : 1;
+  const limit = 50;
+
+  return {
+    page: safePage,
+    limit,
+    offset: (safePage - 1) * limit
+  };
+}
+
+function publicPageUrl(req, id) {
+  const base = config.shareBaseUrl || config.baseUrl || `${req.protocol}://${req.get('host')}`;
+  return `${base.replace(/\/+$/, '')}/view/${encodeURIComponent(id)}`;
+}
+
+function enrichAdminStats(stats) {
+  const maxDailyCount = Math.max(1, ...stats.recentDays.map((day) => day.count));
+  const total = Math.max(1, stats.total);
+
+  return {
+    ...stats,
+    protectedPercent: Math.round((stats.protected / total) * 100),
+    publicPercent: Math.round((stats.public / total) * 100),
+    byType: stats.byType.map((item) => ({
+      ...item,
+      percent: Math.round((item.count / total) * 100)
+    })),
+    recentDays: stats.recentDays.map((day) => ({
+      ...day,
+      percent: Math.round((day.count / maxDailyCount) * 100)
+    }))
+  };
+}
+
+function visiblePagePassword(page) {
+  if (page.is_protected !== 1) {
+    return null;
+  }
+
+  return decryptSecret(page.encrypted_password);
+}
+
 app.get('/login', (req, res) => {
   if (!config.authEnabled || getAdminSession(req)) {
     return res.redirect('/');
@@ -291,7 +404,10 @@ app.get('/login', (req, res) => {
   return res.render('login', {
     title: 'QuickShare | 登录',
     page: 'login-page',
-    error: null
+    error: null,
+    formAction: '/login',
+    heading: '请输入访问密码',
+    inputPlaceholder: '请输入访问密码...'
   });
 });
 
@@ -306,7 +422,10 @@ app.post('/login', async (req, res) => {
     return res.status(401).render('login', {
       title: 'QuickShare | 登录',
       page: 'login-page',
-      error: '密码错误，请重试'
+      error: '密码错误，请重试',
+      formAction: '/login',
+      heading: '请输入访问密码',
+      inputPlaceholder: '请输入访问密码...'
     });
   }
 
@@ -319,6 +438,48 @@ app.get('/logout', (req, res) => {
   return res.redirect('/login');
 });
 
+app.get('/admin/login', (req, res) => {
+  if (!config.authEnabled || getDashboardAdminSession(req)) {
+    return res.redirect('/admin/stats');
+  }
+
+  return res.render('login', {
+    title: 'QuickShare | 管理后台登录',
+    page: 'login-page',
+    error: null,
+    formAction: '/admin/login',
+    heading: '请输入管理后台密码',
+    inputPlaceholder: '请输入管理后台密码...'
+  });
+});
+
+app.post('/admin/login', async (req, res) => {
+  if (!config.authEnabled) {
+    return res.redirect('/admin/stats');
+  }
+
+  const isValid = await verifyDashboardAdminPassword(req.body.password);
+
+  if (!isValid) {
+    return res.status(401).render('login', {
+      title: 'QuickShare | 管理后台登录',
+      page: 'login-page',
+      error: '管理后台密码错误，请重试',
+      formAction: '/admin/login',
+      heading: '请输入管理后台密码',
+      inputPlaceholder: '请输入管理后台密码...'
+    });
+  }
+
+  setDashboardAdminCookie(res);
+  return res.redirect('/admin/stats');
+});
+
+app.get('/admin/logout', (req, res) => {
+  clearDashboardAdminCookie(res);
+  return res.redirect('/admin/login');
+});
+
 app.get('/', requireAdmin, (req, res) => {
   const sessionToken = req.adminSession?.token || req.cookies?.[ADMIN_COOKIE] || '';
 
@@ -327,6 +488,116 @@ app.get('/', requireAdmin, (req, res) => {
     page: 'home-page',
     csrfToken: config.authEnabled ? createCsrfToken(sessionToken) : ''
   });
+});
+
+app.get('/admin', (req, res) => {
+  if (!config.authEnabled || getDashboardAdminSession(req)) {
+    return res.redirect('/admin/stats');
+  }
+
+  return res.redirect('/admin/login');
+});
+
+app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
+  try {
+    await ensureDatabase();
+
+    const requestedPagination = parsePagination(req.query);
+    const total = await pageRepository.countPages();
+    const totalPages = Math.max(1, Math.ceil(total / requestedPagination.limit));
+    const currentPage = Math.min(requestedPagination.page, totalPages);
+    const pagination = {
+      page: currentPage,
+      limit: requestedPagination.limit,
+      offset: (currentPage - 1) * requestedPagination.limit
+    };
+    const pages = await pageRepository.listAdminPages({
+      limit: pagination.limit,
+      offset: pagination.offset
+    });
+
+    return res.render('admin-pages', {
+      title: 'QuickShare | Admin Pages',
+      page: 'admin-pages',
+      pages,
+      pagination: {
+        ...pagination,
+        total,
+        totalPages,
+        hasPrevious: pagination.page > 1,
+        hasNext: pagination.page < totalPages
+      },
+      publicPageUrl: (id) => publicPageUrl(req, id)
+    });
+  } catch (error) {
+    console.error('Admin list pages failed:', error);
+    return res.status(500).render('error', {
+      title: 'Server Error',
+      page: 'error-page',
+      message: 'Unable to load admin pages'
+    });
+  }
+});
+
+app.get('/admin/stats', requireDashboardAdmin, async (req, res) => {
+  try {
+    await ensureDatabase();
+
+    const stats = enrichAdminStats(await pageRepository.getAdminStats());
+
+    return res.render('admin-stats', {
+      title: 'QuickShare | Admin Stats',
+      page: 'admin-stats',
+      stats
+    });
+  } catch (error) {
+    console.error('Admin stats failed:', error);
+    return res.status(500).render('error', {
+      title: 'Server Error',
+      page: 'error-page',
+      message: 'Unable to load admin stats'
+    });
+  }
+});
+
+app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
+  try {
+    await ensureDatabase();
+
+    const sharedPage = await pageRepository.getById(req.params.id);
+
+    if (!sharedPage) {
+      return res.status(404).render('error', {
+        title: 'Page Not Found',
+        page: 'error-page',
+        message: 'The requested shared page does not exist'
+      });
+    }
+
+    return res.render('admin-page-detail', {
+      title: `QuickShare | ${sharedPage.id}`,
+      page: 'admin-page-detail',
+      sharedPage: {
+        id: sharedPage.id,
+        htmlContent: sharedPage.html_content,
+        createdAt: sharedPage.created_at,
+        codeType: sharedPage.code_type,
+        title: sharedPage.title,
+        description: sharedPage.description,
+        isProtected: sharedPage.is_protected === 1,
+        password: visiblePagePassword(sharedPage),
+        expiresAt: sharedPage.expires_at
+      },
+      publicUrl: publicPageUrl(req, sharedPage.id)
+    });
+  } catch (error) {
+    console.error('Admin page detail failed:', error);
+    return res.status(500).render('error', {
+      title: 'Server Error',
+      page: 'error-page',
+      message: 'Unable to load shared page details'
+    });
+  }
 });
 
 app.post('/api/pages/create', requireApiAdmin, requireCsrf, async (req, res) => {
@@ -345,9 +616,11 @@ app.post('/api/pages/create', requireApiAdmin, requireCsrf, async (req, res) => 
     const normalizedCodeType = normalizeCodeType(htmlContent, codeType);
     const password = isProtected ? generateNumericPassword(DEFAULT_PASSWORD_LENGTH) : null;
     const passwordHash = password ? await hashSecret(password) : null;
+    const encryptedPassword = password ? encryptSecret(password) : null;
     const id = await createPageWithRetry({
       htmlContent,
       passwordHash,
+      encryptedPassword,
       isProtected: Boolean(isProtected),
       codeType: normalizedCodeType,
       title,
@@ -385,9 +658,11 @@ app.post('/api/v1/share', requireApiKey, async (req, res) => {
     const normalizedCodeType = normalizeCodeType(htmlContent, codeType);
     const password = isProtected ? generateNumericPassword(DEFAULT_PASSWORD_LENGTH) : null;
     const passwordHash = password ? await hashSecret(password) : null;
+    const encryptedPassword = password ? encryptSecret(password) : null;
     const id = await createPageWithRetry({
       htmlContent,
       passwordHash,
+      encryptedPassword,
       isProtected: Boolean(isProtected),
       codeType: normalizedCodeType,
       title,
@@ -482,10 +757,12 @@ app.post('/api/pages/:id/protect', requireApiAdmin, requireCsrf, async (req, res
     const isProtected = Boolean(req.body.isProtected);
     const password = isProtected ? generateNumericPassword(DEFAULT_PASSWORD_LENGTH) : null;
     const passwordHash = password ? await hashSecret(password) : null;
+    const encryptedPassword = password ? encryptSecret(password) : null;
 
     await pageRepository.updateProtection(req.params.id, {
       isProtected,
-      passwordHash
+      passwordHash,
+      encryptedPassword
     });
 
     return res.json({

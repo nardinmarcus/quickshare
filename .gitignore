@@ -20,6 +20,8 @@ coverage/
 # 环境变量文件
 .env
 .env.local
+.env.production
+.env.vercel
 .env.development.local
 .env.test.local
 .env.production.local

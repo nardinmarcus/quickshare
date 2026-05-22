@@ -3,6 +3,7 @@ const { promisify } = require('util');
 
 const scryptAsync = promisify(crypto.scrypt);
 const DEFAULT_PASSWORD_LENGTH = 6;
+const ENCRYPTED_SECRET_PREFIX = 'secret-v1';
 
 function getAppSecret() {
   const secret = process.env.SESSION_SECRET || process.env.AUTH_SECRET;
@@ -63,6 +64,62 @@ async function verifySecret(secret, storedValue) {
 
   const key = await scryptAsync(String(secret), salt, 64);
   return timingSafeEqualString(key.toString('base64url'), expectedKey);
+}
+
+function encryptionKey() {
+  return crypto
+    .createHash('sha256')
+    .update(`quickshare:encrypted-secret:${getAppSecret()}`)
+    .digest();
+}
+
+function encryptSecret(secret) {
+  if (!secret) {
+    return null;
+  }
+
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey(), iv);
+  const encrypted = Buffer.concat([
+    cipher.update(String(secret), 'utf8'),
+    cipher.final()
+  ]);
+  const authTag = cipher.getAuthTag();
+
+  return [
+    ENCRYPTED_SECRET_PREFIX,
+    iv.toString('base64url'),
+    authTag.toString('base64url'),
+    encrypted.toString('base64url')
+  ].join('$');
+}
+
+function decryptSecret(storedValue) {
+  if (!storedValue || typeof storedValue !== 'string') {
+    return null;
+  }
+
+  const [prefix, iv, authTag, encrypted] = storedValue.split('$');
+
+  if (prefix !== ENCRYPTED_SECRET_PREFIX || !iv || !authTag || !encrypted) {
+    return null;
+  }
+
+  try {
+    const decipher = crypto.createDecipheriv(
+      'aes-256-gcm',
+      encryptionKey(),
+      Buffer.from(iv, 'base64url')
+    );
+    decipher.setAuthTag(Buffer.from(authTag, 'base64url'));
+
+    return Buffer.concat([
+      decipher.update(Buffer.from(encrypted, 'base64url')),
+      decipher.final()
+    ]).toString('utf8');
+  } catch (error) {
+    return null;
+  }
 }
 
 function signPayload(payload, options = {}) {
@@ -150,6 +207,8 @@ module.exports = {
   DEFAULT_PASSWORD_LENGTH,
   createCsrfToken,
   createScopedToken,
+  decryptSecret,
+  encryptSecret,
   generateId,
   generateNumericPassword,
   getAppSecret,

@@ -1,3 +1,34 @@
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function buildDailyStats(createdAtRows, days = 14) {
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const startAt = todayStart.getTime() - ((days - 1) * DAY_MS);
+  const counts = new Map();
+
+  for (let index = 0; index < days; index += 1) {
+    const timestamp = startAt + (index * DAY_MS);
+    counts.set(timestamp, 0);
+  }
+
+  createdAtRows.forEach((row) => {
+    const createdAt = Number(row.created_at);
+    const day = new Date(createdAt);
+    day.setHours(0, 0, 0, 0);
+    const dayStart = day.getTime();
+
+    if (counts.has(dayStart)) {
+      counts.set(dayStart, counts.get(dayStart) + 1);
+    }
+  });
+
+  return Array.from(counts.entries()).map(([timestamp, count]) => ({
+    date: new Date(timestamp).toISOString().slice(0, 10),
+    label: new Date(timestamp).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }),
+    count
+  }));
+}
+
 class PostgresPageRepository {
   constructor(connectionString) {
     if (!connectionString) {
@@ -20,6 +51,7 @@ class PostgresPageRepository {
         html_content TEXT NOT NULL,
         created_at BIGINT NOT NULL,
         password_hash TEXT,
+        encrypted_password TEXT,
         is_protected INTEGER DEFAULT 0,
         code_type TEXT DEFAULT 'html',
         title TEXT,
@@ -29,22 +61,24 @@ class PostgresPageRepository {
     `);
 
     await this.pool.query('CREATE INDEX IF NOT EXISTS idx_pages_created_at ON pages (created_at DESC)');
+    await this.pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS encrypted_password TEXT');
   }
 
   async create(page) {
     await this.pool.query(
       `
         INSERT INTO pages (
-          id, html_content, created_at, password_hash, is_protected,
+          id, html_content, created_at, password_hash, encrypted_password, is_protected,
           code_type, title, description, expires_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       `,
       [
         page.id,
         page.htmlContent,
         page.createdAt,
         page.passwordHash || null,
+        page.encryptedPassword || null,
         page.isProtected ? 1 : 0,
         page.codeType || 'html',
         page.title || null,
@@ -75,10 +109,69 @@ class PostgresPageRepository {
     return result.rows;
   }
 
+  async listAdminPages(options = {}) {
+    const limit = Number.isInteger(options.limit) ? options.limit : 50;
+    const offset = Number.isInteger(options.offset) ? options.offset : 0;
+    const result = await this.pool.query(
+      `
+        SELECT id, created_at, code_type, title, description, is_protected, expires_at
+        FROM pages
+        ORDER BY created_at DESC
+        LIMIT $1 OFFSET $2
+      `,
+      [limit, offset]
+    );
+
+    return result.rows;
+  }
+
+  async countPages() {
+    const result = await this.pool.query('SELECT COUNT(*) AS count FROM pages');
+    return Number.parseInt(result.rows[0]?.count || '0', 10);
+  }
+
+  async getAdminStats() {
+    const since = Date.now() - (13 * DAY_MS);
+    const [summaryResult, typeResult, recentResult] = await Promise.all([
+      this.pool.query(`
+        SELECT
+          COUNT(*) AS total,
+          COALESCE(SUM(CASE WHEN is_protected = 1 THEN 1 ELSE 0 END), 0) AS protected,
+          MAX(created_at) AS latest_created_at
+        FROM pages
+      `),
+      this.pool.query(`
+        SELECT COALESCE(code_type, 'html') AS code_type, COUNT(*) AS count
+        FROM pages
+        GROUP BY COALESCE(code_type, 'html')
+        ORDER BY count DESC, code_type ASC
+      `),
+      this.pool.query(
+        'SELECT created_at FROM pages WHERE created_at >= $1 ORDER BY created_at ASC',
+        [since]
+      )
+    ]);
+    const summary = summaryResult.rows[0] || {};
+    const total = Number.parseInt(summary.total || '0', 10);
+    const protectedCount = Number.parseInt(summary.protected || '0', 10);
+
+    return {
+      total,
+      protected: protectedCount,
+      public: total - protectedCount,
+      latestCreatedAt: summary.latest_created_at ? Number(summary.latest_created_at) : null,
+      byType: typeResult.rows.map((row) => ({
+        codeType: row.code_type || 'html',
+        count: Number.parseInt(row.count || '0', 10)
+      })),
+      recentDays: buildDailyStats(recentResult.rows)
+    };
+  }
+
   async updateProtection(id, options) {
     const result = await this.pool.query(
-      'UPDATE pages SET is_protected = $1, password_hash = $2 WHERE id = $3',
-      [options.isProtected ? 1 : 0, options.passwordHash || null, id]
+      'UPDATE pages SET is_protected = $1, password_hash = $2, encrypted_password = $3 WHERE id = $4',
+      [options.isProtected ? 1 : 0, options.passwordHash || null, options.encryptedPassword || null, id]
     );
 
     return result.rowCount > 0;

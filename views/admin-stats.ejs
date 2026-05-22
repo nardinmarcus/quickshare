@@ -1,0 +1,106 @@
+<%- include('partials/header', { title, page }) %>
+
+<div class="admin-container">
+  <header class="admin-header">
+    <div>
+      <p class="admin-kicker">QuickShare</p>
+      <h1 class="admin-title">Admin Stats</h1>
+      <p class="admin-subtitle">Creation-side metrics from the current shared pages table</p>
+    </div>
+    <div class="admin-actions">
+      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/pages">
+        <i class="fas fa-table" aria-hidden="true"></i>
+        <span>Pages</span>
+      </a>
+      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/">
+        <i class="fas fa-plus" aria-hidden="true"></i>
+        <span>Create</span>
+      </a>
+    </div>
+  </header>
+
+  <section class="admin-metric-grid" aria-label="Summary metrics">
+    <article class="card admin-metric-card">
+      <span>Total Shares</span>
+      <strong><%= stats.total %></strong>
+    </article>
+    <article class="card admin-metric-card">
+      <span>Public</span>
+      <strong><%= stats.public %></strong>
+      <small><%= stats.publicPercent %>% of total</small>
+    </article>
+    <article class="card admin-metric-card">
+      <span>Protected</span>
+      <strong><%= stats.protected %></strong>
+      <small><%= stats.protectedPercent %>% of total</small>
+    </article>
+    <article class="card admin-metric-card">
+      <span>Latest Share</span>
+      <strong class="admin-metric-date">
+        <% if (stats.latestCreatedAt) { %>
+          <%= new Date(Number(stats.latestCreatedAt)).toLocaleString('zh-CN', { hour12: false }) %>
+        <% } else { %>
+          -
+        <% } %>
+      </strong>
+    </article>
+  </section>
+
+  <section class="admin-dashboard-grid">
+    <article class="card admin-chart-card">
+      <div class="admin-content-header">
+        <h2>Content Types</h2>
+      </div>
+      <% if (stats.byType.length === 0) { %>
+        <p class="admin-muted">No shares yet.</p>
+      <% } else { %>
+        <div class="admin-bar-list">
+          <% stats.byType.forEach((item) => { %>
+            <div class="admin-bar-row">
+              <div class="admin-bar-label">
+                <span><%= item.codeType %></span>
+                <strong><%= item.count %></strong>
+              </div>
+              <div class="admin-bar-track" aria-label="<%= item.codeType %> <%= item.count %>">
+                <div class="admin-bar-fill" style="width: <%= item.percent %>%;"></div>
+              </div>
+            </div>
+          <% }) %>
+        </div>
+      <% } %>
+    </article>
+
+    <article class="card admin-chart-card">
+      <div class="admin-content-header">
+        <h2>Protection Mix</h2>
+      </div>
+      <div class="admin-stacked-bar" aria-label="Protection mix">
+        <div class="admin-stack-public" style="width: <%= stats.publicPercent %>%;"></div>
+        <div class="admin-stack-protected" style="width: <%= stats.protectedPercent %>%;"></div>
+      </div>
+      <div class="admin-legend">
+        <span><i class="admin-legend-public"></i>Public <%= stats.public %></span>
+        <span><i class="admin-legend-protected"></i>Protected <%= stats.protected %></span>
+      </div>
+    </article>
+  </section>
+
+  <section class="card admin-chart-card">
+    <div class="admin-content-header">
+      <h2>Shares Created In Last 14 Days</h2>
+    </div>
+    <div class="admin-timeline" aria-label="Shares created in last 14 days">
+      <% stats.recentDays.forEach((day) => { %>
+        <div class="admin-day-column">
+          <div class="admin-day-count"><%= day.count %></div>
+          <div class="admin-day-track">
+            <div class="admin-day-fill" style="height: <%= day.percent %>%;"></div>
+          </div>
+          <time datetime="<%= day.date %>"><%= day.label %></time>
+        </div>
+      <% }) %>
+    </div>
+  </section>
+</div>
+
+<%- include('partials/footer', { page }) %>

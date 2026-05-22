@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const {
   createCsrfToken,
   createScopedToken,
+  decryptSecret,
+  encryptSecret,
   hashSecret,
   verifyCsrfToken,
   verifyScopedToken,
@@ -15,6 +17,19 @@ test('hashSecret verifies only the original secret', async () => {
 
   assert.equal(await verifySecret('correct-password', hash), true);
   assert.equal(await verifySecret('wrong-password', hash), false);
+});
+
+test('encryptSecret stores recoverable secrets without plaintext', () => {
+  const encrypted = encryptSecret('123456');
+
+  assert.notEqual(encrypted, '123456');
+  assert.match(encrypted, /^secret-v1\$/);
+  assert.equal(decryptSecret(encrypted), '123456');
+});
+
+test('decryptSecret returns null for invalid encrypted values', () => {
+  assert.equal(decryptSecret('scrypt$not-a-recoverable-secret'), null);
+  assert.equal(decryptSecret('secret-v1$bad$value'), null);
 });
 
 test('scoped tokens reject the wrong scope', () => {

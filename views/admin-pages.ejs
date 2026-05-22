@@ -1,0 +1,88 @@
+<%- include('partials/header', { title, page }) %>
+
+<div class="admin-container">
+  <header class="admin-header">
+    <div>
+      <p class="admin-kicker">QuickShare</p>
+      <h1 class="admin-title">Admin Pages</h1>
+      <p class="admin-subtitle"><%= pagination.total %> shared pages</p>
+    </div>
+    <div class="admin-actions">
+      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/stats">
+        <i class="fas fa-chart-bar" aria-hidden="true"></i>
+        <span>Stats</span>
+      </a>
+      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/">
+        <i class="fas fa-plus" aria-hidden="true"></i>
+        <span>Create</span>
+      </a>
+    </div>
+  </header>
+
+  <section class="card admin-card">
+    <% if (pages.length === 0) { %>
+      <div class="admin-empty">
+        <h2>No shared pages yet</h2>
+        <p>Create a page from the homepage or through the Share API.</p>
+      </div>
+    <% } else { %>
+      <div class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Title</th>
+              <th>Type</th>
+              <th>Created</th>
+              <th>Status</th>
+              <th>Link</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% pages.forEach((sharedPage) => { %>
+              <tr>
+                <td>
+                  <a class="admin-page-title" href="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>">
+                    <%= sharedPage.title || sharedPage.id %>
+                  </a>
+                  <% if (sharedPage.description) { %>
+                    <p class="admin-page-description"><%= sharedPage.description %></p>
+                  <% } %>
+                </td>
+                <td><span class="admin-pill"><%= sharedPage.code_type || 'html' %></span></td>
+                <td><time datetime="<%= new Date(Number(sharedPage.created_at)).toISOString() %>"><%= new Date(Number(sharedPage.created_at)).toLocaleString('zh-CN', { hour12: false }) %></time></td>
+                <td>
+                  <% if (sharedPage.is_protected === 1) { %>
+                    <span class="admin-status protected">Protected</span>
+                  <% } else { %>
+                    <span class="admin-status public">Public</span>
+                  <% } %>
+                </td>
+                <td>
+                  <a class="admin-icon-link" href="<%= publicPageUrl(sharedPage.id) %>" target="_blank" rel="noopener noreferrer" aria-label="Open public page">
+                    <i class="fas fa-external-link-alt" aria-hidden="true"></i>
+                  </a>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+
+      <nav class="admin-pagination" aria-label="Admin pages pagination">
+        <% if (pagination.hasPrevious) { %>
+          <a class="cyber-btn cyber-btn-secondary" href="/admin/pages?page=<%= pagination.page - 1 %>">Previous</a>
+        <% } else { %>
+          <span class="cyber-btn cyber-btn-secondary disabled">Previous</span>
+        <% } %>
+        <span class="admin-page-count">Page <%= pagination.page %> of <%= pagination.totalPages %></span>
+        <% if (pagination.hasNext) { %>
+          <a class="cyber-btn cyber-btn-secondary" href="/admin/pages?page=<%= pagination.page + 1 %>">Next</a>
+        <% } else { %>
+          <span class="cyber-btn cyber-btn-secondary disabled">Next</span>
+        <% } %>
+      </nav>
+    <% } %>
+  </section>
+</div>
+
+<%- include('partials/footer', { page }) %>
