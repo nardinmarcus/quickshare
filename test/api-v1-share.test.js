@@ -41,6 +41,13 @@ function post(path, body, headers = {}) {
   });
 }
 
+async function getStoredPage(urlId) {
+  const page = await app.locals.pageRepository.getById(urlId);
+
+  assert.ok(page);
+  return page;
+}
+
 test('POST /api/v1/share creates page with valid API key', async () => {
   const res = await post('/api/v1/share', {
     htmlContent: '<h1>Hello from CLI</h1>',
@@ -53,6 +60,42 @@ test('POST /api/v1/share creates page with valid API key', async () => {
   assert.ok(res.body.url.includes('/view/'));
   assert.equal(res.body.codeType, 'html');
   assert.equal(res.body.isProtected, false);
+});
+
+test('POST /api/v1/share derives title from HTML heading when omitted', async () => {
+  const res = await post('/api/v1/share', {
+    htmlContent: '<main><h1>Monthly Cleanup Dashboard</h1><p>Status</p></main>',
+    codeType: 'html'
+  }, { 'X-API-Key': 'test-key-123' });
+
+  assert.equal(res.status, 200);
+
+  const page = await getStoredPage(res.body.urlId);
+  assert.equal(page.title, 'Monthly Cleanup Dashboard');
+});
+
+test('POST /api/v1/share derives title from markdown heading when omitted', async () => {
+  const res = await post('/api/v1/share', {
+    htmlContent: '# Knowledge Card Prompt\n\nBody text'
+  }, { 'X-API-Key': 'test-key-123' });
+
+  assert.equal(res.status, 200);
+
+  const page = await getStoredPage(res.body.urlId);
+  assert.equal(page.title, 'Knowledge Card Prompt');
+});
+
+test('POST /api/v1/share stores readable fallback title when content has no title', async () => {
+  const res = await post('/api/v1/share', {
+    htmlContent: '<p>No heading here</p>',
+    codeType: 'html'
+  }, { 'X-API-Key': 'test-key-123' });
+
+  assert.equal(res.status, 200);
+
+  const page = await getStoredPage(res.body.urlId);
+  assert.match(page.title, /^HTML Share \d{4}-\d{2}-\d{2}$/);
+  assert.notEqual(page.title, page.id);
 });
 
 test('POST /api/v1/share rejects missing API key', async () => {

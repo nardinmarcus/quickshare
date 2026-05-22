@@ -11,6 +11,7 @@ const config = require('./config');
 const { createPageRepository } = require('./models/pageRepository');
 const { detectCodeType, extractCodeBlocks } = require('./utils/codeDetector');
 const { renderContent, escapeHtml } = require('./utils/contentRenderer');
+const { derivePageTitle } = require('./utils/pageTitle');
 const {
   DEFAULT_PASSWORD_LENGTH,
   createCsrfToken,
@@ -618,6 +619,8 @@ app.post('/api/pages/create', requireApiAdmin, requireCsrf, async (req, res) => 
     }
 
     const normalizedCodeType = normalizeCodeType(htmlContent, codeType);
+    const createdAt = Date.now();
+    const pageTitle = derivePageTitle(htmlContent, normalizedCodeType, title, createdAt);
     const password = isProtected ? generateNumericPassword(DEFAULT_PASSWORD_LENGTH) : null;
     const passwordHash = password ? await hashSecret(password) : null;
     const encryptedPassword = password ? encryptSecret(password) : null;
@@ -627,9 +630,9 @@ app.post('/api/pages/create', requireApiAdmin, requireCsrf, async (req, res) => 
       encryptedPassword,
       isProtected: Boolean(isProtected),
       codeType: normalizedCodeType,
-      title,
+      title: pageTitle,
       description,
-      createdAt: Date.now(),
+      createdAt,
       expiresAt: null
     });
 
@@ -660,6 +663,8 @@ app.post('/api/v1/share', requireApiKey, async (req, res) => {
     }
 
     const normalizedCodeType = normalizeCodeType(htmlContent, codeType);
+    const createdAt = Date.now();
+    const pageTitle = derivePageTitle(htmlContent, normalizedCodeType, title, createdAt);
     const password = isProtected ? generateNumericPassword(DEFAULT_PASSWORD_LENGTH) : null;
     const passwordHash = password ? await hashSecret(password) : null;
     const encryptedPassword = password ? encryptSecret(password) : null;
@@ -669,9 +674,9 @@ app.post('/api/v1/share', requireApiKey, async (req, res) => {
       encryptedPassword,
       isProtected: Boolean(isProtected),
       codeType: normalizedCodeType,
-      title,
+      title: pageTitle,
       description,
-      createdAt: Date.now(),
+      createdAt,
       expiresAt: null
     });
 
