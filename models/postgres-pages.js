@@ -114,7 +114,7 @@ class PostgresPageRepository {
     const offset = Number.isInteger(options.offset) ? options.offset : 0;
     const result = await this.pool.query(
       `
-        SELECT id, created_at, code_type, title, description, is_protected, expires_at
+        SELECT id, created_at, code_type, title, description, is_protected, encrypted_password, expires_at
         FROM pages
         ORDER BY created_at DESC
         LIMIT $1 OFFSET $2

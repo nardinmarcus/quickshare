@@ -515,11 +515,15 @@ app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
       limit: pagination.limit,
       offset: pagination.offset
     });
+    const visiblePages = pages.map((sharedPage) => ({
+      ...sharedPage,
+      visiblePassword: visiblePagePassword(sharedPage)
+    }));
 
     return res.render('admin-pages', {
       title: 'QuickShare | Admin Pages',
       page: 'admin-pages',
-      pages,
+      pages: visiblePages,
       pagination: {
         ...pagination,
         total,

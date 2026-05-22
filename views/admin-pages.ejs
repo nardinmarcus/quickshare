@@ -34,6 +34,7 @@
               <th>Type</th>
               <th>Created</th>
               <th>Status</th>
+              <th>Password</th>
               <th>Link</th>
             </tr>
           </thead>
@@ -55,6 +56,15 @@
                     <span class="admin-status protected">Protected</span>
                   <% } else { %>
                     <span class="admin-status public">Public</span>
+                  <% } %>
+                </td>
+                <td>
+                  <% if (sharedPage.is_protected === 1 && sharedPage.visiblePassword) { %>
+                    <code class="admin-password-value"><%= sharedPage.visiblePassword %></code>
+                  <% } else if (sharedPage.is_protected === 1) { %>
+                    <span class="admin-muted">Unavailable</span>
+                  <% } else { %>
+                    <span class="admin-muted">-</span>
                   <% } %>
                 </td>
                 <td>

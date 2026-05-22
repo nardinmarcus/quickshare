@@ -174,6 +174,9 @@ test('admin pages list and detail expose content without password hashes', async
   assert.match(listResponse.text, /Visible Title/);
   assert.match(listResponse.text, /Protected Title/);
   assert.match(listResponse.text, new RegExp(`/admin/pages/${publicPage.urlId}`));
+  assert.match(listResponse.text, new RegExp(protectedPage.password));
+  assert.doesNotMatch(listResponse.text, /secret-v1\$/);
+  assert.doesNotMatch(listResponse.text, /scrypt\$/);
 
   const detailResponse = await request(`/admin/pages/${protectedPage.urlId}`, {
     headers: { Cookie: cookie }

@@ -92,6 +92,7 @@ class MemoryPageRepository {
         title: page.title,
         description: page.description,
         is_protected: page.is_protected,
+        encrypted_password: page.encrypted_password,
         expires_at: page.expires_at
       }));
   }
