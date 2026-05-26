@@ -564,6 +564,34 @@ async function renderMermaid(content) {
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
           }
+          .mermaid-wrapper {
+            width: 100%;
+            overflow: auto;
+            position: relative;
+          }
+          .zoom-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+            font-size: 13px;
+            color: #666;
+          }
+          .zoom-controls button {
+            width: 28px;
+            height: 28px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: white;
+            cursor: pointer;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+          }
+          .zoom-controls button:hover { background: #f0f0f0; }
+          .zoom-controls span { min-width: 40px; text-align: center; }
           .mermaid {
             display: flex;
             justify-content: center;
@@ -571,6 +599,8 @@ async function renderMermaid(content) {
             width: 100%;
             min-height: 200px;
             margin: 0 auto;
+            transform-origin: top center;
+            transition: transform 0.15s ease;
           }
           .mermaid svg {
             width: 100% !important;
@@ -619,8 +649,16 @@ async function renderMermaid(content) {
         <div class="mermaid-container">
           <button class="toggle-code-btn" onclick="toggleCode()">显示/隐藏代码</button>
           <pre class="mermaid-code"><code>${escapedMermaidCode}</code></pre>
-          <div class="mermaid">
+          <div class="zoom-controls">
+            <button onclick="zoomOut()">−</button>
+            <span id="zoomLevel">100%</span>
+            <button onclick="zoomIn()">+</button>
+            <button onclick="zoomReset()" style="width:auto;padding:0 8px;font-size:12px;">重置</button>
+          </div>
+          <div class="mermaid-wrapper">
+            <div class="mermaid">
 ${escapedMermaidCode}
+            </div>
           </div>
         </div>
         
@@ -657,6 +695,28 @@ ${escapedMermaidCode}
               codeBlock.style.display = 'block';
             }
           }
+
+          // 缩放控制
+          let scale = 1;
+          const step = 0.15;
+          const minScale = 0.3;
+          const maxScale = 3;
+          const mermaidEl = document.querySelector('.mermaid');
+          const zoomLabel = document.getElementById('zoomLevel');
+
+          function applyZoom() {
+            mermaidEl.style.transform = 'scale(' + scale + ')';
+            zoomLabel.textContent = Math.round(scale * 100) + '%';
+          }
+          function zoomIn() { scale = Math.min(maxScale, scale + step); applyZoom(); }
+          function zoomOut() { scale = Math.max(minScale, scale - step); applyZoom(); }
+          function zoomReset() { scale = 1; applyZoom(); }
+
+          mermaidEl.addEventListener('wheel', function(e) {
+            e.preventDefault();
+            scale = Math.max(minScale, Math.min(maxScale, scale + (e.deltaY < 0 ? step : -step)));
+            applyZoom();
+          }, { passive: false });
         </script>
       </body>
       </html>
