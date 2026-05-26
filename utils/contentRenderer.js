@@ -14,6 +14,69 @@ const MARKDOWN_THEMES = {
   claude: '/css/markdown-claude.css'
 };
 
+const MERMAID_LIGHT_THEME = {
+  darkMode: false,
+  background: '#ffffff',
+  fontFamily: '"Inter", "SF Pro Display", system-ui, -apple-system, sans-serif',
+  fontSize: '14px',
+  primaryColor: '#EEF2FF',
+  primaryTextColor: '#1e293b',
+  primaryBorderColor: '#6366f1',
+  secondaryColor: '#F0FDF4',
+  tertiaryColor: '#F8FAFC',
+  lineColor: '#94a3b8',
+  mainBkg: '#EEF2FF',
+  nodeBorder: '#6366f1',
+  clusterBkg: '#F8FAFC',
+  clusterBorder: '#e2e8f0',
+  defaultLinkColor: '#6366f1',
+  titleColor: '#0f172a',
+  edgeLabelBackground: '#ffffff',
+  nodeTextColor: '#1e293b',
+  useGradient: true,
+  gradientStart: '#EEF2FF',
+  gradientStop: '#E0E7FF',
+  dropShadow: 'drop-shadow(0px 2px 4px rgba(99, 102, 241, 0.12))',
+  radius: 10,
+  strokeWidth: 2,
+};
+
+const MERMAID_DARK_THEME = {
+  darkMode: true,
+  background: '#0f172a',
+  fontFamily: '"Inter", "SF Pro Display", system-ui, -apple-system, sans-serif',
+  fontSize: '14px',
+  primaryColor: '#1e293b',
+  primaryTextColor: '#e2e8f0',
+  primaryBorderColor: '#6366f1',
+  secondaryColor: '#1e3a5f',
+  tertiaryColor: '#0f172a',
+  lineColor: '#64748b',
+  mainBkg: '#1e293b',
+  nodeBorder: '#6366f1',
+  clusterBkg: '#1e293b',
+  clusterBorder: '#334155',
+  defaultLinkColor: '#818cf8',
+  titleColor: '#f1f5f9',
+  edgeLabelBackground: '#1e293b',
+  nodeTextColor: '#e2e8f0',
+  useGradient: true,
+  gradientStart: '#1e293b',
+  gradientStop: '#1e3a5f',
+  dropShadow: 'drop-shadow(0px 2px 6px rgba(0, 0, 0, 0.4))',
+  radius: 10,
+  strokeWidth: 2,
+};
+
+const MERMAID_THEME_CSS = `
+  .node rect, .node circle, .node polygon { rx: 10; ry: 10; }
+  .edgePath .path { stroke-linecap: round; stroke-linejoin: round; }
+  .label { font-weight: 500; }
+  .cluster rect { rx: 12; }
+`;
+
+const MERMAID_CDN = 'https://cdn.jsdelivr.net/npm/mermaid@11.6.0/dist/mermaid.min.js';
+
 const THEME_KEYS = Object.keys(MARKDOWN_THEMES);
 
 function debugLog(...args) {
@@ -171,51 +234,54 @@ async function renderMarkdown(content, theme) {
   // 将Markdown转换为HTML
   const htmlContent = marked.parse(content);
   
-  // 使用最新版的 Mermaid 库，并增强其兼容性
+  // 使用与 renderMermaid 一致的 Mermaid CDN 版本
   const mermaidScript = `
-  <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+  <script src="${MERMAID_CDN}"></script>
   <script>
     // 配置 Mermaid
     document.addEventListener('DOMContentLoaded', function() {
       // 检测暗色模式
       const isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-      
+
       try {
         // 将 <pre><code class="language-mermaid"> 转换为 <div class="mermaid">
         const convertMermaidCodeBlocks = function() {
           const codeBlocks = document.querySelectorAll('pre code.language-mermaid');
           console.log('Found ' + codeBlocks.length + ' Mermaid code blocks to convert');
-          
+
           codeBlocks.forEach(function(codeBlock, index) {
             // 获取 Mermaid 代码
             const code = codeBlock.textContent;
             const pre = codeBlock.parentNode;
-            
+
             // 创建新的 div.mermaid 元素
             const mermaidDiv = document.createElement('div');
             mermaidDiv.className = 'mermaid';
             mermaidDiv.id = 'mermaid-converted-' + index;
             mermaidDiv.textContent = code;
-            
+
             // 替换 pre 元素
             if (pre && pre.parentNode) {
               pre.parentNode.replaceChild(mermaidDiv, pre);
               console.log('Converted Mermaid code block #' + index);
             }
           });
-          
+
           return codeBlocks.length > 0;
         };
-        
+
         // 首先转换代码块
         convertMermaidCodeBlocks();
-        
-        // 配置 Mermaid
+
+        // 配置 Mermaid - 使用自定义 base 主题
         mermaid.initialize({
-          startOnLoad: true,  // 自动初始化
+          startOnLoad: true,
           securityLevel: 'loose',
-          theme: isDarkMode ? 'dark' : 'default',
-          flowchart: { useMaxWidth: true, htmlLabels: true },
+          theme: 'base',
+          themeVariables: isDarkMode ? ${JSON.stringify(MERMAID_DARK_THEME)} : ${JSON.stringify(MERMAID_LIGHT_THEME)},
+          themeCSS: ${JSON.stringify(MERMAID_THEME_CSS)},
+          look: 'neo',
+          flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'rounded' },
           sequence: { useMaxWidth: true },
           gantt: { useMaxWidth: true },
           er: { useMaxWidth: true },
@@ -272,12 +338,12 @@ async function renderMarkdown(content, theme) {
       margin: 20px 0;
       text-align: center;
       overflow: auto;
-      background-color: white;
       padding: 10px;
-      border-radius: 5px;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      border-radius: 8px;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
-    
+
     .mermaid-error {
       margin: 20px 0;
       padding: 10px;
@@ -286,13 +352,8 @@ async function renderMarkdown(content, theme) {
       border: 1px solid #ffcccc;
       color: #cc0000;
     }
-    
+
     @media (prefers-color-scheme: dark) {
-      .mermaid {
-        background-color: #2d2d2d;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-      }
-      
       .mermaid-error {
         background-color: #3a2222;
         border-color: #662222;
@@ -539,7 +600,7 @@ async function renderMermaid(content) {
         <meta name="apple-mobile-web-app-title" content="QuickShare">
         
         <!-- 引入 Mermaid 库 -->
-        <script src="https://cdn.jsdelivr.net/npm/mermaid@11.6.0/dist/mermaid.min.js"></script>
+        <script src="${MERMAID_CDN}"></script>
         
         <style>
           body {
@@ -561,7 +622,7 @@ async function renderMermaid(content) {
             overflow: visible;
             background-color: white;
             padding: 32px;
-            border-radius: 8px;
+            border-radius: 12px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
           }
           .mermaid-wrapper {
@@ -613,35 +674,41 @@ async function renderMermaid(content) {
             padding: 15px;
             overflow-x: auto;
             margin: 15px 0;
-            border-left: 4px solid #4a6cf7;
+            border-left: 4px solid #6366f1;
             display: none; /* 默认隐藏代码 */
           }
           .toggle-code-btn {
-            background-color: #4a6cf7;
+            background-color: #6366f1;
             color: white;
             border: none;
             padding: 8px 16px;
-            border-radius: 4px;
+            border-radius: 6px;
             cursor: pointer;
             margin-bottom: 15px;
             font-size: 14px;
           }
           .toggle-code-btn:hover {
-            background-color: #3a56d4;
+            background-color: #4f46e5;
           }
           @media (prefers-color-scheme: dark) {
             body {
-              background-color: #1a1a1a;
-              color: #e6e6e6;
+              background-color: #0f172a;
+              color: #e2e8f0;
             }
             .mermaid-container {
-              background-color: #2a2a2a;
+              background-color: #1e293b;
               box-shadow: 0 2px 10px rgba(0,0,0,0.3);
             }
             pre.mermaid-code {
-              background-color: #333;
-              border-left: 4px solid #4a6cf7;
+              background-color: #334155;
+              border-left: 4px solid #6366f1;
             }
+            .zoom-controls button {
+              border-color: #475569;
+              background: #1e293b;
+              color: #e2e8f0;
+            }
+            .zoom-controls button:hover { background: #334155; }
           }
         </style>
       </head>
@@ -664,12 +731,15 @@ ${escapedMermaidCode}
         
         <script>
           // 初始化 Mermaid
+          const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
           mermaid.initialize({
             startOnLoad: true,
             securityLevel: 'loose',
-            theme: window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default',
-            logLevel: 'info',
-            flowchart: { useMaxWidth: true, htmlLabels: true },
+            theme: 'base',
+            themeVariables: isDark ? ${JSON.stringify(MERMAID_DARK_THEME)} : ${JSON.stringify(MERMAID_LIGHT_THEME)},
+            themeCSS: ${JSON.stringify(MERMAID_THEME_CSS)},
+            look: 'neo',
+            flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'rounded' },
             sequence: { useMaxWidth: true },
             gantt: { useMaxWidth: true },
             er: { useMaxWidth: true },
