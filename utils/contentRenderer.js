@@ -543,29 +543,39 @@ async function renderMermaid(content) {
         
         <style>
           body {
-            font-family: 'Roboto', sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             line-height: 1.6;
             color: #333;
             margin: 0;
-            padding: 20px;
+            padding: 24px;
             display: flex;
             justify-content: center;
-            align-items: center;
+            align-items: flex-start;
             min-height: 100vh;
             background-color: #f5f5f7;
+            box-sizing: border-box;
           }
           .mermaid-container {
-            max-width: 100%;
-            overflow: auto;
+            width: 100%;
+            max-width: 1200px;
+            overflow: visible;
             background-color: white;
-            padding: 20px;
+            padding: 32px;
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
           }
           .mermaid {
-            display: block;
-            max-width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            min-height: 200px;
             margin: 0 auto;
+          }
+          .mermaid svg {
+            width: 100% !important;
+            height: auto !important;
+            max-width: 100%;
           }
           pre.mermaid-code {
             background-color: #f8f9fa;
@@ -607,7 +617,6 @@ async function renderMermaid(content) {
       </head>
       <body>
         <div class="mermaid-container">
-          <h2>Mermaid 图表查看器</h2>
           <button class="toggle-code-btn" onclick="toggleCode()">显示/隐藏代码</button>
           <pre class="mermaid-code"><code>${escapedMermaidCode}</code></pre>
           <div class="mermaid">
