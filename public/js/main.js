@@ -172,8 +172,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const file = event.target.files[0];
       if (!file) return;
       
-      if (!file.name.endsWith('.html') && !file.name.endsWith('.htm')) {
-        showErrorToast('请上传 HTML 文件');
+      const allowedExts = ['.html', '.htm', '.md', '.markdown', '.svg', '.mmd', '.mermaid'];
+      if (!allowedExts.some(ext => file.name.toLowerCase().endsWith(ext))) {
+        showErrorToast('请上传 HTML / Markdown / SVG / Mermaid 文件');
         return;
       }
       
