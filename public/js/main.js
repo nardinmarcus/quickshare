@@ -68,13 +68,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const previewButton = document.getElementById('preview-button');
   const loadingIndicator = document.getElementById('loading-indicator');
   const passwordToggle = document.getElementById('password-toggle');
-  const passwordInfo = document.getElementById('password-info');
   const generatedPassword = document.getElementById('generated-password');
-  const copyPasswordOnly = document.getElementById('copy-password-button');
   const copyPasswordLink = document.getElementById('copy-password-link');
-  const customPasswordWrap = document.getElementById('custom-password-wrap');
+  const passwordDefaultMode = document.getElementById('password-default-mode');
+  const passwordCustomMode = document.getElementById('password-custom-mode');
+  const useCustomPasswordBtn = document.getElementById('use-custom-password-btn');
+  const confirmCustomPasswordBtn = document.getElementById('confirm-custom-password');
+  const cancelCustomPasswordBtn = document.getElementById('cancel-custom-password');
   const customPasswordInput = document.getElementById('custom-password-input');
   const toggleCustomPasswordBtn = document.getElementById('toggle-custom-password');
+
+  // 用户自定义密码（空字符串表示使用默认密码）
+  let userCustomPassword = '';
   
   // 创建代码编辑器
   let codeElement = null;
@@ -212,84 +217,168 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
   
+  // 辅助函数：显示默认模式
+  function showPasswordDefaultMode(passwordText) {
+    if (passwordDefaultMode) passwordDefaultMode.classList.remove('hidden');
+    if (passwordCustomMode) passwordCustomMode.classList.add('hidden');
+    if (generatedPassword) generatedPassword.textContent = passwordText || '';
+  }
+
+  // 辅助函数：显示自定义模式
+  function showPasswordCustomMode() {
+    if (passwordDefaultMode) passwordDefaultMode.classList.add('hidden');
+    if (passwordCustomMode) passwordCustomMode.classList.remove('hidden');
+    if (customPasswordInput) {
+      customPasswordInput.value = userCustomPassword;
+      customPasswordInput.focus();
+    }
+  }
+
+  // 辅助函数：隐藏所有密码UI
+  function hidePasswordUI() {
+    if (passwordDefaultMode) passwordDefaultMode.classList.add('hidden');
+    if (passwordCustomMode) passwordCustomMode.classList.add('hidden');
+    if (copyPasswordLink) copyPasswordLink.classList.add('hidden');
+  }
+
   // 密码开关事件监听
   if (passwordToggle) {
     passwordToggle.addEventListener('change', async () => {
-      // 如果没有生成链接，只切换自定义密码输入框的显示
-      if (!resultUrl || !resultUrl.dataset.originalUrl) {
-        if (customPasswordWrap) {
-          customPasswordWrap.classList.toggle('hidden', !passwordToggle.checked);
+      if (passwordToggle.checked) {
+        // 开关打开：显示默认模式
+        const hasResult = resultUrl && resultUrl.dataset.originalUrl;
+        if (hasResult) {
+          // 已有链接：调用API获取默认密码
+          try {
+            const urlId = resultUrl.dataset.originalUrl.split('/').pop();
+            const response = await fetch(`/api/pages/${urlId}/protect`, {
+              method: 'POST',
+              headers: jsonHeaders(),
+              body: JSON.stringify({ isProtected: true }),
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+              throw new Error(data.error || '更新保护状态失败');
+            }
+            userCustomPassword = '';
+            showPasswordDefaultMode(data.password || '');
+            if (copyPasswordLink) copyPasswordLink.classList.remove('hidden');
+          } catch (error) {
+            console.error('开启密码保护错误:', error);
+            passwordToggle.checked = false;
+            hidePasswordUI();
+            showErrorToast('开启密码保护失败');
+          }
+        } else {
+          // 没有链接：显示"自动生成"
+          userCustomPassword = '';
+          showPasswordDefaultMode('自动生成');
         }
+      } else {
+        // 开关关闭：隐藏所有密码UI
+        hidePasswordUI();
+        userCustomPassword = '';
+
+        // 如果有链接，更新后端
+        if (resultUrl && resultUrl.dataset.originalUrl) {
+          try {
+            const urlId = resultUrl.dataset.originalUrl.split('/').pop();
+            const response = await fetch(`/api/pages/${urlId}/protect`, {
+              method: 'POST',
+              headers: jsonHeaders(),
+              body: JSON.stringify({ isProtected: false }),
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+              throw new Error(data.error || '更新保护状态失败');
+            }
+          } catch (error) {
+            console.error('关闭密码保护错误:', error);
+            passwordToggle.checked = true;
+            showPasswordDefaultMode(generatedPassword ? generatedPassword.textContent : '');
+            showErrorToast('关闭密码保护失败');
+          }
+        }
+      }
+    });
+  }
+
+  // "自定义密码"按钮 → 切换到输入模式
+  if (useCustomPasswordBtn) {
+    useCustomPasswordBtn.addEventListener('click', () => {
+      showPasswordCustomMode();
+    });
+  }
+
+  // "确认"按钮 → 保存自定义密码
+  if (confirmCustomPasswordBtn) {
+    confirmCustomPasswordBtn.addEventListener('click', async () => {
+      const password = customPasswordInput ? customPasswordInput.value.trim() : '';
+      if (!password) {
+        showErrorToast('请输入密码');
+        return;
+      }
+      if (password.length < 4 || password.length > 12) {
+        showErrorToast('密码长度应为4-12位');
         return;
       }
 
-      if (passwordToggle.checked) {
-        // 显示密码区域和复制按钮
-        if (passwordInfo) passwordInfo.style.display = 'block';
-        if (copyPasswordLink) copyPasswordLink.style.display = 'inline-block';
-        if (customPasswordWrap) customPasswordWrap.classList.remove('hidden');
-
-        // 更新数据库状态为需要密码才能访问
+      const hasResult = resultUrl && resultUrl.dataset.originalUrl;
+      if (hasResult) {
+        // 已有链接：调用API更新密码
         try {
           const urlId = resultUrl.dataset.originalUrl.split('/').pop();
-          const customPassword = customPasswordInput ? customPasswordInput.value.trim() : '';
-          const requestBody = { isProtected: true };
-          if (customPassword) {
-            requestBody.password = customPassword;
-          }
           const response = await fetch(`/api/pages/${urlId}/protect`, {
             method: 'POST',
             headers: jsonHeaders(),
-            body: JSON.stringify(requestBody),
+            body: JSON.stringify({ isProtected: true, password }),
           });
           const data = await response.json();
-
           if (!response.ok || !data.success) {
-            throw new Error(data.error || '更新保护状态失败');
+            throw new Error(data.error || '更新密码失败');
           }
-
-          if (generatedPassword && data.password) {
-            generatedPassword.textContent = data.password;
-          }
+          userCustomPassword = password;
+          showPasswordDefaultMode(password);
+          showSuccessToast('密码已更新');
         } catch (error) {
-          console.error('更新保护状态错误:', error);
-          passwordToggle.checked = false;
-          if (passwordInfo) passwordInfo.style.display = 'none';
-          if (copyPasswordLink) copyPasswordLink.style.display = 'none';
-          if (customPasswordWrap) customPasswordWrap.classList.add('hidden');
-          showErrorToast('开启密码保护失败');
+          console.error('更新密码错误:', error);
+          showErrorToast('更新密码失败');
         }
       } else {
-        // 隐藏密码区域和复制按钮
-        if (passwordInfo) passwordInfo.style.display = 'none';
-        if (copyPasswordLink) copyPasswordLink.style.display = 'none';
-        if (customPasswordWrap) customPasswordWrap.classList.add('hidden');
+        // 没有链接：仅保存到变量
+        userCustomPassword = password;
+        showPasswordDefaultMode(password);
+        showSuccessToast('自定义密码已设置');
+      }
+    });
+  }
 
-        // 更新数据库状态为不需要密码就能访问
+  // "默认密码"按钮 → 切换回默认模式，使用默认密码
+  if (cancelCustomPasswordBtn) {
+    cancelCustomPasswordBtn.addEventListener('click', async () => {
+      const hasResult = resultUrl && resultUrl.dataset.originalUrl;
+      if (hasResult) {
         try {
           const urlId = resultUrl.dataset.originalUrl.split('/').pop();
           const response = await fetch(`/api/pages/${urlId}/protect`, {
             method: 'POST',
             headers: jsonHeaders(),
-            body: JSON.stringify({ isProtected: false }),
+            body: JSON.stringify({ isProtected: true }),
           });
           const data = await response.json();
-
           if (!response.ok || !data.success) {
-            throw new Error(data.error || '更新保护状态失败');
+            throw new Error(data.error || '重置密码失败');
           }
-
-          if (generatedPassword) {
-            generatedPassword.textContent = '';
-          }
+          userCustomPassword = '';
+          showPasswordDefaultMode(data.password || '');
+          showSuccessToast('已恢复默认密码');
         } catch (error) {
-          console.error('更新保护状态错误:', error);
-          passwordToggle.checked = true;
-          if (passwordInfo) passwordInfo.style.display = 'block';
-          if (copyPasswordLink) copyPasswordLink.style.display = 'inline-block';
-          if (customPasswordWrap) customPasswordWrap.classList.remove('hidden');
-          showErrorToast('关闭密码保护失败');
+          console.error('重置密码错误:', error);
+          showErrorToast('重置密码失败');
         }
+      } else {
+        userCustomPassword = '';
+        showPasswordDefaultMode('自动生成');
       }
     });
   }
@@ -615,10 +704,9 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('检测到的代码类型:', codeType);
         
         // 调用 API 生成链接
-        const customPassword = customPasswordInput ? customPasswordInput.value.trim() : '';
         const requestBody = { htmlContent, isProtected, codeType };
-        if (customPassword) {
-          requestBody.password = customPassword;
+        if (isProtected && userCustomPassword) {
+          requestBody.password = userCustomPassword;
         }
         const response = await fetch('/api/pages/create', {
           method: 'POST',
@@ -641,17 +729,12 @@ document.addEventListener('DOMContentLoaded', () => {
             resultUrl.dataset.originalUrl = url;
           }
           
-          if (generatedPassword) {
-            generatedPassword.textContent = data.password || '';
-          }
-          
-          // 根据开关状态显示或隐藏密码区域
-          if (passwordToggle && passwordToggle.checked && data.password) {
-            if (passwordInfo) passwordInfo.style.display = 'block';
-            if (copyPasswordLink) copyPasswordLink.style.display = 'inline-block';
+          // 根据开关状态显示密码
+          if (passwordToggle && passwordToggle.checked) {
+            showPasswordDefaultMode(data.password || '');
+            if (copyPasswordLink) copyPasswordLink.classList.remove('hidden');
           } else {
-            if (passwordInfo) passwordInfo.style.display = 'none';
-            if (copyPasswordLink) copyPasswordLink.style.display = 'none';
+            hidePasswordUI();
           }
           
           // 显示结果区域

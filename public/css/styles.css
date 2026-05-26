@@ -2435,6 +2435,67 @@ label[for="html-file"] {
   }
 }
 
+/* 密码默认模式 */
+.password-default-mode {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  animation: fadeIn 0.3s ease forwards;
+}
+
+.password-default-mode.hidden {
+  display: none;
+}
+
+/* 密码自定义模式 */
+.password-custom-mode {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  animation: fadeIn 0.3s ease forwards;
+}
+
+.password-custom-mode.hidden {
+  display: none;
+}
+
+/* 模式切换按钮 */
+.mode-switch-btn {
+  background: rgba(var(--primary-rgb), 0.1);
+  border: 1px solid var(--border-color);
+  color: var(--primary);
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.mode-switch-btn:hover {
+  background: rgba(var(--primary-rgb), 0.2);
+  border-color: var(--primary);
+}
+
+/* 确认按钮 */
+.confirm-btn {
+  background: var(--primary);
+  border: none;
+  color: #fff;
+  font-size: 0.8rem;
+  padding: 4px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.confirm-btn:hover {
+  background: var(--primary-dark);
+}
+
 .card-title {
   font-size: 1.5rem;
   margin-bottom: 1rem;

@@ -639,10 +639,10 @@ app.put('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
     const updateOptions = {};
 
     if (title !== undefined) {
-      updateOptions.title = title.trim() || null;
+      updateOptions.title = title ? String(title).trim() || null : null;
     }
     if (description !== undefined) {
-      updateOptions.description = description.trim() || null;
+      updateOptions.description = description ? String(description).trim() || null : null;
     }
     if (htmlContent !== undefined) {
       updateOptions.htmlContent = htmlContent;
@@ -965,11 +965,14 @@ app.get('/view/:id', async (req, res) => {
     }
 
     if (page.is_protected === 1 && !hasPageAccess(req, req.params.id)) {
+      const decryptedPassword = page.encrypted_password ? decryptSecret(page.encrypted_password) : null;
+      const passwordLength = decryptedPassword ? decryptedPassword.length : DEFAULT_PASSWORD_LENGTH;
+
       return res.render('password', {
         title: 'QuickShare | 密码保护',
         page: 'password-page',
         id: req.params.id,
-        passwordLength: DEFAULT_PASSWORD_LENGTH,
+        passwordLength,
         error: null
       });
     }
