@@ -8,7 +8,7 @@ try {
 }
 
 const defaultPort = isProduction ? 3000 : 5678;
-const VALID_THEMES = ['default', 'hacker', 'cyberpunk'];
+const VALID_THEMES = ['default', 'hacker', 'cyberpunk', 'popart'];
 const uiTheme = VALID_THEMES.includes(process.env.UI_THEME) ? process.env.UI_THEME : 'default';
 const authEnabled = process.env.AUTH_ENABLED !== 'false';
 const adminPasswordHash = process.env.ADMIN_PASSWORD_HASH || '';

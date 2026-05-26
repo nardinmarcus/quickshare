@@ -3035,6 +3035,158 @@ body:hover::-webkit-scrollbar,
   box-shadow: 0 0 15px rgba(0, 255, 255, 0.4);
 }
 
+/* ===== Pop Art 主题 ===== */
+[data-theme="popart"] {
+  --primary: #ff2d55;
+  --primary-rgb: 255, 45, 85;
+  --primary-dark: #d91a43;
+  --primary-light: #ff5a7a;
+  --secondary: #ffcc02;
+  --secondary-rgb: 255, 204, 2;
+  --accent: #00b4d8;
+  --accent-rgb: 0, 180, 216;
+  --dark: #1a1a2e;
+  --dark-rgb: 26, 26, 46;
+  --light: #fffbe6;
+  --light-rgb: 255, 251, 230;
+  --bg-main: #fffbe6;
+  --bg-input: #ffffff;
+  --text-primary: #1a1a2e;
+  --text-secondary: #6b6b8d;
+  --border-color: #1a1a2e;
+  --gradient-bg: #fffbe6;
+  --card-shadow: 6px 6px 0 #1a1a2e;
+  --button-hover: rgba(255, 45, 85, 0.08);
+  --result-bg: #fff9cc;
+  --error-bg: rgba(255, 45, 85, 0.08);
+  --error-border: #ff2d55;
+  --error-text: #d91a43;
+  --success-color: #34c759;
+  --focus-ring: 0 0 0 3px rgba(255, 45, 85, 0.25);
+}
+
+[data-theme="popart"] body {
+  font-family: 'Helvetica Neue', 'Arial Black', sans-serif;
+}
+
+[data-theme="popart"] .app-title {
+  font-family: 'Arial Black', 'Impact', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  -webkit-text-stroke: 1.5px #1a1a2e;
+  color: var(--primary);
+}
+
+[data-theme="popart"] .card {
+  border: 3px solid #1a1a2e;
+  border-radius: 0;
+  box-shadow: 6px 6px 0 #1a1a2e;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+[data-theme="popart"] .card:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 8px 8px 0 #1a1a2e;
+}
+
+[data-theme="popart"] .cyber-btn {
+  border: 2.5px solid #1a1a2e;
+  border-radius: 0;
+  font-family: 'Arial Black', 'Impact', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 900;
+}
+
+[data-theme="popart"] .cyber-btn-primary {
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 4px 4px 0 #1a1a2e;
+}
+
+[data-theme="popart"] .cyber-btn-primary:hover {
+  background: var(--primary-light);
+  box-shadow: 2px 2px 0 #1a1a2e;
+  transform: translate(2px, 2px);
+}
+
+[data-theme="popart"] .cyber-btn-secondary:hover {
+  border-color: var(--primary);
+  box-shadow: 4px 4px 0 var(--primary);
+}
+
+[data-theme="popart"] #html-input {
+  border: 3px solid #1a1a2e;
+  border-radius: 0;
+  background: #fff;
+}
+
+[data-theme="popart"] #html-input:focus {
+  box-shadow: 4px 4px 0 var(--primary);
+}
+
+[data-theme="popart"] .action-btn {
+  background: var(--secondary);
+  color: #1a1a2e;
+  border: 2.5px solid #1a1a2e;
+  border-radius: 0;
+  font-family: 'Arial Black', 'Impact', sans-serif;
+  text-transform: uppercase;
+  font-weight: 900;
+  box-shadow: 3px 3px 0 #1a1a2e;
+}
+
+[data-theme="popart"] .action-btn:hover {
+  background: #ffd633;
+  box-shadow: 1px 1px 0 #1a1a2e;
+  transform: translate(2px, 2px);
+}
+
+[data-theme="popart"] .preview-btn {
+  background: var(--accent);
+  color: #fff;
+  border: 2.5px solid #1a1a2e;
+  border-radius: 0;
+  font-family: 'Arial Black', 'Impact', sans-serif;
+  text-transform: uppercase;
+  font-weight: 900;
+  box-shadow: 3px 3px 0 #1a1a2e;
+}
+
+[data-theme="popart"] .preview-btn:hover {
+  background: #33c4e6;
+  box-shadow: 1px 1px 0 #1a1a2e;
+  transform: translate(2px, 2px);
+}
+
+/* popart: 半色调脉冲 */
+[data-theme="popart"] .brand-pulse {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--primary);
+  border: 2px solid #1a1a2e;
+  animation: popBounce 1.2s ease-in-out infinite;
+}
+
+@keyframes popBounce {
+  0%, 100% { transform: scale(1); }
+  25% { transform: scale(1.4); }
+  50% { transform: scale(0.85); }
+  75% { transform: scale(1.15); }
+}
+
+/* popart: 半色调点阵背景 */
+[data-theme="popart"] .app-container::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: radial-gradient(circle, rgba(26,26,46,0.04) 1px, transparent 1px);
+  background-size: 16px 16px;
+  pointer-events: none;
+  z-index: 0;
+}
+
 /* ===== Toast 通知系统 ===== */
 .toast-container {
   position: fixed;
