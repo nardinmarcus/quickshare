@@ -65,6 +65,19 @@
             <input type="checkbox" id="password-toggle" class="switch-checkbox">
             <label for="password-toggle" class="switch-label"></label>
           </div>
+          <div id="custom-password-wrap" class="custom-password-wrap hidden">
+            <input
+              type="password"
+              id="custom-password-input"
+              class="custom-password-input"
+              placeholder="Auto-generate if empty"
+              maxlength="50"
+              autocomplete="new-password"
+            >
+            <button type="button" id="toggle-custom-password" class="toggle-password-btn" aria-label="Toggle password visibility">
+              <i class="fas fa-eye" aria-hidden="true"></i>
+            </button>
+          </div>
           <div id="password-info" class="password-info hidden">
             <span id="generated-password" class="generated-password" title="点击复制密码"></span>
             <a href="#" id="copy-password-link" class="copy-password-link hidden">复制密码和网址</a>

@@ -635,7 +635,7 @@ app.put('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       });
     }
 
-    const { title, description, htmlContent, expiresAt, isProtected } = req.body;
+    const { title, description, htmlContent, expiresAt, isProtected, password } = req.body;
     const updateOptions = {};
 
     if (title !== undefined) {
@@ -660,12 +660,21 @@ app.put('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
         updateOptions.isProtected = newProtected;
 
         if (newProtected) {
-          const password = generateNumericPassword(DEFAULT_PASSWORD_LENGTH);
-          updateOptions.passwordHash = await hashSecret(password);
-          updateOptions.encryptedPassword = encryptSecret(password);
+          const customPassword = password && String(password).trim();
+          const finalPassword = customPassword || generateNumericPassword(DEFAULT_PASSWORD_LENGTH);
+          updateOptions.passwordHash = await hashSecret(finalPassword);
+          updateOptions.encryptedPassword = encryptSecret(finalPassword);
         } else {
           updateOptions.passwordHash = null;
           updateOptions.encryptedPassword = null;
+        }
+      } else if (newProtected && password && String(password).trim()) {
+        // Protection status unchanged but password explicitly provided - update password
+        const customPassword = String(password).trim();
+        if (customPassword.length >= 4 && customPassword.length <= 50) {
+          updateOptions.isProtected = true;
+          updateOptions.passwordHash = await hashSecret(customPassword);
+          updateOptions.encryptedPassword = encryptSecret(customPassword);
         }
       }
     }
@@ -728,7 +737,7 @@ app.post('/api/pages/create', requireApiAdmin, requireCsrf, async (req, res) => 
   try {
     await ensureDatabase();
 
-    const { htmlContent, isProtected, codeType, title, description } = req.body;
+    const { htmlContent, isProtected, codeType, title, description, password: customPassword } = req.body;
 
     if (!htmlContent || typeof htmlContent !== 'string') {
       return res.status(400).json({
@@ -740,7 +749,7 @@ app.post('/api/pages/create', requireApiAdmin, requireCsrf, async (req, res) => 
     const normalizedCodeType = normalizeCodeType(htmlContent, codeType);
     const createdAt = Date.now();
     const pageTitle = derivePageTitle(htmlContent, normalizedCodeType, title, createdAt);
-    const password = isProtected ? generateNumericPassword(DEFAULT_PASSWORD_LENGTH) : null;
+    const password = isProtected ? (customPassword && String(customPassword).trim() ? String(customPassword).trim() : generateNumericPassword(DEFAULT_PASSWORD_LENGTH)) : null;
     const passwordHash = password ? await hashSecret(password) : null;
     const encryptedPassword = password ? encryptSecret(password) : null;
     const id = await createPageWithRetry({
@@ -775,7 +784,7 @@ app.post('/api/v1/share', requireApiKey, async (req, res) => {
   try {
     await ensureDatabase();
 
-    const { htmlContent, codeType, title, description, isProtected } = req.body;
+    const { htmlContent, codeType, title, description, isProtected, password: customPassword } = req.body;
 
     if (!htmlContent || typeof htmlContent !== 'string') {
       return res.status(400).json({ success: false, error: '请提供内容' });
@@ -784,7 +793,7 @@ app.post('/api/v1/share', requireApiKey, async (req, res) => {
     const normalizedCodeType = normalizeCodeType(htmlContent, codeType);
     const createdAt = Date.now();
     const pageTitle = derivePageTitle(htmlContent, normalizedCodeType, title, createdAt);
-    const password = isProtected ? generateNumericPassword(DEFAULT_PASSWORD_LENGTH) : null;
+    const password = isProtected ? (customPassword && String(customPassword).trim() ? String(customPassword).trim() : generateNumericPassword(DEFAULT_PASSWORD_LENGTH)) : null;
     const passwordHash = password ? await hashSecret(password) : null;
     const encryptedPassword = password ? encryptSecret(password) : null;
     const id = await createPageWithRetry({
@@ -883,7 +892,8 @@ app.post('/api/pages/:id/protect', requireApiAdmin, requireCsrf, async (req, res
     }
 
     const isProtected = Boolean(req.body.isProtected);
-    const password = isProtected ? generateNumericPassword(DEFAULT_PASSWORD_LENGTH) : null;
+    const customPassword = req.body.password && String(req.body.password).trim();
+    const password = isProtected ? (customPassword || generateNumericPassword(DEFAULT_PASSWORD_LENGTH)) : null;
     const passwordHash = password ? await hashSecret(password) : null;
     const encryptedPassword = password ? encryptSecret(password) : null;
 

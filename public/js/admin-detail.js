@@ -7,6 +7,9 @@
   const clearExpiresBtn = document.getElementById('clear-expires');
   const protectedCheckbox = document.getElementById('edit-protected');
   const protectionHint = document.getElementById('protection-hint');
+  const passwordInputWrap = document.getElementById('password-input-wrap');
+  const passwordInput = document.getElementById('edit-password');
+  const togglePasswordBtn = document.getElementById('toggle-password-visibility');
 
   const titleDisplay = document.getElementById('page-title-display');
   const descriptionDisplayRow = document.getElementById('description-display-row');
@@ -24,6 +27,7 @@
     editForm.hidden = false;
     contentTextarea.removeAttribute('readonly');
     contentTextarea.classList.add('admin-content-editable');
+    updatePasswordInputVisibility();
   }
 
   function exitEditMode() {
@@ -45,15 +49,29 @@
       expiresInput.value = '';
     }
     protectedCheckbox.checked = originalData.isProtected;
+    if (passwordInput) {
+      passwordInput.value = '';
+      passwordInput.type = 'password';
+    }
+    if (togglePasswordBtn) {
+      togglePasswordBtn.innerHTML = '<i class="fas fa-eye" aria-hidden="true"></i>';
+    }
     contentTextarea.value = originalData.htmlContent || '';
     updateProtectionHint(originalData.isProtected);
+    updatePasswordInputVisibility();
   }
 
   function updateProtectionHint(isProtected) {
     if (isProtected) {
       protectionHint.textContent = 'Unchecking will remove password protection.';
     } else {
-      protectionHint.textContent = 'Checking will generate a new password.';
+      protectionHint.textContent = 'Checking will enable password protection.';
+    }
+  }
+
+  function updatePasswordInputVisibility() {
+    if (passwordInputWrap) {
+      passwordInputWrap.hidden = !protectedCheckbox.checked;
     }
   }
 
@@ -111,7 +129,18 @@
 
   protectedCheckbox.addEventListener('change', function () {
     updateProtectionHint(protectedCheckbox.checked);
+    updatePasswordInputVisibility();
   });
+
+  if (togglePasswordBtn && passwordInput) {
+    togglePasswordBtn.addEventListener('click', function () {
+      const isHidden = passwordInput.type === 'password';
+      passwordInput.type = isHidden ? 'text' : 'password';
+      togglePasswordBtn.innerHTML = isHidden
+        ? '<i class="fas fa-eye-slash" aria-hidden="true"></i>'
+        : '<i class="fas fa-eye" aria-hidden="true"></i>';
+    });
+  }
 
   editForm.addEventListener('submit', async function (e) {
     e.preventDefault();
@@ -121,6 +150,7 @@
     const htmlContent = contentTextarea.value;
     const expiresAtValue = document.getElementById('edit-expires').value;
     const isProtected = protectedCheckbox.checked;
+    const customPassword = passwordInput ? passwordInput.value.trim() : '';
 
     const payload = {
       title: title || null,
@@ -133,6 +163,10 @@
       payload.expiresAt = new Date(expiresAtValue).getTime();
     } else {
       payload.expiresAt = null;
+    }
+
+    if (customPassword) {
+      payload.password = customPassword;
     }
 
     saveBtn.disabled = true;
@@ -151,7 +185,6 @@
       const data = await response.json();
 
       if (data.success) {
-        // Update original data
         originalData.title = data.page.title;
         originalData.description = data.page.description;
         originalData.htmlContent = data.page.htmlContent;

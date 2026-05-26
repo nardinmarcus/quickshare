@@ -96,11 +96,28 @@
             <span class="admin-toggle-slider"></span>
             <span class="admin-toggle-text">Password Protected</span>
           </label>
+          <div class="admin-password-input-wrap" id="password-input-wrap" <%= !sharedPage.isProtected ? 'hidden' : '' %>>
+            <label for="edit-password">Password</label>
+            <div class="admin-password-input-group">
+              <input
+                type="password"
+                id="edit-password"
+                name="password"
+                placeholder="Leave empty to auto-generate"
+                maxlength="50"
+                autocomplete="new-password"
+              >
+              <button type="button" class="admin-toggle-password-btn" id="toggle-password-visibility" aria-label="Toggle password visibility">
+                <i class="fas fa-eye" aria-hidden="true"></i>
+              </button>
+            </div>
+            <p class="admin-edit-hint">Leave empty to keep current password or auto-generate a new one.</p>
+          </div>
           <p class="admin-edit-hint" id="protection-hint">
             <% if (sharedPage.isProtected) { %>
               Unchecking will remove password protection.
             <% } else { %>
-              Checking will generate a new password.
+              Checking will enable password protection.
             <% } %>
           </p>
         </div>

@@ -72,6 +72,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const generatedPassword = document.getElementById('generated-password');
   const copyPasswordOnly = document.getElementById('copy-password-button');
   const copyPasswordLink = document.getElementById('copy-password-link');
+  const customPasswordWrap = document.getElementById('custom-password-wrap');
+  const customPasswordInput = document.getElementById('custom-password-input');
+  const toggleCustomPasswordBtn = document.getElementById('toggle-custom-password');
   
   // 创建代码编辑器
   let codeElement = null;
@@ -212,23 +215,32 @@ document.addEventListener('DOMContentLoaded', () => {
   // 密码开关事件监听
   if (passwordToggle) {
     passwordToggle.addEventListener('change', async () => {
-      // 如果没有生成链接，则不做任何操作
+      // 如果没有生成链接，只切换自定义密码输入框的显示
       if (!resultUrl || !resultUrl.dataset.originalUrl) {
+        if (customPasswordWrap) {
+          customPasswordWrap.classList.toggle('hidden', !passwordToggle.checked);
+        }
         return;
       }
-      
+
       if (passwordToggle.checked) {
         // 显示密码区域和复制按钮
         if (passwordInfo) passwordInfo.style.display = 'block';
         if (copyPasswordLink) copyPasswordLink.style.display = 'inline-block';
-        
+        if (customPasswordWrap) customPasswordWrap.classList.remove('hidden');
+
         // 更新数据库状态为需要密码才能访问
         try {
           const urlId = resultUrl.dataset.originalUrl.split('/').pop();
+          const customPassword = customPasswordInput ? customPasswordInput.value.trim() : '';
+          const requestBody = { isProtected: true };
+          if (customPassword) {
+            requestBody.password = customPassword;
+          }
           const response = await fetch(`/api/pages/${urlId}/protect`, {
             method: 'POST',
             headers: jsonHeaders(),
-            body: JSON.stringify({ isProtected: true }),
+            body: JSON.stringify(requestBody),
           });
           const data = await response.json();
 
@@ -244,13 +256,15 @@ document.addEventListener('DOMContentLoaded', () => {
           passwordToggle.checked = false;
           if (passwordInfo) passwordInfo.style.display = 'none';
           if (copyPasswordLink) copyPasswordLink.style.display = 'none';
+          if (customPasswordWrap) customPasswordWrap.classList.add('hidden');
           showErrorToast('开启密码保护失败');
         }
       } else {
         // 隐藏密码区域和复制按钮
         if (passwordInfo) passwordInfo.style.display = 'none';
         if (copyPasswordLink) copyPasswordLink.style.display = 'none';
-        
+        if (customPasswordWrap) customPasswordWrap.classList.add('hidden');
+
         // 更新数据库状态为不需要密码就能访问
         try {
           const urlId = resultUrl.dataset.originalUrl.split('/').pop();
@@ -273,9 +287,21 @@ document.addEventListener('DOMContentLoaded', () => {
           passwordToggle.checked = true;
           if (passwordInfo) passwordInfo.style.display = 'block';
           if (copyPasswordLink) copyPasswordLink.style.display = 'inline-block';
+          if (customPasswordWrap) customPasswordWrap.classList.remove('hidden');
           showErrorToast('关闭密码保护失败');
         }
       }
+    });
+  }
+
+  // 自定义密码显示/隐藏切换
+  if (toggleCustomPasswordBtn && customPasswordInput) {
+    toggleCustomPasswordBtn.addEventListener('click', () => {
+      const isHidden = customPasswordInput.type === 'password';
+      customPasswordInput.type = isHidden ? 'text' : 'password';
+      toggleCustomPasswordBtn.innerHTML = isHidden
+        ? '<i class="fas fa-eye-slash" aria-hidden="true"></i>'
+        : '<i class="fas fa-eye" aria-hidden="true"></i>';
     });
   }
   
@@ -589,10 +615,15 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('检测到的代码类型:', codeType);
         
         // 调用 API 生成链接
+        const customPassword = customPasswordInput ? customPasswordInput.value.trim() : '';
+        const requestBody = { htmlContent, isProtected, codeType };
+        if (customPassword) {
+          requestBody.password = customPassword;
+        }
         const response = await fetch('/api/pages/create', {
           method: 'POST',
           headers: jsonHeaders(),
-          body: JSON.stringify({ htmlContent, isProtected, codeType }),
+          body: JSON.stringify(requestBody),
         });
         
         const data = await response.json();

@@ -1664,6 +1664,110 @@ label[for="html-file"] {
   background: var(--bg-input) !important;
 }
 
+/* Admin password input in edit form */
+.admin-password-input-wrap {
+  margin-top: 0.5rem;
+}
+
+.admin-password-input-wrap label {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 500;
+  margin-bottom: 0.25rem;
+}
+
+.admin-password-input-group {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.admin-password-input-group input[type="password"],
+.admin-password-input-group input[type="text"] {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  color: var(--primary);
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.admin-password-input-group input:focus {
+  border-color: var(--accent);
+}
+
+.admin-toggle-password-btn {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.admin-toggle-password-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Homepage custom password input */
+.custom-password-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+}
+
+.custom-password-wrap.hidden {
+  display: none;
+}
+
+.custom-password-input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  color: var(--primary);
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.custom-password-input:focus {
+  border-color: var(--accent);
+}
+
+.toggle-password-btn {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.toggle-password-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 @media (max-width: 768px) {
   .admin-header {
     align-items: stretch;
