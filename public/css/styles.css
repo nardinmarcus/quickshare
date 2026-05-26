@@ -3047,7 +3047,7 @@ body:hover::-webkit-scrollbar,
   pointer-events: none;
 }
 
-.toast {
+.toast-container .toast {
   pointer-events: auto;
   position: relative;
   overflow: hidden;
@@ -3066,12 +3066,12 @@ body:hover::-webkit-scrollbar,
   transition: transform 0.35s cubic-bezier(0.2, 0, 0, 1), opacity 0.3s ease;
 }
 
-.toast.show {
+.toast-container .toast.show {
   transform: translateX(0);
   opacity: 1;
 }
 
-.toast-icon {
+.toast-container .toast-icon {
   flex-shrink: 0;
   width: 22px;
   height: 22px;
@@ -3082,11 +3082,11 @@ body:hover::-webkit-scrollbar,
   font-size: 11px;
 }
 
-.toast-success .toast-icon { background: rgba(34, 197, 94, 0.12); color: #22c55e; }
-.toast-error .toast-icon { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
-.toast-info .toast-icon { background: rgba(99, 102, 241, 0.12); color: var(--primary); }
+.toast-container .toast-success .toast-icon { background: rgba(34, 197, 94, 0.12); color: #22c55e; }
+.toast-container .toast-error .toast-icon { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
+.toast-container .toast-info .toast-icon { background: rgba(99, 102, 241, 0.12); color: var(--primary); }
 
-.toast-content {
+.toast-container .toast-content {
   flex: 1;
   font-size: 14px;
   line-height: 1.5;
@@ -3094,7 +3094,7 @@ body:hover::-webkit-scrollbar,
   word-break: break-word;
 }
 
-.toast-close {
+.toast-container .toast-close {
   flex-shrink: 0;
   background: none;
   border: none;
@@ -3107,9 +3107,9 @@ body:hover::-webkit-scrollbar,
   margin-top: 1px;
 }
 
-.toast-close:hover { color: var(--text-primary); }
+.toast-container .toast-close:hover { color: var(--text-primary); }
 
-.toast-progress {
+.toast-container .toast-progress {
   position: absolute;
   bottom: 0;
   left: 0;
@@ -3117,13 +3117,13 @@ body:hover::-webkit-scrollbar,
   border-radius: 0 0 0 12px;
 }
 
-.toast-success .toast-progress { background: #22c55e; }
-.toast-error .toast-progress { background: #ef4444; }
-.toast-info .toast-progress { background: var(--primary); }
+.toast-container .toast-success .toast-progress { background: #22c55e; }
+.toast-container .toast-error .toast-progress { background: #ef4444; }
+.toast-container .toast-info .toast-progress { background: var(--primary); }
 
 @media (max-width: 480px) {
   .toast-container { top: 10px; right: 10px; left: 10px; }
-  .toast { min-width: auto; max-width: none; width: 100%; }
+  .toast-container .toast { min-width: auto; max-width: none; width: 100%; }
 }
 
 /* ===== Tab 切换 ===== */
