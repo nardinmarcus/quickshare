@@ -112,21 +112,89 @@ class PostgresPageRepository {
   async listAdminPages(options = {}) {
     const limit = Number.isInteger(options.limit) ? options.limit : 50;
     const offset = Number.isInteger(options.offset) ? options.offset : 0;
+    const search = options.search || '';
+    const codeType = options.codeType || '';
+    const isProtected = options.isProtected;
+    const sortBy = options.sortBy || 'created_at';
+    const sortOrder = options.sortOrder || 'desc';
+
+    const conditions = [];
+    const params = [];
+    let paramIndex = 1;
+
+    if (search) {
+      conditions.push(`(id ILIKE $${paramIndex} OR title ILIKE $${paramIndex} OR description ILIKE $${paramIndex})`);
+      params.push(`%${search}%`);
+      paramIndex += 1;
+    }
+
+    if (codeType) {
+      conditions.push(`code_type = $${paramIndex}`);
+      params.push(codeType);
+      paramIndex += 1;
+    }
+
+    if (isProtected !== undefined && isProtected !== '') {
+      conditions.push(`is_protected = $${paramIndex}`);
+      params.push(isProtected === true || isProtected === 'true' || isProtected === 1 || isProtected === 'protected' ? 1 : 0);
+      paramIndex += 1;
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const allowedSortColumns = { created_at: 'created_at', code_type: 'code_type', is_protected: 'is_protected' };
+    const orderColumn = allowedSortColumns[sortBy] || 'created_at';
+    const orderDirection = sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+    params.push(limit, offset);
+
     const result = await this.pool.query(
       `
         SELECT id, created_at, code_type, title, description, is_protected, encrypted_password, expires_at
         FROM pages
-        ORDER BY created_at DESC
-        LIMIT $1 OFFSET $2
+        ${whereClause}
+        ORDER BY ${orderColumn} ${orderDirection}
+        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `,
-      [limit, offset]
+      params
     );
 
     return result.rows;
   }
 
-  async countPages() {
-    const result = await this.pool.query('SELECT COUNT(*) AS count FROM pages');
+  async countPages(options = {}) {
+    const search = options.search || '';
+    const codeType = options.codeType || '';
+    const isProtected = options.isProtected;
+
+    const conditions = [];
+    const params = [];
+    let paramIndex = 1;
+
+    if (search) {
+      conditions.push(`(id ILIKE $${paramIndex} OR title ILIKE $${paramIndex} OR description ILIKE $${paramIndex})`);
+      params.push(`%${search}%`);
+      paramIndex += 1;
+    }
+
+    if (codeType) {
+      conditions.push(`code_type = $${paramIndex}`);
+      params.push(codeType);
+      paramIndex += 1;
+    }
+
+    if (isProtected !== undefined && isProtected !== '') {
+      conditions.push(`is_protected = $${paramIndex}`);
+      params.push(isProtected === true || isProtected === 'true' || isProtected === 1 || isProtected === 'protected' ? 1 : 0);
+      paramIndex += 1;
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const result = await this.pool.query(
+      `SELECT COUNT(*) AS count FROM pages ${whereClause}`,
+      params
+    );
     return Number.parseInt(result.rows[0]?.count || '0', 10);
   }
 
@@ -174,6 +242,11 @@ class PostgresPageRepository {
       [options.isProtected ? 1 : 0, options.passwordHash || null, options.encryptedPassword || null, id]
     );
 
+    return result.rowCount > 0;
+  }
+
+  async deletePage(id) {
+    const result = await this.pool.query('DELETE FROM pages WHERE id = $1', [id]);
     return result.rowCount > 0;
   }
 }

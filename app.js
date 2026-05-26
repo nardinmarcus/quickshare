@@ -504,7 +504,14 @@ app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
     await ensureDatabase();
 
     const requestedPagination = parsePagination(req.query);
-    const total = await pageRepository.countPages();
+    const filterOptions = {
+      search: req.query.search || '',
+      codeType: req.query.type || '',
+      isProtected: req.query.status || ''
+    };
+    const sortBy = req.query.sort || 'created_at';
+    const sortOrder = req.query.order === 'asc' ? 'asc' : 'desc';
+    const total = await pageRepository.countPages(filterOptions);
     const totalPages = Math.max(1, Math.ceil(total / requestedPagination.limit));
     const currentPage = Math.min(requestedPagination.page, totalPages);
     const pagination = {
@@ -513,8 +520,11 @@ app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
       offset: (currentPage - 1) * requestedPagination.limit
     };
     const pages = await pageRepository.listAdminPages({
+      ...filterOptions,
       limit: pagination.limit,
-      offset: pagination.offset
+      offset: pagination.offset,
+      sortBy,
+      sortOrder
     });
     const visiblePages = pages.map((sharedPage) => ({
       ...sharedPage,
@@ -531,6 +541,13 @@ app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
         totalPages,
         hasPrevious: pagination.page > 1,
         hasNext: pagination.page < totalPages
+      },
+      filters: {
+        search: filterOptions.search,
+        type: filterOptions.codeType,
+        status: filterOptions.isProtected,
+        sort: sortBy,
+        order: sortOrder
       },
       publicPageUrl: (id) => publicPageUrl(req, id)
     });
@@ -601,6 +618,33 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       title: 'Server Error',
       page: 'error-page',
       message: 'Unable to load shared page details'
+    });
+  }
+});
+
+app.delete('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
+  try {
+    await ensureDatabase();
+
+    const page = await pageRepository.getById(req.params.id);
+
+    if (!page) {
+      return res.status(404).json({
+        success: false,
+        error: 'Page not found'
+      });
+    }
+
+    await pageRepository.deletePage(req.params.id);
+
+    return res.json({
+      success: true
+    });
+  } catch (error) {
+    console.error('Delete page failed:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to delete page'
     });
   }
 });

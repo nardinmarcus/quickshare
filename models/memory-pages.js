@@ -81,9 +81,49 @@ class MemoryPageRepository {
   async listAdminPages(options = {}) {
     const limit = Number.isInteger(options.limit) ? options.limit : 50;
     const offset = Number.isInteger(options.offset) ? options.offset : 0;
+    const search = options.search || '';
+    const codeType = options.codeType || '';
+    const isProtected = options.isProtected;
+    const sortBy = options.sortBy || 'created_at';
+    const sortOrder = options.sortOrder || 'desc';
 
-    return Array.from(this.pages.values())
-      .sort((left, right) => right.created_at - left.created_at)
+    let results = Array.from(this.pages.values());
+
+    if (search) {
+      const query = search.toLowerCase();
+      results = results.filter((page) =>
+        (page.id && page.id.toLowerCase().includes(query)) ||
+        (page.title && page.title.toLowerCase().includes(query)) ||
+        (page.description && page.description.toLowerCase().includes(query))
+      );
+    }
+
+    if (codeType) {
+      results = results.filter((page) => page.code_type === codeType);
+    }
+
+    if (isProtected !== undefined && isProtected !== '') {
+      const target = isProtected === true || isProtected === 'true' || isProtected === 1 || isProtected === 'protected' ? 1 : 0;
+      results = results.filter((page) => page.is_protected === target);
+    }
+
+    results.sort((left, right) => {
+      let comparison = 0;
+
+      if (sortBy === 'created_at') {
+        comparison = Number(left.created_at) - Number(right.created_at);
+      } else if (sortBy === 'code_type') {
+        comparison = (left.code_type || '').localeCompare(right.code_type || '');
+      } else if (sortBy === 'is_protected') {
+        comparison = left.is_protected - right.is_protected;
+      } else {
+        comparison = Number(left.created_at) - Number(right.created_at);
+      }
+
+      return sortOrder === 'asc' ? comparison : -comparison;
+    });
+
+    return results
       .slice(offset, offset + limit)
       .map((page) => ({
         id: page.id,
@@ -97,8 +137,32 @@ class MemoryPageRepository {
       }));
   }
 
-  async countPages() {
-    return this.pages.size;
+  async countPages(options = {}) {
+    const search = options.search || '';
+    const codeType = options.codeType || '';
+    const isProtected = options.isProtected;
+
+    let results = Array.from(this.pages.values());
+
+    if (search) {
+      const query = search.toLowerCase();
+      results = results.filter((page) =>
+        (page.id && page.id.toLowerCase().includes(query)) ||
+        (page.title && page.title.toLowerCase().includes(query)) ||
+        (page.description && page.description.toLowerCase().includes(query))
+      );
+    }
+
+    if (codeType) {
+      results = results.filter((page) => page.code_type === codeType);
+    }
+
+    if (isProtected !== undefined && isProtected !== '') {
+      const target = isProtected === true || isProtected === 'true' || isProtected === 1 || isProtected === 'protected' ? 1 : 0;
+      results = results.filter((page) => page.is_protected === target);
+    }
+
+    return results.length;
   }
 
   async getAdminStats() {
@@ -143,6 +207,10 @@ class MemoryPageRepository {
     page.password_hash = options.passwordHash || null;
     page.encrypted_password = options.encryptedPassword || null;
     return true;
+  }
+
+  async deletePage(id) {
+    return this.pages.delete(id);
   }
 }
 

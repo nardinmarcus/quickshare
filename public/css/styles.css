@@ -1296,6 +1296,239 @@ label[for="html-file"] {
   font-size: 0.75rem;
 }
 
+/* Admin filter bar */
+.admin-filter-bar {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.admin-search-form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 280px;
+}
+
+.admin-search-box {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0 0.75rem;
+}
+
+.admin-search-box i {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.admin-search-box input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 0.5rem 0;
+  color: var(--primary);
+  font-size: 0.9rem;
+  outline: none;
+}
+
+.admin-search-box input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.admin-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.admin-filter-label {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.admin-filter-buttons {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.admin-filter-btn {
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  text-decoration: none;
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.admin-filter-btn:hover {
+  color: var(--primary);
+  border-color: var(--accent);
+}
+
+.admin-filter-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(139, 92, 246, 0.1);
+}
+
+/* Sortable table headers */
+.admin-sortable {
+  color: var(--primary);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.admin-sortable:hover {
+  color: var(--accent);
+}
+
+.admin-sortable i {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.admin-sortable.asc i,
+.admin-sortable.desc i {
+  color: var(--accent);
+}
+
+/* Delete button */
+.admin-delete-btn {
+  background: transparent;
+  border: 1px solid var(--error-border);
+  color: var(--error-border);
+  width: 2rem;
+  height: 2rem;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.admin-delete-btn:hover {
+  background: var(--error-border);
+  color: #fff;
+}
+
+.admin-actions-col {
+  text-align: center;
+  width: 60px;
+}
+
+/* Expiration states */
+.admin-expired {
+  opacity: 0.6;
+}
+
+.admin-expired .admin-page-title {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.admin-expired-badge,
+.admin-expiring-badge {
+  display: inline-block;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-top: 0.35rem;
+}
+
+.admin-expired-badge {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--error-border);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
+.admin-expiring-badge {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+/* Modal */
+.admin-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.admin-modal[hidden] {
+  display: none;
+}
+
+.admin-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+.admin-modal-content {
+  position: relative;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 1.5rem;
+  max-width: 400px;
+  width: 90%;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+}
+
+.admin-modal-content h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+  color: var(--primary);
+}
+
+.admin-modal-content p {
+  margin: 0 0 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.admin-modal-warning {
+  color: var(--error-border) !important;
+  font-size: 0.8rem !important;
+}
+
+.admin-modal-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  margin-top: 1.25rem;
+}
+
 @media (max-width: 768px) {
   .admin-header {
     align-items: stretch;

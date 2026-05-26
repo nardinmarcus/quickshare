@@ -20,79 +20,175 @@
   </header>
 
   <section class="card admin-card">
-    <% if (pages.length === 0) { %>
+    <% if (pagination.total === 0 && !filters.search && !filters.type && !filters.status) { %>
       <div class="admin-empty">
         <h2>No shared pages yet</h2>
         <p>Create a page from the homepage or through the Share API.</p>
       </div>
     <% } else { %>
-      <div class="admin-table-wrap">
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>Title</th>
-              <th>Type</th>
-              <th>Created</th>
-              <th>Status</th>
-              <th>Password</th>
-              <th>Link</th>
-            </tr>
-          </thead>
-          <tbody>
-            <% pages.forEach((sharedPage) => { %>
-              <tr>
-                <td>
-                  <a class="admin-page-title" href="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>">
-                    <%= sharedPage.title || sharedPage.id %>
-                  </a>
-                  <% if (sharedPage.description) { %>
-                    <p class="admin-page-description"><%= sharedPage.description %></p>
-                  <% } %>
-                </td>
-                <td><span class="admin-pill"><%= sharedPage.code_type || 'html' %></span></td>
-                <td><time datetime="<%= new Date(Number(sharedPage.created_at)).toISOString() %>"><%= new Date(Number(sharedPage.created_at)).toLocaleString('zh-CN', { hour12: false }) %></time></td>
-                <td>
-                  <% if (sharedPage.is_protected === 1) { %>
-                    <span class="admin-status protected">Protected</span>
-                  <% } else { %>
-                    <span class="admin-status public">Public</span>
-                  <% } %>
-                </td>
-                <td>
-                  <% if (sharedPage.is_protected === 1 && sharedPage.visiblePassword) { %>
-                    <code class="admin-password-value"><%= sharedPage.visiblePassword %></code>
-                  <% } else if (sharedPage.is_protected === 1) { %>
-                    <span class="admin-muted">Unavailable</span>
-                  <% } else { %>
-                    <span class="admin-muted">-</span>
-                  <% } %>
-                </td>
-                <td>
-                  <a class="admin-icon-link" href="<%= publicPageUrl(sharedPage.id) %>" target="_blank" rel="noopener noreferrer" aria-label="Open public page">
-                    <i class="fas fa-external-link-alt" aria-hidden="true"></i>
-                  </a>
-                </td>
-              </tr>
-            <% }) %>
-          </tbody>
-        </table>
+      <div class="admin-filter-bar">
+        <form class="admin-search-form" method="get" action="/admin/pages">
+          <div class="admin-search-box">
+            <i class="fas fa-search" aria-hidden="true"></i>
+            <input
+              type="text"
+              name="search"
+              value="<%= filters.search %>"
+              placeholder="Search by title, ID, or description..."
+              aria-label="Search pages"
+            >
+          </div>
+          <input type="hidden" name="type" value="<%= filters.type %>">
+          <input type="hidden" name="status" value="<%= filters.status %>">
+          <input type="hidden" name="sort" value="<%= filters.sort %>">
+          <input type="hidden" name="order" value="<%= filters.order %>">
+          <button type="submit" class="cyber-btn cyber-btn-secondary">Search</button>
+          <% if (filters.search) { %>
+            <a class="cyber-btn cyber-btn-secondary" href="/admin/pages?type=<%= encodeURIComponent(filters.type) %>&status=<%= encodeURIComponent(filters.status) %>&sort=<%= filters.sort %>&order=<%= filters.order %>">Clear</a>
+          <% } %>
+        </form>
+
+        <div class="admin-filter-group">
+          <span class="admin-filter-label">Type:</span>
+          <div class="admin-filter-buttons">
+            <a class="admin-filter-btn <%= !filters.type ? 'active' : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&status=<%= encodeURIComponent(filters.status) %>&sort=<%= filters.sort %>&order=<%= filters.order %>">All</a>
+            <% ['html', 'markdown', 'svg', 'mermaid'].forEach(function(t) { %>
+              <a class="admin-filter-btn <%= filters.type === t ? 'active' : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&type=<%= t %>&status=<%= encodeURIComponent(filters.status) %>&sort=<%= filters.sort %>&order=<%= filters.order %>"><%= t %></a>
+            <% }); %>
+          </div>
+        </div>
+
+        <div class="admin-filter-group">
+          <span class="admin-filter-label">Status:</span>
+          <div class="admin-filter-buttons">
+            <a class="admin-filter-btn <%= !filters.status ? 'active' : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&sort=<%= filters.sort %>&order=<%= filters.order %>">All</a>
+            <a class="admin-filter-btn <%= filters.status === 'public' ? 'active' : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&status=public&sort=<%= filters.sort %>&order=<%= filters.order %>">Public</a>
+            <a class="admin-filter-btn <%= filters.status === 'protected' ? 'active' : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&status=protected&sort=<%= filters.sort %>&order=<%= filters.order %>">Protected</a>
+          </div>
+        </div>
       </div>
 
-      <nav class="admin-pagination" aria-label="Admin pages pagination">
-        <% if (pagination.hasPrevious) { %>
-          <a class="cyber-btn cyber-btn-secondary" href="/admin/pages?page=<%= pagination.page - 1 %>">Previous</a>
-        <% } else { %>
-          <span class="cyber-btn cyber-btn-secondary disabled">Previous</span>
-        <% } %>
-        <span class="admin-page-count">Page <%= pagination.page %> of <%= pagination.totalPages %></span>
-        <% if (pagination.hasNext) { %>
-          <a class="cyber-btn cyber-btn-secondary" href="/admin/pages?page=<%= pagination.page + 1 %>">Next</a>
-        <% } else { %>
-          <span class="cyber-btn cyber-btn-secondary disabled">Next</span>
-        <% } %>
-      </nav>
+      <% if (pages.length === 0) { %>
+        <div class="admin-empty" style="padding: 2rem;">
+          <p>No pages match your filters. <a href="/admin/pages">Clear all filters</a>.</p>
+        </div>
+      <% } else { %>
+        <div class="admin-table-wrap">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Title</th>
+                <th>
+                  <a class="admin-sortable <%= filters.sort === 'code_type' ? filters.order : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&status=<%= encodeURIComponent(filters.status) %>&sort=code_type&order=<%= filters.sort === 'code_type' && filters.order === 'desc' ? 'asc' : 'desc' %>">
+                    Type <i class="fas fa-sort<%= filters.sort === 'code_type' ? (filters.order === 'asc' ? '-up' : '-down') : '' %>" aria-hidden="true"></i>
+                  </a>
+                </th>
+                <th>
+                  <a class="admin-sortable <%= filters.sort === 'created_at' ? filters.order : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&status=<%= encodeURIComponent(filters.status) %>&sort=created_at&order=<%= filters.sort === 'created_at' && filters.order === 'desc' ? 'asc' : 'desc' %>">
+                    Created <i class="fas fa-sort<%= filters.sort === 'created_at' ? (filters.order === 'asc' ? '-up' : '-down') : '' %>" aria-hidden="true"></i>
+                  </a>
+                </th>
+                <th>
+                  <a class="admin-sortable <%= filters.sort === 'is_protected' ? filters.order : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&status=<%= encodeURIComponent(filters.status) %>&sort=is_protected&order=<%= filters.sort === 'is_protected' && filters.order === 'desc' ? 'asc' : 'desc' %>">
+                    Status <i class="fas fa-sort<%= filters.sort === 'is_protected' ? (filters.order === 'asc' ? '-up' : '-down') : '' %>" aria-hidden="true"></i>
+                  </a>
+                </th>
+                <th>Password</th>
+                <th>Link</th>
+                <th class="admin-actions-col">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <% pages.forEach((sharedPage) => { %>
+                <%
+                  const now = Date.now();
+                  const isExpired = sharedPage.expires_at && Number(sharedPage.expires_at) < now;
+                  const isExpiringSoon = sharedPage.expires_at && !isExpired && Number(sharedPage.expires_at) < now + 24 * 60 * 60 * 1000;
+                %>
+                <tr class="<%= isExpired ? 'admin-expired' : '' %> <%= isExpiringSoon ? 'admin-expiring' : '' %>">
+                  <td>
+                    <a class="admin-page-title" href="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>">
+                      <%= sharedPage.title || sharedPage.id %>
+                    </a>
+                    <% if (sharedPage.description) { %>
+                      <p class="admin-page-description"><%= sharedPage.description %></p>
+                    <% } %>
+                    <% if (isExpired) { %>
+                      <span class="admin-expired-badge">Expired</span>
+                    <% } else if (isExpiringSoon) { %>
+                      <span class="admin-expiring-badge">Expires soon</span>
+                    <% } %>
+                  </td>
+                  <td><span class="admin-pill"><%= sharedPage.code_type || 'html' %></span></td>
+                  <td><time datetime="<%= new Date(Number(sharedPage.created_at)).toISOString() %>"><%= new Date(Number(sharedPage.created_at)).toLocaleString('zh-CN', { hour12: false }) %></time></td>
+                  <td>
+                    <% if (sharedPage.is_protected === 1) { %>
+                      <span class="admin-status protected">Protected</span>
+                    <% } else { %>
+                      <span class="admin-status public">Public</span>
+                    <% } %>
+                  </td>
+                  <td>
+                    <% if (sharedPage.is_protected === 1 && sharedPage.visiblePassword) { %>
+                      <code class="admin-password-value"><%= sharedPage.visiblePassword %></code>
+                    <% } else if (sharedPage.is_protected === 1) { %>
+                      <span class="admin-muted">Unavailable</span>
+                    <% } else { %>
+                      <span class="admin-muted">-</span>
+                    <% } %>
+                  </td>
+                  <td>
+                    <a class="admin-icon-link" href="<%= publicPageUrl(sharedPage.id) %>" target="_blank" rel="noopener noreferrer" aria-label="Open public page">
+                      <i class="fas fa-external-link-alt" aria-hidden="true"></i>
+                    </a>
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      class="admin-delete-btn"
+                      data-page-id="<%= sharedPage.id %>"
+                      data-page-title="<%= sharedPage.title || sharedPage.id %>"
+                      aria-label="Delete page <%= sharedPage.title || sharedPage.id %>"
+                    >
+                      <i class="fas fa-trash-alt" aria-hidden="true"></i>
+                    </button>
+                  </td>
+                </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+
+        <nav class="admin-pagination" aria-label="Admin pages pagination">
+          <% if (pagination.hasPrevious) { %>
+            <a class="cyber-btn cyber-btn-secondary" href="/admin/pages?page=<%= pagination.page - 1 %>&search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&status=<%= encodeURIComponent(filters.status) %>&sort=<%= filters.sort %>&order=<%= filters.order %>">Previous</a>
+          <% } else { %>
+            <span class="cyber-btn cyber-btn-secondary disabled">Previous</span>
+          <% } %>
+          <span class="admin-page-count">Page <%= pagination.page %> of <%= pagination.totalPages %></span>
+          <% if (pagination.hasNext) { %>
+            <a class="cyber-btn cyber-btn-secondary" href="/admin/pages?page=<%= pagination.page + 1 %>&search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&status=<%= encodeURIComponent(filters.status) %>&sort=<%= filters.sort %>&order=<%= filters.order %>">Next</a>
+          <% } else { %>
+            <span class="cyber-btn cyber-btn-secondary disabled">Next</span>
+          <% } %>
+        </nav>
+      <% } %>
     <% } %>
   </section>
 </div>
 
+<div id="delete-modal" class="admin-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title" hidden>
+  <div class="admin-modal-backdrop"></div>
+  <div class="admin-modal-content">
+    <h3 id="delete-modal-title">Confirm Deletion</h3>
+    <p>Are you sure you want to delete <strong id="delete-modal-target"></strong>?</p>
+    <p class="admin-modal-warning">This action cannot be undone.</p>
+    <div class="admin-modal-actions">
+      <button type="button" class="cyber-btn cyber-btn-secondary" id="delete-modal-cancel">Cancel</button>
+      <button type="button" class="cyber-btn" id="delete-modal-confirm">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script src="/js/admin.js"></script>
 <%- include('partials/footer', { page }) %>
