@@ -1,48 +1,61 @@
-/* 深色主题变量 */
+/* ===== 默认深色主题变量 ===== */
 :root {
-  --primary: #fafafa;
-  --primary-rgb: 250, 250, 250;
-  --primary-dark: #e4e4e7;
-  --primary-light: #ffffff;
-  --secondary: #71717a;
-  --secondary-rgb: 113, 113, 122;
-  --accent: #a1a1aa;
-  --accent-rgb: 161, 161, 170;
-  --dark: #0a0a0b;
-  --dark-rgb: 10, 10, 11;
-  --light: #f8fafc;
-  --light-rgb: 248, 250, 252;
-  --bg-main: #141416;
-  --bg-input: #0e0e11;
-  --text-primary: #fafafa;
-  --text-secondary: #71717a;
-  --border-color: rgba(255, 255, 255, 0.08);
-  --gradient-bg: #09090b;
-  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-  --button-hover: rgba(255, 255, 255, 0.08);
+  /* 强调色系统 - 靛蓝 */
+  --primary: #6366f1;
+  --primary-rgb: 99, 102, 241;
+  --primary-dark: #4f46e5;
+  --primary-light: #818cf8;
+
+  /* 中性色 */
+  --secondary: #6e6e78;
+  --secondary-rgb: 110, 110, 120;
+  --accent: #a78bfa;
+  --accent-rgb: 167, 139, 250;
+
+  /* 背景层次 */
+  --dark: #0a0a0f;
+  --dark-rgb: 10, 10, 15;
+  --light: #e8e8ed;
+  --light-rgb: 232, 232, 237;
+  --bg-main: #141419;
+  --bg-input: #111116;
+
+  /* 文字 */
+  --text-primary: #e8e8ed;
+  --text-secondary: #6e6e78;
+
+  /* 边框与阴影 */
+  --border-color: rgba(255, 255, 255, 0.06);
+  --gradient-bg: #0a0a0f;
+  --card-shadow: 0 0 0 1px rgba(255,255,255,0.04), 0 4px 24px rgba(0,0,0,0.4);
+  --button-hover: rgba(99, 102, 241, 0.1);
+
+  /* 状态色 */
   --result-bg: rgba(255, 255, 255, 0.03);
   --file-drop-bg: rgba(15, 23, 42, 0.5);
   --error-bg: rgba(239, 68, 68, 0.1);
   --error-border: #ef4444;
   --error-text: #fca5a5;
   --success-color: #22c55e;
-  --focus-ring: 0 0 0 2px rgba(250, 250, 250, 0.15);
-  --transition-fast: 0.2s ease;
-  --transition-normal: 0.3s ease;
-  --transition-slow: 0.5s ease;
-  --easing-bounce: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  --focus-ring: 0 0 0 2px rgba(99, 102, 241, 0.25);
+
+  /* 过渡 */
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.25s ease;
+  --transition-slow: 0.4s ease;
+  --easing-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-/* 浅色主题变量 */
+/* ===== 浅色主题（跟随系统） ===== */
 [data-theme="light"] {
-  --primary: #18181b;
-  --primary-rgb: 24, 24, 27;
-  --primary-dark: #09090b;
-  --primary-light: #27272a;
+  --primary: #6366f1;
+  --primary-rgb: 99, 102, 241;
+  --primary-dark: #4f46e5;
+  --primary-light: #818cf8;
   --secondary: #a1a1aa;
   --secondary-rgb: 161, 161, 170;
-  --accent: #71717a;
-  --accent-rgb: 113, 113, 122;
+  --accent: #8b5cf6;
+  --accent-rgb: 139, 92, 246;
   --dark: #fafafa;
   --dark-rgb: 250, 250, 250;
   --light: #18181b;
@@ -51,20 +64,20 @@
   --bg-input: #f4f4f5;
   --text-primary: #18181b;
   --text-secondary: #71717a;
-  --border-color: rgba(0, 0, 0, 0.12);
+  --border-color: rgba(0, 0, 0, 0.08);
   --gradient-bg: #fafafa;
-  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
-  --button-hover: rgba(0, 0, 0, 0.04);
+  --card-shadow: 0 0 0 1px rgba(0,0,0,0.04), 0 2px 12px rgba(0,0,0,0.06);
+  --button-hover: rgba(99, 102, 241, 0.06);
   --result-bg: rgba(0, 0, 0, 0.02);
   --file-drop-bg: rgba(241, 245, 249, 0.8);
   --error-bg: rgba(239, 68, 68, 0.08);
   --error-border: #ef4444;
   --error-text: #dc2626;
   --success-color: #16a34a;
-  --focus-ring: 0 0 0 2px rgba(0, 0, 0, 0.1);
+  --focus-ring: 0 0 0 2px rgba(99, 102, 241, 0.2);
 }
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&display=swap');
+/* Fonts loaded in header.ejs */
 
 /* 全局过渡效果 - 不包括代码编辑器 */
 body, .cyber-input, .cyber-btn, .file-drop-area,
@@ -85,7 +98,7 @@ body, .cyber-input, .cyber-btn, .file-drop-area,
 }
 
 body {
-  font-family: 'Inter', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
   background-color: var(--dark);
   color: var(--text-primary);
   min-height: 100vh;
@@ -94,59 +107,6 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   margin: 0;
-}
-
-/* 主题切换按钮 */
-.theme-toggle {
-  position: fixed;
-  top: 1.25rem;
-  right: 1.25rem;
-  z-index: 50;
-  width: 2.5rem;
-  height: 2.5rem;
-  border-radius: 50%;
-  background: var(--bg-main);
-  border: 1px solid var(--border-color);
-  color: var(--text-primary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-
-.theme-toggle:hover {
-  box-shadow: 0 0 15px rgba(var(--primary-rgb), 0.4);
-  border-color: var(--primary);
-  transform: scale(1.05);
-}
-
-.theme-toggle:focus {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.theme-toggle:active {
-  transform: scale(0.95);
-}
-
-.theme-toggle-btn {
-  width: 100%;
-  height: 100%;
-  border: none;
-  background: transparent;
-  color: var(--text-primary);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.theme-toggle-btn i {
-  font-size: 1.1rem;
-  transition: transform var(--transition-normal);
 }
 
 /* 背景 */
@@ -175,6 +135,39 @@ body {
   justify-content: center;
 }
 
+/* 首页紧凑布局：一屏完整展示 */
+[data-page="home-page"] .main-container {
+  padding: 0.75rem 1rem;
+  justify-content: flex-start;
+  padding-top: 8vh;
+}
+
+[data-page="home-page"] .app-header {
+  margin-bottom: 1rem;
+}
+
+[data-page="home-page"] .app-title {
+  font-size: 2rem;
+}
+
+[data-page="home-page"] .card {
+  padding: 1.25rem;
+  margin-bottom: 0.75rem;
+}
+
+[data-page="home-page"] #html-input {
+  min-height: 160px !important;
+}
+
+[data-page="home-page"] .input-card {
+  min-height: auto;
+}
+
+[data-page="home-page"] .app-footer {
+  margin-top: auto;
+  padding: 0.25rem 0;
+}
+
 /* 添加中间内容区域样式 */
 .content-area {
   display: flex;
@@ -183,24 +176,29 @@ body {
   flex: 0 auto;
 }
 
-/* 自定义滚动条样式 */
+/* code-preview 滚动条 - 平时隐藏，hover 时显示 */
 .code-preview code::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 0px;
+  height: 0px;
+}
+
+.code-preview:hover code::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
 }
 
 .code-preview code::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.3);
-  border-radius: 4px;
+  background: transparent;
+  border-radius: 3px;
 }
 
 .code-preview code::-webkit-scrollbar-thumb {
-  background: rgba(99, 102, 241, 0.5);
-  border-radius: 4px;
+  background: var(--primary);
+  border-radius: 3px;
 }
 
 .code-preview code::-webkit-scrollbar-thumb:hover {
-  background: rgba(99, 102, 241, 0.7);
+  background: var(--primary-dark);
 }
 
 /* 标题样式 */
@@ -210,11 +208,14 @@ body {
 }
 
 .app-title {
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif;
   font-weight: 700;
   font-size: 2.5rem;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.02em;
   color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 /* 动画已移除，保持简洁 */
@@ -235,7 +236,7 @@ body {
 /* 卡片 */
 .card {
   background: var(--bg-main);
-  border-radius: 12px;
+  border-radius: 16px;
   border: 1px solid var(--border-color);
   box-shadow: var(--card-shadow);
   padding: 1.5rem;
@@ -244,6 +245,7 @@ body {
   z-index: 2;
   display: flex;
   flex-direction: column;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 /* 输入卡片样式 */
@@ -445,11 +447,18 @@ body {
 
 .cyber-btn-primary {
   background: var(--primary);
-  color: var(--dark);
+  color: #ffffff;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1), 0 0 0 1px rgba(255,255,255,0.05) inset;
 }
 
 .cyber-btn-primary:hover {
   background: var(--primary-dark);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(var(--primary-rgb), 0.3), 0 0 0 1px rgba(255,255,255,0.05) inset;
+}
+
+.cyber-btn-primary:active {
+  transform: translateY(0) scale(0.98);
 }
 
 .cyber-btn-secondary {
@@ -462,6 +471,11 @@ body {
   background: var(--button-hover);
   color: var(--text-primary);
   border-color: var(--primary);
+  transform: translateY(-1px);
+}
+
+.cyber-btn-secondary:active {
+  transform: translateY(0) scale(0.98);
 }
 
 /* 按钮内图标和文字的间距 */
@@ -534,7 +548,7 @@ label[for="html-file"] {
 
 .action-btn {
   background: var(--primary);
-  color: var(--dark);
+  color: #ffffff;
   border: none;
   border-radius: 8px;
   width: 36px;
@@ -544,14 +558,22 @@ label[for="html-file"] {
   justify-content: center;
   cursor: pointer;
   transition: all 0.2s ease;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1);
 }
 
 .action-btn:hover {
   background: var(--primary-dark);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(var(--primary-rgb), 0.25);
+}
+
+.action-btn:active {
+  transform: translateY(0) scale(0.95);
 }
 
 .preview-btn {
   background: var(--accent);
+  color: #ffffff;
 }
 
 .result-note {
@@ -845,23 +867,32 @@ label[for="html-file"] {
   text-shadow: none;
 }
 
-/* 滚动条样式 */
+/* 滚动条样式 - 平时隐藏，hover 时显示 */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 0px;
+  height: 0px;
+}
+
+body:hover::-webkit-scrollbar,
+.card:hover::-webkit-scrollbar,
+.code-editor:hover::-webkit-scrollbar,
+.code-preview code:hover::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--bg-input);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
   background: var(--primary);
-  border-radius: 4px;
+  border-radius: 3px;
+  opacity: 0.5;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--secondary);
+  background: var(--primary-dark);
 }
 
 /* 键盘焦点样式 */
@@ -2131,25 +2162,6 @@ label[for="html-file"] {
   text-decoration: underline;
 }
 
-/* 滚动条样式优化 */
-.code-preview code::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-.code-preview code::-webkit-scrollbar-track {
-  background: rgba(var(--dark-rgb), 0.1);
-  border-radius: 3px;
-}
-
-.code-preview code::-webkit-scrollbar-thumb {
-  background: var(--primary);
-  border-radius: 3px;
-}
-
-.code-preview code::-webkit-scrollbar-thumb:hover {
-  background: var(--primary-dark);
-}
 
 /* 代码编辑器缩放按钮 */
 .resize-btn {
@@ -2762,4 +2774,256 @@ label[for="html-file"] {
 .code-type-indicator.default-type {
   background: linear-gradient(135deg, #607d8b, #78909c);
   border: 1px solid #607d8b;
+}
+
+/* ===== 品牌签名：brand-pulse ===== */
+.brand-pulse {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary);
+  vertical-align: middle;
+  position: relative;
+  top: -2px;
+}
+
+/* 默认 + dark: 呼吸灯 */
+[data-theme="default"] .brand-pulse,
+[data-theme="dark"] .brand-pulse {
+  animation: pulseGlow 2s ease-in-out infinite;
+  box-shadow: 0 0 6px rgba(var(--primary-rgb), 0.6);
+}
+
+/* light: 静态 */
+[data-theme="light"] .brand-pulse {
+  background: var(--primary);
+  box-shadow: 0 0 4px rgba(var(--primary-rgb), 0.3);
+}
+
+/* hacker: 闪烁光标 */
+[data-theme="hacker"] .brand-pulse {
+  width: 10px;
+  height: 18px;
+  border-radius: 0;
+  background: var(--primary);
+  animation: cursorBlink 1.1s step-end infinite;
+  top: -1px;
+}
+
+/* cyberpunk: 霓虹脉动 */
+[data-theme="cyberpunk"] .brand-pulse {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: neonPulse 1.5s ease-in-out infinite;
+  box-shadow: 0 0 8px var(--primary), 0 0 16px var(--accent);
+}
+
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+@keyframes cursorBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes neonPulse {
+  0%, 100% { box-shadow: 0 0 8px var(--primary), 0 0 16px var(--accent); }
+  50% { box-shadow: 0 0 16px var(--primary), 0 0 32px var(--accent), 0 0 48px rgba(0,255,255,0.3); }
+}
+
+/* ===== 输入框聚焦光效 ===== */
+#html-input {
+  position: relative;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+#html-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--bg-input), 0 0 20px rgba(var(--primary-rgb), 0.15), var(--focus-ring);
+}
+
+.cyber-input:focus {
+  border-color: var(--primary);
+  box-shadow: var(--focus-ring);
+}
+
+/* ===== 微交互动画 ===== */
+@keyframes btnPress {
+  0% { transform: scale(1); }
+  40% { transform: scale(0.97); }
+  100% { transform: scale(1); }
+}
+
+.cyber-btn.pressing {
+  animation: btnPress 0.25s var(--easing-bounce);
+}
+
+@keyframes successPop {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+
+.action-btn.success {
+  animation: successPop 0.4s var(--easing-bounce);
+  background: var(--success-color) !important;
+}
+
+/* ===== Hacker 主题 ===== */
+[data-theme="hacker"] {
+  --primary: #00ff41;
+  --primary-rgb: 0, 255, 65;
+  --primary-dark: #00cc33;
+  --primary-light: #33ff66;
+  --secondary: #008f11;
+  --secondary-rgb: 0, 143, 17;
+  --accent: #00ff41;
+  --accent-rgb: 0, 255, 65;
+  --dark: #050505;
+  --dark-rgb: 5, 5, 5;
+  --light: #00ff41;
+  --light-rgb: 0, 255, 65;
+  --bg-main: #0a0a0a;
+  --bg-input: #080808;
+  --text-primary: #00ff41;
+  --text-secondary: #008f11;
+  --border-color: rgba(0, 255, 65, 0.15);
+  --gradient-bg: #050505;
+  --card-shadow: 0 0 20px rgba(0, 255, 65, 0.06), inset 0 0 30px rgba(0, 255, 65, 0.02);
+  --button-hover: rgba(0, 255, 65, 0.08);
+  --result-bg: rgba(0, 255, 65, 0.03);
+  --error-bg: rgba(255, 68, 68, 0.1);
+  --error-border: #ff4444;
+  --error-text: #ff6666;
+  --success-color: #00ff41;
+  --focus-ring: 0 0 0 2px rgba(0, 255, 65, 0.25);
+}
+
+[data-theme="hacker"] body {
+  font-family: 'Fira Code', 'Courier New', monospace;
+}
+
+[data-theme="hacker"] .app-title {
+  font-family: 'Fira Code', 'Courier New', monospace;
+  text-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
+}
+
+[data-theme="hacker"] .card {
+  border-radius: 2px;
+}
+
+[data-theme="hacker"] .cyber-btn {
+  border-radius: 2px;
+}
+
+[data-theme="hacker"] .cyber-btn-primary {
+  box-shadow: 0 0 10px rgba(0, 255, 65, 0.15);
+}
+
+[data-theme="hacker"] #html-input:focus {
+  box-shadow: 0 0 20px rgba(0, 255, 65, 0.2), 0 0 0 2px rgba(0, 255, 65, 0.25);
+}
+
+/* Hacker CRT 扫描线效果 */
+[data-theme="hacker"] .app-container::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 255, 65, 0.015) 2px,
+    rgba(0, 255, 65, 0.015) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ===== Cyberpunk 主题 ===== */
+[data-theme="cyberpunk"] {
+  --primary: #ff00ff;
+  --primary-rgb: 255, 0, 255;
+  --primary-dark: #cc00cc;
+  --primary-light: #ff33ff;
+  --secondary: #7a6fa8;
+  --secondary-rgb: 122, 111, 168;
+  --accent: #00ffff;
+  --accent-rgb: 0, 255, 255;
+  --dark: #0a0a1a;
+  --dark-rgb: 10, 10, 26;
+  --light: #f0e6ff;
+  --light-rgb: 240, 230, 255;
+  --bg-main: #12122a;
+  --bg-input: #0d0d20;
+  --text-primary: #f0e6ff;
+  --text-secondary: #7a6fa8;
+  --border-color: rgba(255, 0, 255, 0.2);
+  --gradient-bg: #0a0a1a;
+  --card-shadow: 0 0 30px rgba(255, 0, 255, 0.08), 0 0 60px rgba(0, 255, 255, 0.04);
+  --button-hover: rgba(255, 0, 255, 0.1);
+  --result-bg: rgba(255, 0, 255, 0.03);
+  --error-bg: rgba(255, 51, 102, 0.1);
+  --error-border: #ff3366;
+  --error-text: #ff6688;
+  --success-color: #00ffff;
+  --focus-ring: 0 0 0 2px rgba(255, 0, 255, 0.25);
+}
+
+[data-theme="cyberpunk"] .app-title {
+  font-family: 'Orbitron', 'Space Grotesk', sans-serif;
+  text-shadow: 0 0 10px rgba(255, 0, 255, 0.4), 0 0 20px rgba(0, 255, 255, 0.2);
+  letter-spacing: 0.05em;
+}
+
+[data-theme="cyberpunk"] .card {
+  border-radius: 4px;
+  clip-path: polygon(
+    0 8px, 8px 0,
+    calc(100% - 8px) 0, 100% 8px,
+    100% calc(100% - 8px), calc(100% - 8px) 100%,
+    8px 100%, 0 calc(100% - 8px)
+  );
+}
+
+[data-theme="cyberpunk"] .cyber-btn-primary {
+  background: linear-gradient(135deg, #ff00ff, #cc00cc);
+  box-shadow: 0 0 15px rgba(255, 0, 255, 0.3);
+}
+
+[data-theme="cyberpunk"] .cyber-btn-primary:hover {
+  background: linear-gradient(135deg, #ff33ff, #ff00ff);
+  box-shadow: 0 0 25px rgba(255, 0, 255, 0.5);
+}
+
+[data-theme="cyberpunk"] .cyber-btn-secondary:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.2);
+}
+
+[data-theme="cyberpunk"] #html-input:focus {
+  box-shadow: 0 0 20px rgba(255, 0, 255, 0.2), 0 0 0 2px rgba(255, 0, 255, 0.25);
+}
+
+[data-theme="cyberpunk"] .action-btn {
+  background: linear-gradient(135deg, #ff00ff, #cc00cc);
+}
+
+[data-theme="cyberpunk"] .action-btn:hover {
+  background: linear-gradient(135deg, #ff33ff, #ff00ff);
+  box-shadow: 0 0 15px rgba(255, 0, 255, 0.4);
+}
+
+[data-theme="cyberpunk"] .preview-btn {
+  background: linear-gradient(135deg, #00ffff, #00cccc);
+}
+
+[data-theme="cyberpunk"] .preview-btn:hover {
+  background: linear-gradient(135deg, #33ffff, #00ffff);
+  box-shadow: 0 0 15px rgba(0, 255, 255, 0.4);
 }
