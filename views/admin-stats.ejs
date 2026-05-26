@@ -89,41 +89,25 @@
     </article>
   </section>
 
-  <section class="admin-dashboard-grid">
-    <article class="card admin-chart-card">
-      <div class="admin-content-header">
-        <h2>Most Viewed</h2>
-      </div>
-      <% if (!stats.topViewed || stats.topViewed.length === 0) { %>
-        <p class="admin-muted">No views yet.</p>
-      <% } else { %>
-        <div class="admin-top-viewed-list">
-          <% stats.topViewed.forEach((item) => { %>
-            <div class="admin-top-viewed-row">
-              <a class="admin-top-viewed-title" href="/admin/pages/<%= encodeURIComponent(item.id) %>"><%= item.title %></a>
-              <div class="admin-top-viewed-bar-track" aria-label="<%= item.title %> <%= item.viewCount %> views">
-                <div class="admin-top-viewed-bar-fill" style="width: <%= stats.topViewed[0].viewCount > 0 ? (item.viewCount / stats.topViewed[0].viewCount * 100) : 0 %>%;"></div>
-              </div>
-              <span class="admin-top-viewed-count"><%= item.viewCount %></span>
+  <section class="card admin-chart-card">
+    <div class="admin-content-header">
+      <h2>Most Viewed</h2>
+    </div>
+    <% if (!stats.topViewed || stats.topViewed.length === 0) { %>
+      <p class="admin-muted">No views yet.</p>
+    <% } else { %>
+      <div class="admin-top-viewed-list">
+        <% stats.topViewed.forEach((item) => { %>
+          <div class="admin-top-viewed-row">
+            <a class="admin-top-viewed-title" href="/admin/pages/<%= encodeURIComponent(item.id) %>"><%= item.title %></a>
+            <div class="admin-top-viewed-bar-track" aria-label="<%= item.title %> <%= item.viewCount %> views">
+              <div class="admin-top-viewed-bar-fill" style="width: <%= stats.topViewed[0].viewCount > 0 ? (item.viewCount / stats.topViewed[0].viewCount * 100) : 0 %>%; opacity: <%= 0.4 + (item.viewCount / stats.topViewed[0].viewCount) * 0.6 %>;"></div>
             </div>
-          <% }) %>
-        </div>
-      <% } %>
-    </article>
-
-    <article class="card admin-chart-card">
-      <div class="admin-content-header">
-        <h2>Protection Mix</h2>
+            <span class="admin-top-viewed-count"><%= item.viewCount %></span>
+          </div>
+        <% }) %>
       </div>
-      <div class="admin-stacked-bar" aria-label="Protection mix">
-        <div class="admin-stack-public" style="width: <%= stats.publicPercent %>%;"></div>
-        <div class="admin-stack-protected" style="width: <%= stats.protectedPercent %>%;"></div>
-      </div>
-      <div class="admin-legend">
-        <span><i class="admin-legend-public"></i>Public <%= stats.public %></span>
-        <span><i class="admin-legend-protected"></i>Protected <%= stats.protected %></span>
-      </div>
-    </article>
+    <% } %>
   </section>
 
   <section class="card admin-chart-card">
