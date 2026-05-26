@@ -780,7 +780,7 @@ async function renderContent(content, contentType, theme) {
 
 function resolveTheme(theme) {
   if (!theme || theme === 'random') {
-    return THEME_KEYS[Math.floor(Math.random() * THEME_KEYS.length)];
+    return 'bytedance';
   }
   return MARKDOWN_THEMES[theme] ? theme : 'bytedance';
 }
