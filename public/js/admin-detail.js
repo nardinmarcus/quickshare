@@ -132,6 +132,43 @@
     updatePasswordInputVisibility();
   });
 
+  // Inline password validation
+  var passwordHint = document.getElementById('edit-password-hint');
+  if (passwordInput && passwordHint) {
+    passwordInput.addEventListener('input', function () {
+      var len = passwordInput.value.length;
+      if (len === 0) {
+        passwordHint.textContent = '';
+        passwordHint.className = 'field-hint';
+      } else if (len < 4) {
+        passwordHint.textContent = 'Password must be at least 4 characters';
+        passwordHint.className = 'field-hint error';
+      } else if (len > 50) {
+        passwordHint.textContent = 'Password must not exceed 50 characters';
+        passwordHint.className = 'field-hint error';
+      } else {
+        passwordHint.textContent = '✓';
+        passwordHint.className = 'field-hint valid';
+      }
+    });
+  }
+
+  // Inline expires validation
+  var expiresInput = document.getElementById('edit-expires');
+  var expiresHint = document.getElementById('edit-expires-hint');
+  if (expiresInput && expiresHint) {
+    expiresInput.addEventListener('change', function () {
+      var val = expiresInput.value;
+      if (val && new Date(val).getTime() < Date.now()) {
+        expiresHint.textContent = 'Expiration time is in the past';
+        expiresHint.className = 'field-hint error';
+      } else {
+        expiresHint.textContent = '';
+        expiresHint.className = 'field-hint';
+      }
+    });
+  }
+
   if (togglePasswordBtn && passwordInput) {
     togglePasswordBtn.addEventListener('click', function () {
       const isHidden = passwordInput.type === 'password';

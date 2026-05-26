@@ -62,6 +62,47 @@
       closeModal();
     }
   });
+
+  // Jump to page
+  var jumpInput = document.getElementById('jump-page-input');
+  var jumpBtn = document.getElementById('jump-page-btn');
+  if (jumpInput && jumpBtn) {
+    function doJump() {
+      var p = parseInt(jumpInput.value, 10);
+      if (!Number.isFinite(p) || p < 1) return;
+      var maxPage = parseInt(jumpInput.max, 10) || 1;
+      if (p > maxPage) p = maxPage;
+      var params = new URLSearchParams(window.location.search);
+      params.set('page', p);
+      window.location.href = '/admin/pages?' + params.toString();
+    }
+    jumpBtn.addEventListener('click', doJump);
+    jumpInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') doJump();
+    });
+  }
+
+  // Date range filter
+  var dateFromInput = document.getElementById('filter-date-from');
+  var dateToInput = document.getElementById('filter-date-to');
+  var dateFilterBtn = document.getElementById('date-filter-btn');
+  if (dateFilterBtn && dateFromInput && dateToInput) {
+    dateFilterBtn.addEventListener('click', function () {
+      var params = new URLSearchParams(window.location.search);
+      if (dateFromInput.value) {
+        params.set('dateFrom', dateFromInput.value);
+      } else {
+        params.delete('dateFrom');
+      }
+      if (dateToInput.value) {
+        params.set('dateTo', dateToInput.value);
+      } else {
+        params.delete('dateTo');
+      }
+      params.delete('page');
+      window.location.href = '/admin/pages?' + params.toString();
+    });
+  }
 })();
 
 // ===== Toast 通知系统 =====
@@ -132,3 +173,96 @@ window.Toast = {
   error: function (message, duration) { this.show(message, 'error', duration); },
   info: function (message, duration) { this.show(message, 'info', duration); }
 };
+
+// ===== Batch Operations =====
+(function () {
+  var selectAll = document.getElementById('select-all');
+  var toolbar = document.getElementById('batch-toolbar');
+  var countSpan = document.getElementById('batch-count');
+  var deleteBtn = document.getElementById('batch-delete-btn');
+  var cancelBtn = document.getElementById('batch-cancel-btn');
+  var checkboxes = document.querySelectorAll('.row-checkbox');
+
+  if (!selectAll || !toolbar || checkboxes.length === 0) return;
+
+  function selectedIds() {
+    var ids = [];
+    checkboxes.forEach(function (cb) { if (cb.checked) ids.push(cb.dataset.id); });
+    return ids;
+  }
+
+  function updateToolbar() {
+    var ids = selectedIds();
+    countSpan.textContent = ids.length + ' selected';
+    deleteBtn.disabled = ids.length === 0;
+    toolbar.hidden = ids.length === 0;
+  }
+
+  selectAll.addEventListener('change', function () {
+    checkboxes.forEach(function (cb) { cb.checked = selectAll.checked; });
+    updateToolbar();
+  });
+
+  checkboxes.forEach(function (cb) {
+    cb.addEventListener('change', function () {
+      selectAll.checked = Array.from(checkboxes).every(function (c) { return c.checked; });
+      updateToolbar();
+    });
+  });
+
+  cancelBtn.addEventListener('click', function () {
+    selectAll.checked = false;
+    checkboxes.forEach(function (cb) { cb.checked = false; });
+    updateToolbar();
+  });
+
+  deleteBtn.addEventListener('click', async function () {
+    var ids = selectedIds();
+    if (ids.length === 0) return;
+
+    var targetText = ids.length + ' pages';
+    var modalTarget = document.getElementById('delete-modal-target');
+    var origText = modalTarget.textContent;
+    modalTarget.textContent = targetText;
+    modal.hidden = false;
+    document.body.style.overflow = 'hidden';
+
+    var confirmBtn = document.getElementById('delete-modal-confirm');
+    var origConfirm = confirmBtn.textContent;
+
+    function cleanup() {
+      modal.hidden = true;
+      document.body.style.overflow = '';
+      modalTarget.textContent = origText;
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = origConfirm;
+      confirmBtn.replaceWith(confirmBtn.cloneNode(true));
+    }
+
+    confirmBtn.addEventListener('click', async function handler() {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Deleting...';
+
+      try {
+        var response = await fetch('/admin/pages/batch', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ ids: ids })
+        });
+        var data = await response.json();
+        if (data.success) {
+          Toast.success(data.deleted + ' pages deleted');
+          setTimeout(function () { window.location.reload(); }, 800);
+        } else {
+          Toast.error(data.error || 'Failed to delete pages');
+          cleanup();
+        }
+      } catch (err) {
+        Toast.error('Network error: ' + err.message);
+        cleanup();
+      }
+    });
+
+    document.getElementById('delete-modal-cancel').addEventListener('click', cleanup);
+  });
+})();

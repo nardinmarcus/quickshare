@@ -31,6 +31,8 @@ function buildDailyStats(pages, days = 14) {
 class MemoryPageRepository {
   constructor() {
     this.pages = new Map();
+    this.auditLogs = [];
+    this.auditIdCounter = 0;
   }
 
   async init() {
@@ -55,7 +57,8 @@ class MemoryPageRepository {
       title: page.title || null,
       description: page.description || null,
       expires_at: page.expiresAt || null,
-      markdown_theme: page.markdownTheme || null
+      markdown_theme: page.markdownTheme || null,
+      view_count: 0
     });
 
     return { id: page.id };
@@ -87,6 +90,8 @@ class MemoryPageRepository {
     const isProtected = options.isProtected;
     const sortBy = options.sortBy || 'created_at';
     const sortOrder = options.sortOrder || 'desc';
+    const dateFrom = options.dateFrom ? new Date(options.dateFrom).getTime() : null;
+    const dateTo = options.dateTo ? new Date(options.dateTo + 'T23:59:59.999').getTime() : null;
 
     let results = Array.from(this.pages.values());
 
@@ -106,6 +111,13 @@ class MemoryPageRepository {
     if (isProtected !== undefined && isProtected !== '') {
       const target = isProtected === true || isProtected === 'true' || isProtected === 1 || isProtected === 'protected' ? 1 : 0;
       results = results.filter((page) => page.is_protected === target);
+    }
+
+    if (dateFrom && Number.isFinite(dateFrom)) {
+      results = results.filter((page) => Number(page.created_at) >= dateFrom);
+    }
+    if (dateTo && Number.isFinite(dateTo)) {
+      results = results.filter((page) => Number(page.created_at) <= dateTo);
     }
 
     results.sort((left, right) => {
@@ -142,6 +154,8 @@ class MemoryPageRepository {
     const search = options.search || '';
     const codeType = options.codeType || '';
     const isProtected = options.isProtected;
+    const dateFrom = options.dateFrom ? new Date(options.dateFrom).getTime() : null;
+    const dateTo = options.dateTo ? new Date(options.dateTo + 'T23:59:59.999').getTime() : null;
 
     let results = Array.from(this.pages.values());
 
@@ -161,6 +175,13 @@ class MemoryPageRepository {
     if (isProtected !== undefined && isProtected !== '') {
       const target = isProtected === true || isProtected === 'true' || isProtected === 1 || isProtected === 'protected' ? 1 : 0;
       results = results.filter((page) => page.is_protected === target);
+    }
+
+    if (dateFrom && Number.isFinite(dateFrom)) {
+      results = results.filter((page) => Number(page.created_at) >= dateFrom);
+    }
+    if (dateTo && Number.isFinite(dateTo)) {
+      results = results.filter((page) => Number(page.created_at) <= dateTo);
     }
 
     return results.length;
@@ -185,6 +206,16 @@ class MemoryPageRepository {
       }
     });
 
+    const topViewed = pages
+      .filter((p) => (p.view_count || 0) > 0)
+      .sort((a, b) => (b.view_count || 0) - (a.view_count || 0))
+      .slice(0, 10)
+      .map((p) => ({
+        id: p.id,
+        title: p.title || p.id,
+        viewCount: p.view_count || 0
+      }));
+
     return {
       total: pages.length,
       protected: protectedCount,
@@ -193,7 +224,8 @@ class MemoryPageRepository {
       byType: Array.from(typeCounts.entries())
         .map(([codeType, count]) => ({ codeType, count }))
         .sort((left, right) => right.count - left.count || left.codeType.localeCompare(right.codeType)),
-      recentDays: buildDailyStats(pages)
+      recentDays: buildDailyStats(pages),
+      topViewed
     };
   }
 
@@ -243,6 +275,53 @@ class MemoryPageRepository {
 
   async deletePage(id) {
     return this.pages.delete(id);
+  }
+
+  async deletePages(ids) {
+    let count = 0;
+    ids.forEach((id) => {
+      if (this.pages.delete(id)) count += 1;
+    });
+    return count;
+  }
+
+  async incrementViewCount(id) {
+    const page = this.pages.get(id);
+    if (page) {
+      page.view_count = (page.view_count || 0) + 1;
+    }
+  }
+
+  async createAuditLog({ action, pageId, details, ip }) {
+    this.auditIdCounter += 1;
+    this.auditLogs.unshift({
+      id: this.auditIdCounter,
+      action,
+      pageId: pageId || null,
+      details: details || null,
+      ip: ip || null,
+      createdAt: Date.now()
+    });
+    if (this.auditLogs.length > 1000) {
+      this.auditLogs = this.auditLogs.slice(0, 1000);
+    }
+  }
+
+  async listAuditLogs(options = {}) {
+    const limit = Math.min(options.limit || 50, 200);
+    const offset = options.offset || 0;
+    return this.auditLogs.slice(offset, offset + limit).map((log) => ({
+      id: log.id,
+      action: log.action,
+      pageId: log.pageId,
+      details: log.details,
+      ip: log.ip,
+      createdAt: log.createdAt
+    }));
+  }
+
+  async countAuditLogs() {
+    return this.auditLogs.length;
   }
 }
 

@@ -473,6 +473,14 @@ app.post('/admin/login', async (req, res) => {
   }
 
   setDashboardAdminCookie(res);
+
+  pageRepository.createAuditLog({
+    action: 'admin.login',
+    pageId: null,
+    details: JSON.stringify({ method: 'password' }),
+    ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+  }).catch((err) => { console.error('Audit log failed:', err); });
+
   return res.redirect('/admin/stats');
 });
 
@@ -499,6 +507,30 @@ app.get('/admin', (req, res) => {
   return res.redirect('/admin/login');
 });
 
+app.get('/admin/pages/export', requireDashboardAdmin, async (req, res) => {
+  try {
+    await ensureDatabase();
+
+    const pages = await pageRepository.listAdminPages({ limit: 10000, offset: 0 });
+    const exportData = pages.map((page) => ({
+      id: page.id,
+      title: page.title,
+      description: page.description,
+      codeType: page.code_type,
+      isProtected: page.is_protected === 1,
+      createdAt: page.created_at,
+      expiresAt: page.expires_at || null
+    }));
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', 'attachment; filename="quickshare-export.json"');
+    return res.json({ exportedAt: Date.now(), total: exportData.length, pages: exportData });
+  } catch (error) {
+    console.error('Export failed:', error);
+    return res.status(500).json({ success: false, error: 'Failed to export pages' });
+  }
+});
+
 app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
   try {
     await ensureDatabase();
@@ -507,7 +539,9 @@ app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
     const filterOptions = {
       search: req.query.search || '',
       codeType: req.query.type || '',
-      isProtected: req.query.status || ''
+      isProtected: req.query.status || '',
+      dateFrom: req.query.dateFrom || '',
+      dateTo: req.query.dateTo || ''
     };
     const sortBy = req.query.sort || 'created_at';
     const sortOrder = req.query.order === 'asc' ? 'asc' : 'desc';
@@ -547,7 +581,9 @@ app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
         type: filterOptions.codeType,
         status: filterOptions.isProtected,
         sort: sortBy,
-        order: sortOrder
+        order: sortOrder,
+        dateFrom: filterOptions.dateFrom,
+        dateTo: filterOptions.dateTo
       },
       publicPageUrl: (id) => publicPageUrl(req, id)
     });
@@ -578,6 +614,40 @@ app.get('/admin/stats', requireDashboardAdmin, async (req, res) => {
       title: 'Server Error',
       page: 'error-page',
       message: 'Unable to load admin stats'
+    });
+  }
+});
+
+app.get('/admin/audit', requireDashboardAdmin, async (req, res) => {
+  try {
+    await ensureDatabase();
+
+    const limit = 50;
+    const currentPage = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const offset = (currentPage - 1) * limit;
+    const total = await pageRepository.countAuditLogs();
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const logs = await pageRepository.listAuditLogs({ limit, offset });
+
+    return res.render('admin-audit', {
+      title: 'QuickShare | Audit Log',
+      page: 'admin-audit',
+      logs,
+      pagination: {
+        page: currentPage,
+        limit,
+        total,
+        totalPages,
+        hasPrevious: currentPage > 1,
+        hasNext: currentPage < totalPages
+      }
+    });
+  } catch (error) {
+    console.error('Admin audit failed:', error);
+    return res.status(500).render('error', {
+      title: 'Server Error',
+      page: 'error-page',
+      message: 'Unable to load audit log'
     });
   }
 });
@@ -687,6 +757,13 @@ app.put('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
 
     const updatedPage = await pageRepository.getById(req.params.id);
 
+    pageRepository.createAuditLog({
+      action: 'page.update',
+      pageId: req.params.id,
+      details: JSON.stringify({ fields: Object.keys(updateOptions) }),
+      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+    }).catch((err) => { console.error('Audit log failed:', err); });
+
     return res.json({
       success: true,
       page: {
@@ -711,6 +788,36 @@ app.put('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
   }
 });
 
+app.delete('/admin/pages/batch', requireDashboardAdmin, async (req, res) => {
+  try {
+    await ensureDatabase();
+
+    const { ids } = req.body;
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, error: 'ids must be a non-empty array' });
+    }
+
+    if (ids.length > 100) {
+      return res.status(400).json({ success: false, error: 'Batch delete limited to 100 items' });
+    }
+
+    const deleted = await pageRepository.deletePages(ids);
+
+    pageRepository.createAuditLog({
+      action: 'page.delete.batch',
+      pageId: null,
+      details: JSON.stringify({ count: deleted, ids: ids.slice(0, 10) }),
+      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+    }).catch((err) => { console.error('Audit log failed:', err); });
+
+    return res.json({ success: true, deleted });
+  } catch (error) {
+    console.error('Batch delete failed:', error);
+    return res.status(500).json({ success: false, error: 'Failed to delete pages' });
+  }
+});
+
 app.delete('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
   try {
     await ensureDatabase();
@@ -726,6 +833,13 @@ app.delete('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
 
     await pageRepository.deletePage(req.params.id);
 
+    pageRepository.createAuditLog({
+      action: 'page.delete',
+      pageId: req.params.id,
+      details: JSON.stringify({ title: page.title || page.id }),
+      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+    }).catch((err) => { console.error('Audit log failed:', err); });
+
     return res.json({
       success: true
     });
@@ -735,6 +849,36 @@ app.delete('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       success: false,
       error: 'Failed to delete page'
     });
+  }
+});
+
+app.post('/admin/pages/:id/clone', requireDashboardAdmin, async (req, res) => {
+  try {
+    await ensureDatabase();
+
+    const page = await pageRepository.getById(req.params.id);
+
+    if (!page) {
+      return res.status(404).json({ success: false, error: 'Page not found' });
+    }
+
+    const newId = await createPageWithRetry({
+      htmlContent: page.html_content,
+      passwordHash: null,
+      encryptedPassword: null,
+      isProtected: false,
+      codeType: page.code_type,
+      title: (page.title || page.id) + ' (Copy)',
+      description: page.description,
+      createdAt: Date.now(),
+      expiresAt: null,
+      markdownTheme: page.markdown_theme
+    });
+
+    return res.redirect('/admin/pages/' + encodeURIComponent(newId));
+  } catch (error) {
+    console.error('Clone page failed:', error);
+    return res.status(500).json({ success: false, error: 'Failed to clone page' });
   }
 });
 
@@ -769,6 +913,13 @@ app.post('/api/pages/create', requireApiAdmin, requireCsrf, async (req, res) => 
       expiresAt: null,
       markdownTheme: normalizedCodeType === 'markdown' ? resolveTheme(markdownTheme || 'random') : null
     });
+
+    pageRepository.createAuditLog({
+      action: 'page.create',
+      pageId: id,
+      details: JSON.stringify({ codeType: normalizedCodeType, isProtected: Boolean(password) }),
+      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+    }).catch((err) => { console.error('Audit log failed:', err); });
 
     return res.json({
       success: true,
@@ -817,6 +968,13 @@ app.post('/api/v1/share', requireApiKey, async (req, res) => {
 
     const base = config.shareBaseUrl || `${req.protocol}://${req.get('host')}`;
     const url = `${base.replace(/\/+$/, '')}/view/${id}`;
+
+    pageRepository.createAuditLog({
+      action: 'page.create',
+      pageId: id,
+      details: JSON.stringify({ codeType: normalizedCodeType, isProtected: Boolean(password), source: 'api' }),
+      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+    }).catch((err) => { console.error('Audit log failed:', err); });
 
     return res.json({
       success: true,
@@ -1003,6 +1161,9 @@ app.get('/view/:id', async (req, res) => {
 
     const renderedContent = await renderContent(processedContent, contentType, page.markdown_theme);
     const contentWithTypeInfo = injectCodeTypeMeta(renderedContent, contentType);
+
+    // Track view count (fire-and-forget; don't block response)
+    pageRepository.incrementViewCount(req.params.id).catch(() => {});
 
     return res.send(renderSandboxedDocument(contentWithTypeInfo, contentType));
   } catch (error) {

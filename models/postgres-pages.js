@@ -64,6 +64,21 @@ class PostgresPageRepository {
     await this.pool.query('CREATE INDEX IF NOT EXISTS idx_pages_created_at ON pages (created_at DESC)');
     await this.pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS encrypted_password TEXT');
     await this.pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS markdown_theme TEXT');
+    await this.pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS view_count BIGINT DEFAULT 0');
+    await this.pool.query('CREATE INDEX IF NOT EXISTS idx_pages_view_count ON pages (view_count DESC)');
+
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id SERIAL PRIMARY KEY,
+        action TEXT NOT NULL,
+        page_id TEXT,
+        details TEXT,
+        ip TEXT,
+        created_at BIGINT NOT NULL
+      )
+    `);
+    await this.pool.query('CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC)');
+    await this.pool.query('CREATE INDEX IF NOT EXISTS idx_audit_logs_page_id ON audit_logs (page_id)');
   }
 
   async create(page) {
@@ -143,6 +158,24 @@ class PostgresPageRepository {
       paramIndex += 1;
     }
 
+    if (options.dateFrom) {
+      const fromTime = new Date(options.dateFrom).getTime();
+      if (Number.isFinite(fromTime)) {
+        conditions.push(`created_at >= $${paramIndex}`);
+        params.push(fromTime);
+        paramIndex += 1;
+      }
+    }
+
+    if (options.dateTo) {
+      const toTime = new Date(options.dateTo + 'T23:59:59.999').getTime();
+      if (Number.isFinite(toTime)) {
+        conditions.push(`created_at <= $${paramIndex}`);
+        params.push(toTime);
+        paramIndex += 1;
+      }
+    }
+
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const allowedSortColumns = { created_at: 'created_at', code_type: 'code_type', is_protected: 'is_protected' };
@@ -153,7 +186,7 @@ class PostgresPageRepository {
 
     const result = await this.pool.query(
       `
-        SELECT id, created_at, code_type, title, description, is_protected, encrypted_password, expires_at
+        SELECT id, created_at, code_type, title, description, is_protected, encrypted_password, expires_at, COALESCE(view_count, 0) AS view_count
         FROM pages
         ${whereClause}
         ORDER BY ${orderColumn} ${orderDirection}
@@ -192,6 +225,24 @@ class PostgresPageRepository {
       paramIndex += 1;
     }
 
+    if (options.dateFrom) {
+      const fromTime = new Date(options.dateFrom).getTime();
+      if (Number.isFinite(fromTime)) {
+        conditions.push(`created_at >= $${paramIndex}`);
+        params.push(fromTime);
+        paramIndex += 1;
+      }
+    }
+
+    if (options.dateTo) {
+      const toTime = new Date(options.dateTo + 'T23:59:59.999').getTime();
+      if (Number.isFinite(toTime)) {
+        conditions.push(`created_at <= $${paramIndex}`);
+        params.push(toTime);
+        paramIndex += 1;
+      }
+    }
+
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const result = await this.pool.query(
@@ -201,9 +252,16 @@ class PostgresPageRepository {
     return Number.parseInt(result.rows[0]?.count || '0', 10);
   }
 
+  async incrementViewCount(id) {
+    await this.pool.query(
+      'UPDATE pages SET view_count = COALESCE(view_count, 0) + 1 WHERE id = $1',
+      [id]
+    );
+  }
+
   async getAdminStats() {
     const since = Date.now() - (13 * DAY_MS);
-    const [summaryResult, typeResult, recentResult] = await Promise.all([
+    const [summaryResult, typeResult, recentResult, topViewedResult] = await Promise.all([
       this.pool.query(`
         SELECT
           COUNT(*) AS total,
@@ -220,7 +278,14 @@ class PostgresPageRepository {
       this.pool.query(
         'SELECT created_at FROM pages WHERE created_at >= $1 ORDER BY created_at ASC',
         [since]
-      )
+      ),
+      this.pool.query(`
+        SELECT id, title, COALESCE(view_count, 0) AS view_count
+        FROM pages
+        WHERE COALESCE(view_count, 0) > 0
+        ORDER BY view_count DESC
+        LIMIT 10
+      `)
     ]);
     const summary = summaryResult.rows[0] || {};
     const total = Number.parseInt(summary.total || '0', 10);
@@ -235,7 +300,12 @@ class PostgresPageRepository {
         codeType: row.code_type || 'html',
         count: Number.parseInt(row.count || '0', 10)
       })),
-      recentDays: buildDailyStats(recentResult.rows)
+      recentDays: buildDailyStats(recentResult.rows),
+      topViewed: topViewedResult.rows.map((row) => ({
+        id: row.id,
+        title: row.title || row.id,
+        viewCount: Number.parseInt(row.view_count || '0', 10)
+      }))
     };
   }
 
@@ -306,6 +376,41 @@ class PostgresPageRepository {
   async deletePage(id) {
     const result = await this.pool.query('DELETE FROM pages WHERE id = $1', [id]);
     return result.rowCount > 0;
+  }
+
+  async deletePages(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) return 0;
+    const result = await this.pool.query('DELETE FROM pages WHERE id = ANY($1)', [ids]);
+    return result.rowCount;
+  }
+
+  async createAuditLog({ action, pageId, details, ip }) {
+    await this.pool.query(
+      'INSERT INTO audit_logs (action, page_id, details, ip, created_at) VALUES ($1, $2, $3, $4, $5)',
+      [action, pageId || null, details || null, ip || null, Date.now()]
+    );
+  }
+
+  async listAuditLogs(options = {}) {
+    const limit = Math.min(options.limit || 50, 200);
+    const offset = options.offset || 0;
+    const result = await this.pool.query(
+      'SELECT id, action, page_id, details, ip, created_at FROM audit_logs ORDER BY created_at DESC LIMIT $1 OFFSET $2',
+      [limit, offset]
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      action: row.action,
+      pageId: row.page_id,
+      details: row.details,
+      ip: row.ip,
+      createdAt: Number(row.created_at)
+    }));
+  }
+
+  async countAuditLogs() {
+    const result = await this.pool.query('SELECT COUNT(*) AS count FROM audit_logs');
+    return Number.parseInt(result.rows[0]?.count || '0', 10);
   }
 }
 

@@ -12,6 +12,14 @@
         <i class="fas fa-chart-bar" aria-hidden="true"></i>
         <span>Stats</span>
       </a>
+      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/audit">
+        <i class="fas fa-history" aria-hidden="true"></i>
+        <span>Audit</span>
+      </a>
+      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/pages/export">
+        <i class="fas fa-download" aria-hidden="true"></i>
+        <span>Export</span>
+      </a>
       <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/">
         <i class="fas fa-plus" aria-hidden="true"></i>
         <span>Create</span>
@@ -49,6 +57,20 @@
         </form>
 
         <div class="admin-filter-group">
+          <span class="admin-filter-label">Date:</span>
+          <div class="admin-date-range">
+            <input type="date" id="filter-date-from" value="<%= filters.dateFrom || '' %>" aria-label="From date">
+            <span>–</span>
+            <input type="date" id="filter-date-to" value="<%= filters.dateTo || '' %>" aria-label="To date">
+            <button type="button" class="cyber-btn cyber-btn-secondary" id="date-filter-btn">Filter</button>
+            <% if (filters.dateFrom || filters.dateTo) { %>
+              <% var clearParams = new URLSearchParams(); if (filters.search) clearParams.set('search', filters.search); if (filters.type) clearParams.set('type', filters.type); if (filters.status) clearParams.set('status', filters.status); if (filters.sort) clearParams.set('sort', filters.sort); if (filters.order) clearParams.set('order', filters.order); %>
+              <a class="cyber-btn cyber-btn-secondary" href="/admin/pages?<%= clearParams.toString() %>">Clear</a>
+            <% } %>
+          </div>
+        </div>
+
+        <div class="admin-filter-group">
           <span class="admin-filter-label">Type:</span>
           <div class="admin-filter-buttons">
             <a class="admin-filter-btn <%= !filters.type ? 'active' : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&status=<%= encodeURIComponent(filters.status) %>&sort=<%= filters.sort %>&order=<%= filters.order %>">All</a>
@@ -74,9 +96,18 @@
         </div>
       <% } else { %>
         <div class="admin-table-wrap">
+          <div id="batch-toolbar" class="batch-toolbar" hidden>
+            <span id="batch-count">0 selected</span>
+            <button type="button" class="cyber-btn" id="batch-delete-btn" disabled>
+              <i class="fas fa-trash-alt" aria-hidden="true"></i>
+              <span>Delete Selected</span>
+            </button>
+            <button type="button" class="cyber-btn cyber-btn-secondary" id="batch-cancel-btn">Cancel</button>
+          </div>
           <table class="admin-table">
             <thead>
               <tr>
+                <th><input type="checkbox" id="select-all" aria-label="Select all pages"></th>
                 <th>Title</th>
                 <th>
                   <a class="admin-sortable <%= filters.sort === 'code_type' ? filters.order : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&status=<%= encodeURIComponent(filters.status) %>&sort=code_type&order=<%= filters.sort === 'code_type' && filters.order === 'desc' ? 'asc' : 'desc' %>">
@@ -93,6 +124,7 @@
                     Status <i class="fas fa-sort<%= filters.sort === 'is_protected' ? (filters.order === 'asc' ? '-up' : '-down') : '' %>" aria-hidden="true"></i>
                   </a>
                 </th>
+                <th>Views</th>
                 <th>Password</th>
                 <th>Link</th>
                 <th class="admin-actions-col">Actions</th>
@@ -105,7 +137,8 @@
                   const isExpired = sharedPage.expires_at && Number(sharedPage.expires_at) < now;
                   const isExpiringSoon = sharedPage.expires_at && !isExpired && Number(sharedPage.expires_at) < now + 24 * 60 * 60 * 1000;
                 %>
-                <tr class="<%= isExpired ? 'admin-expired' : '' %> <%= isExpiringSoon ? 'admin-expiring' : '' %>">
+                <tr class="<%= isExpired ? 'admin-expired' : '' %> <%= isExpiringSoon ? 'admin-expiring' : '' %>" data-page-id="<%= sharedPage.id %>">
+                  <td class="admin-checkbox-cell"><input type="checkbox" class="row-checkbox" data-id="<%= sharedPage.id %>" aria-label="Select <%= sharedPage.title || sharedPage.id %>"></td>
                   <td>
                     <a class="admin-page-title" href="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>">
                       <%= sharedPage.title || sharedPage.id %>
@@ -128,6 +161,7 @@
                       <span class="admin-status public">Public</span>
                     <% } %>
                   </td>
+                  <td><%= sharedPage.view_count || 0 %></td>
                   <td>
                     <% if (sharedPage.is_protected === 1 && sharedPage.visiblePassword) { %>
                       <code class="admin-password-value"><%= sharedPage.visiblePassword %></code>
@@ -143,6 +177,11 @@
                     </a>
                   </td>
                   <td>
+                    <form method="post" action="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>/clone" style="display:inline" title="Clone page">
+                      <button type="submit" class="admin-clone-btn" aria-label="Clone page <%= sharedPage.title || sharedPage.id %>">
+                        <i class="fas fa-copy" aria-hidden="true"></i>
+                      </button>
+                    </form>
                     <button
                       type="button"
                       class="admin-delete-btn"
@@ -166,6 +205,10 @@
             <span class="cyber-btn cyber-btn-secondary disabled">Previous</span>
           <% } %>
           <span class="admin-page-count">Page <%= pagination.page %> of <%= pagination.totalPages %></span>
+          <span class="admin-page-jump">
+            <input type="number" id="jump-page-input" min="1" max="<%= pagination.totalPages %>" placeholder="#" aria-label="Jump to page">
+            <button type="button" class="cyber-btn cyber-btn-secondary" id="jump-page-btn">Go</button>
+          </span>
           <% if (pagination.hasNext) { %>
             <a class="cyber-btn cyber-btn-secondary" href="/admin/pages?page=<%= pagination.page + 1 %>&search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&status=<%= encodeURIComponent(filters.status) %>&sort=<%= filters.sort %>&order=<%= filters.order %>">Next</a>
           <% } else { %>

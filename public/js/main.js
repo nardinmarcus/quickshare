@@ -393,7 +393,28 @@ document.addEventListener('DOMContentLoaded', () => {
         : '<i class="fas fa-eye" aria-hidden="true"></i>';
     });
   }
-  
+
+  // Inline password validation
+  var passwordHint = document.getElementById('custom-password-hint');
+  if (customPasswordInput && passwordHint) {
+    customPasswordInput.addEventListener('input', () => {
+      var len = customPasswordInput.value.length;
+      if (len === 0) {
+        passwordHint.textContent = '';
+        passwordHint.className = 'field-hint';
+      } else if (len < 4) {
+        passwordHint.textContent = 'Password must be at least 4 characters';
+        passwordHint.className = 'field-hint error';
+      } else if (len > 12) {
+        passwordHint.textContent = 'Password must not exceed 12 characters';
+        passwordHint.className = 'field-hint error';
+      } else {
+        passwordHint.textContent = '✓';
+        passwordHint.className = 'field-hint valid';
+      }
+    });
+  }
+
   // 代码类型检测函数
   function detectCodeType(code) {
     if (!code || typeof code !== 'string') {

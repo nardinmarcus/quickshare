@@ -1477,7 +1477,48 @@ body:hover::-webkit-scrollbar,
 
 .admin-actions-col {
   text-align: center;
-  width: 60px;
+  width: 80px;
+}
+
+.admin-clone-btn {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  width: 2rem;
+  height: 2rem;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  margin-right: 0.25rem;
+}
+
+.admin-clone-btn:hover {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+/* Date range filter */
+.admin-date-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.admin-date-range input[type="date"] {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+.admin-date-range span {
+  color: var(--text-secondary);
 }
 
 /* Expiration states */
@@ -3233,6 +3274,169 @@ body:hover::-webkit-scrollbar,
   justify-content: center;
   font-size: 11px;
 }
+
+/* ===== Inline Validation ===== */
+.field-hint {
+  font-size: 0.8rem;
+  margin-top: 0.25rem;
+  min-height: 1.2em;
+}
+
+.field-hint.error {
+  color: var(--error-text);
+}
+
+.field-hint.valid {
+  color: var(--success-color);
+}
+
+/* ===== Jump to Page ===== */
+.admin-page-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.admin-page-jump input {
+  width: 52px;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  text-align: center;
+  -moz-appearance: textfield;
+}
+
+.admin-page-jump input::-webkit-outer-spin-button,
+.admin-page-jump input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* ===== Batch Operations ===== */
+.batch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  background: var(--bg-card, var(--bg-main));
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.9rem;
+}
+
+.batch-toolbar .cyber-btn {
+  font-size: 0.8rem;
+  padding: 0.35rem 0.75rem;
+}
+
+.admin-checkbox-cell {
+  width: 40px;
+  text-align: center;
+}
+
+.admin-checkbox-cell input,
+#select-all {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--primary);
+}
+
+/* ===== Top Viewed ===== */
+.admin-top-viewed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.admin-top-viewed-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.admin-top-viewed-title {
+  min-width: 120px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.admin-top-viewed-title:hover {
+  color: var(--primary);
+}
+
+.admin-top-viewed-bar-track {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-main);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.admin-top-viewed-bar-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+  opacity: 0.7;
+}
+
+.admin-top-viewed-count {
+  min-width: 40px;
+  text-align: right;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== Audit Log ===== */
+.admin-audit-table th:first-child,
+.admin-audit-table td:first-child {
+  width: 160px;
+  white-space: nowrap;
+}
+
+.admin-audit-table th:nth-child(2),
+.admin-audit-table td:nth-child(2) {
+  width: 120px;
+}
+
+.admin-audit-table th:nth-child(3),
+.admin-audit-table td:nth-child(3) {
+  width: 100px;
+  text-align: center;
+}
+
+.admin-audit-table th:nth-child(5),
+.admin-audit-table td:nth-child(5) {
+  width: 120px;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.admin-audit-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.admin-audit-badge.page-create { background: rgba(34, 197, 94, 0.12); color: #22c55e; }
+.admin-audit-badge.page-update { background: rgba(59, 130, 246, 0.12); color: #3b82f6; }
+.admin-audit-badge.page-delete { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
+.admin-audit-badge.page-delete\.batch { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
+.admin-audit-badge.admin-login { background: rgba(99, 102, 241, 0.12); color: var(--primary); }
 
 .toast-container .toast-success .toast-icon { background: rgba(34, 197, 94, 0.12); color: #22c55e; }
 .toast-container .toast-error .toast-icon { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
