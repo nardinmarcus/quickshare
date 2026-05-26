@@ -235,7 +235,7 @@ document.querySelectorAll('.admin-tab').forEach(function (tab) {
     if (targetPanel === 'rendered') {
       var iframe = document.getElementById('rendered-preview');
       if (iframe && !iframe.dataset.loaded) {
-        iframe.src = '/p/' + window.pageData.id;
+        iframe.src = '/view/' + window.pageData.id;
         iframe.dataset.loaded = 'true';
       }
     }
