@@ -136,10 +136,15 @@ body {
 }
 
 /* 首页紧凑布局：一屏完整展示 */
+[data-page="home-page"] .content-container {
+  padding: 0;
+}
+
 [data-page="home-page"] .main-container {
   padding: 0.75rem 1rem;
   justify-content: flex-start;
   padding-top: 8vh;
+  min-height: 100vh;
 }
 
 [data-page="home-page"] .app-header {
