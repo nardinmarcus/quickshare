@@ -838,5 +838,7 @@ module.exports = {
   renderMarkdown,
   renderSvg,
   renderMermaid,
-  escapeHtml
+  escapeHtml,
+  resolveTheme,
+  MARKDOWN_THEMES
 };

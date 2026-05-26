@@ -10,7 +10,7 @@ const cookieParser = require('cookie-parser');
 const config = require('./config');
 const { createPageRepository } = require('./models/pageRepository');
 const { detectCodeType, extractCodeBlocks } = require('./utils/codeDetector');
-const { renderContent, escapeHtml } = require('./utils/contentRenderer');
+const { renderContent, escapeHtml, resolveTheme } = require('./utils/contentRenderer');
 const { derivePageTitle } = require('./utils/pageTitle');
 const {
   DEFAULT_PASSWORD_LENGTH,
@@ -653,7 +653,7 @@ app.put('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       updateOptions.expiresAt = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
     }
     if (markdownTheme !== undefined) {
-      updateOptions.markdownTheme = markdownTheme || null;
+      updateOptions.markdownTheme = markdownTheme ? resolveTheme(markdownTheme) : null;
     }
 
     if (isProtected !== undefined) {
@@ -767,7 +767,7 @@ app.post('/api/pages/create', requireApiAdmin, requireCsrf, async (req, res) => 
       description,
       createdAt,
       expiresAt: null,
-      markdownTheme: normalizedCodeType === 'markdown' ? (markdownTheme || 'random') : null
+      markdownTheme: normalizedCodeType === 'markdown' ? resolveTheme(markdownTheme || 'random') : null
     });
 
     return res.json({
@@ -812,7 +812,7 @@ app.post('/api/v1/share', requireApiKey, async (req, res) => {
       description,
       createdAt,
       expiresAt: null,
-      markdownTheme: normalizedCodeType === 'markdown' ? (markdownTheme || 'random') : null
+      markdownTheme: normalizedCodeType === 'markdown' ? resolveTheme(markdownTheme || 'random') : null
     });
 
     const base = config.shareBaseUrl || `${req.protocol}://${req.get('host')}`;
