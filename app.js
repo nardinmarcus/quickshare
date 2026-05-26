@@ -622,6 +622,81 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
   }
 });
 
+app.put('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
+  try {
+    await ensureDatabase();
+
+    const page = await pageRepository.getById(req.params.id);
+
+    if (!page) {
+      return res.status(404).json({
+        success: false,
+        error: 'Page not found'
+      });
+    }
+
+    const { title, description, htmlContent, expiresAt, isProtected } = req.body;
+    const updateOptions = {};
+
+    if (title !== undefined) {
+      updateOptions.title = title.trim() || null;
+    }
+    if (description !== undefined) {
+      updateOptions.description = description.trim() || null;
+    }
+    if (htmlContent !== undefined) {
+      updateOptions.htmlContent = htmlContent;
+    }
+    if (expiresAt !== undefined) {
+      const parsed = Number.parseInt(expiresAt, 10);
+      updateOptions.expiresAt = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    }
+
+    if (isProtected !== undefined) {
+      const newProtected = Boolean(isProtected);
+      const currentlyProtected = page.is_protected === 1;
+
+      if (newProtected !== currentlyProtected) {
+        updateOptions.isProtected = newProtected;
+
+        if (newProtected) {
+          const password = generateNumericPassword(DEFAULT_PASSWORD_LENGTH);
+          updateOptions.passwordHash = await hashSecret(password);
+          updateOptions.encryptedPassword = encryptSecret(password);
+        } else {
+          updateOptions.passwordHash = null;
+          updateOptions.encryptedPassword = null;
+        }
+      }
+    }
+
+    await pageRepository.updatePage(req.params.id, updateOptions);
+
+    const updatedPage = await pageRepository.getById(req.params.id);
+
+    return res.json({
+      success: true,
+      page: {
+        id: updatedPage.id,
+        title: updatedPage.title,
+        description: updatedPage.description,
+        htmlContent: updatedPage.html_content,
+        codeType: updatedPage.code_type,
+        isProtected: updatedPage.is_protected === 1,
+        password: visiblePagePassword(updatedPage),
+        expiresAt: updatedPage.expires_at,
+        createdAt: updatedPage.created_at
+      }
+    });
+  } catch (error) {
+    console.error('Update page failed:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to update page'
+    });
+  }
+});
+
 app.delete('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
   try {
     await ensureDatabase();

@@ -4,13 +4,19 @@
   <header class="admin-header">
     <div>
       <p class="admin-kicker">Shared Page</p>
-      <h1 class="admin-title"><%= sharedPage.title || sharedPage.id %></h1>
+      <h1 class="admin-title" id="page-title-display"><%= sharedPage.title || sharedPage.id %></h1>
       <p class="admin-subtitle"><%= sharedPage.id %></p>
     </div>
-    <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/pages">
-      <i class="fas fa-arrow-left" aria-hidden="true"></i>
-      <span>Back</span>
-    </a>
+    <div class="admin-actions">
+      <button type="button" class="cyber-btn cyber-btn-secondary" id="edit-toggle-btn">
+        <i class="fas fa-pen" aria-hidden="true"></i>
+        <span>Edit</span>
+      </button>
+      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/pages">
+        <i class="fas fa-arrow-left" aria-hidden="true"></i>
+        <span>Back</span>
+      </a>
+    </div>
   </header>
 
   <section class="card admin-card">
@@ -29,7 +35,7 @@
       </div>
       <div>
         <dt>Status</dt>
-        <dd>
+        <dd id="status-display">
           <% if (sharedPage.isProtected) { %>
             <span class="admin-status protected">Protected</span>
           <% } else { %>
@@ -37,36 +43,95 @@
           <% } %>
         </dd>
       </div>
-      <% if (sharedPage.isProtected) { %>
-        <div>
-          <dt>Password</dt>
-          <dd>
-            <% if (sharedPage.password) { %>
-              <code class="admin-password-value"><%= sharedPage.password %></code>
-            <% } else { %>
-              <span class="admin-muted">Unavailable for legacy share</span>
-            <% } %>
-          </dd>
-        </div>
-      <% } %>
-      <% if (sharedPage.description) { %>
-        <div class="admin-detail-wide">
-          <dt>Description</dt>
-          <dd><%= sharedPage.description %></dd>
-        </div>
-      <% } %>
+      <div id="password-display-row" <%= !sharedPage.isProtected ? 'hidden' : '' %>>
+        <dt>Password</dt>
+        <dd id="password-display">
+          <% if (sharedPage.password) { %>
+            <code class="admin-password-value"><%= sharedPage.password %></code>
+          <% } else { %>
+            <span class="admin-muted">Unavailable for legacy share</span>
+          <% } %>
+        </dd>
+      </div>
+      <div id="expires-display-row" <%= !sharedPage.expiresAt ? 'hidden' : '' %>>
+        <dt>Expires</dt>
+        <dd id="expires-display">
+          <% if (sharedPage.expiresAt) { %>
+            <time datetime="<%= new Date(Number(sharedPage.expiresAt)).toISOString() %>"><%= new Date(Number(sharedPage.expiresAt)).toLocaleString('zh-CN', { hour12: false }) %></time>
+          <% } else { %>
+            <span class="admin-muted">Never</span>
+          <% } %>
+        </dd>
+      </div>
+      <div class="admin-detail-wide" id="description-display-row" <%= !sharedPage.description ? 'hidden' : '' %>>
+        <dt>Description</dt>
+        <dd id="description-display"><%= sharedPage.description || '' %></dd>
+      </div>
     </dl>
+
+    <!-- Edit Form (hidden by default) -->
+    <form id="edit-form" class="admin-edit-form" hidden>
+      <div class="admin-edit-grid">
+        <div class="admin-edit-field">
+          <label for="edit-title">Title</label>
+          <input type="text" id="edit-title" name="title" value="<%= sharedPage.title || '' %>" maxlength="200">
+        </div>
+        <div class="admin-edit-field">
+          <label for="edit-description">Description</label>
+          <textarea id="edit-description" name="description" rows="2" maxlength="500"><%= sharedPage.description || '' %></textarea>
+        </div>
+        <div class="admin-edit-field">
+          <label for="edit-expires">Expires</label>
+          <input
+            type="datetime-local"
+            id="edit-expires"
+            name="expiresAt"
+            value="<%= sharedPage.expiresAt ? new Date(Number(sharedPage.expiresAt)).toISOString().slice(0, 16) : '' %>"
+          >
+          <button type="button" class="admin-clear-btn" id="clear-expires">Clear</button>
+        </div>
+        <div class="admin-edit-field">
+          <label class="admin-toggle-label">
+            <input type="checkbox" id="edit-protected" name="isProtected" <%= sharedPage.isProtected ? 'checked' : '' %>>
+            <span class="admin-toggle-slider"></span>
+            <span class="admin-toggle-text">Password Protected</span>
+          </label>
+          <p class="admin-edit-hint" id="protection-hint">
+            <% if (sharedPage.isProtected) { %>
+              Unchecking will remove password protection.
+            <% } else { %>
+              Checking will generate a new password.
+            <% } %>
+          </p>
+        </div>
+      </div>
+      <div class="admin-edit-actions">
+        <button type="button" class="cyber-btn cyber-btn-secondary" id="edit-cancel">Cancel</button>
+        <button type="submit" class="cyber-btn" id="edit-save">Save Changes</button>
+      </div>
+    </form>
   </section>
 
-  <section class="card admin-card">
+  <section class="card admin-card" id="content-section">
     <div class="admin-content-header">
       <h2>Content</h2>
       <a class="admin-icon-link" href="<%= publicUrl %>" target="_blank" rel="noopener noreferrer" aria-label="Open public page">
         <i class="fas fa-external-link-alt" aria-hidden="true"></i>
       </a>
     </div>
-    <textarea class="admin-content-viewer" readonly><%= sharedPage.htmlContent %></textarea>
+    <textarea class="admin-content-viewer" id="content-textarea" readonly><%= sharedPage.htmlContent %></textarea>
   </section>
 </div>
 
+<script>
+  window.pageData = <%- JSON.stringify({
+    id: sharedPage.id,
+    title: sharedPage.title || '',
+    description: sharedPage.description || '',
+    isProtected: sharedPage.isProtected,
+    expiresAt: sharedPage.expiresAt ? Number(sharedPage.expiresAt) : null,
+    htmlContent: sharedPage.htmlContent
+  }) %>;
+</script>
+<script src="/js/admin-detail.js"></script>
 <%- include('partials/footer', { page }) %>

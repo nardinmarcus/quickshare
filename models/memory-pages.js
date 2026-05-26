@@ -209,6 +209,34 @@ class MemoryPageRepository {
     return true;
   }
 
+  async updatePage(id, options) {
+    const page = this.pages.get(id);
+
+    if (!page) {
+      return false;
+    }
+
+    if (options.title !== undefined) {
+      page.title = options.title || null;
+    }
+    if (options.description !== undefined) {
+      page.description = options.description || null;
+    }
+    if (options.htmlContent !== undefined) {
+      page.html_content = options.htmlContent;
+    }
+    if (options.expiresAt !== undefined) {
+      page.expires_at = options.expiresAt || null;
+    }
+    if (options.isProtected !== undefined) {
+      page.is_protected = options.isProtected ? 1 : 0;
+      page.password_hash = options.passwordHash || null;
+      page.encrypted_password = options.encryptedPassword || null;
+    }
+
+    return true;
+  }
+
   async deletePage(id) {
     return this.pages.delete(id);
   }

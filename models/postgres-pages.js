@@ -245,6 +245,56 @@ class PostgresPageRepository {
     return result.rowCount > 0;
   }
 
+  async updatePage(id, options) {
+    const fields = [];
+    const params = [];
+    let paramIndex = 1;
+
+    if (options.title !== undefined) {
+      fields.push(`title = $${paramIndex}`);
+      params.push(options.title || null);
+      paramIndex += 1;
+    }
+    if (options.description !== undefined) {
+      fields.push(`description = $${paramIndex}`);
+      params.push(options.description || null);
+      paramIndex += 1;
+    }
+    if (options.htmlContent !== undefined) {
+      fields.push(`html_content = $${paramIndex}`);
+      params.push(options.htmlContent);
+      paramIndex += 1;
+    }
+    if (options.expiresAt !== undefined) {
+      fields.push(`expires_at = $${paramIndex}`);
+      params.push(options.expiresAt || null);
+      paramIndex += 1;
+    }
+    if (options.isProtected !== undefined) {
+      fields.push(`is_protected = $${paramIndex}`);
+      params.push(options.isProtected ? 1 : 0);
+      paramIndex += 1;
+      fields.push(`password_hash = $${paramIndex}`);
+      params.push(options.passwordHash || null);
+      paramIndex += 1;
+      fields.push(`encrypted_password = $${paramIndex}`);
+      params.push(options.encryptedPassword || null);
+      paramIndex += 1;
+    }
+
+    if (fields.length === 0) {
+      return true;
+    }
+
+    params.push(id);
+    const result = await this.pool.query(
+      `UPDATE pages SET ${fields.join(', ')} WHERE id = $${paramIndex}`,
+      params
+    );
+
+    return result.rowCount > 0;
+  }
+
   async deletePage(id) {
     const result = await this.pool.query('DELETE FROM pages WHERE id = $1', [id]);
     return result.rowCount > 0;
