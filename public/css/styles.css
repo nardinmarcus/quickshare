@@ -941,17 +941,23 @@ body:hover::-webkit-scrollbar,
 
 .admin-header {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 1.5rem;
 }
 
+.admin-header > div:first-child {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
 .admin-actions {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  flex-wrap: wrap;
+  gap: 0.5rem;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 
 .admin-kicker {
@@ -1352,8 +1358,7 @@ body:hover::-webkit-scrollbar,
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  flex: 1;
-  min-width: 280px;
+  width: 100%;
 }
 
 .admin-search-box {
@@ -1476,8 +1481,15 @@ body:hover::-webkit-scrollbar,
 }
 
 .admin-actions-col {
-  text-align: center;
   width: 80px;
+  white-space: nowrap;
+}
+
+.admin-actions-col form,
+.admin-actions-col .admin-clone-btn,
+.admin-actions-col .admin-delete-btn {
+  display: inline-flex;
+  vertical-align: middle;
 }
 
 .admin-clone-btn {
@@ -1492,7 +1504,7 @@ body:hover::-webkit-scrollbar,
   align-items: center;
   justify-content: center;
   transition: all 0.15s ease;
-  margin-right: 0.25rem;
+  margin-right: 0;
 }
 
 .admin-clone-btn:hover {
