@@ -43,14 +43,15 @@
       const data = await response.json();
 
       if (data.success) {
-        window.location.reload();
+        Toast.success('Page deleted');
+        setTimeout(function () { window.location.reload(); }, 800);
       } else {
-        alert(data.error || 'Failed to delete page');
+        Toast.error(data.error || 'Failed to delete page');
         confirmBtn.disabled = false;
         confirmBtn.textContent = 'Delete';
       }
     } catch (err) {
-      alert('Network error: ' + err.message);
+      Toast.error('Network error: ' + err.message);
       confirmBtn.disabled = false;
       confirmBtn.textContent = 'Delete';
     }
@@ -62,3 +63,72 @@
     }
   });
 })();
+
+// ===== Toast 通知系统 =====
+window.Toast = {
+  container: null,
+
+  init: function () {
+    if (this.container) return;
+    this.container = document.createElement('div');
+    this.container.className = 'toast-container';
+    this.container.setAttribute('role', 'region');
+    this.container.setAttribute('aria-live', 'polite');
+    this.container.setAttribute('aria-label', 'Notifications');
+    document.body.appendChild(this.container);
+  },
+
+  show: function (message, type, duration) {
+    type = type || 'info';
+    duration = duration || 4000;
+    this.init();
+
+    var toast = document.createElement('div');
+    toast.className = 'toast toast-' + type;
+
+    var icons = { success: 'fa-check', error: 'fa-times', info: 'fa-info' };
+
+    var contentSpan = document.createElement('span');
+    contentSpan.className = 'toast-content';
+    contentSpan.textContent = message;
+
+    toast.innerHTML =
+      '<span class="toast-icon"><i class="fas ' + icons[type] + '" aria-hidden="true"></i></span>';
+    toast.appendChild(contentSpan);
+    toast.innerHTML +=
+      '<button class="toast-close" aria-label="Close notification"><i class="fas fa-times" aria-hidden="true"></i></button>' +
+      '<div class="toast-progress" style="width:100%"></div>';
+
+    this.container.appendChild(toast);
+
+    requestAnimationFrame(function () { toast.classList.add('show'); });
+
+    var progress = toast.querySelector('.toast-progress');
+    var startTime = Date.now();
+    var timer = setInterval(function () {
+      var elapsed = Date.now() - startTime;
+      var remaining = Math.max(0, 100 - (elapsed / duration) * 100);
+      progress.style.width = remaining + '%';
+      if (remaining <= 0) clearInterval(timer);
+    }, 50);
+
+    var self = this;
+    var autoClose = setTimeout(function () { self.dismiss(toast, timer); }, duration);
+
+    toast.querySelector('.toast-close').addEventListener('click', function () {
+      clearTimeout(autoClose);
+      clearInterval(timer);
+      self.dismiss(toast);
+    });
+  },
+
+  dismiss: function (toast, timer) {
+    if (timer) clearInterval(timer);
+    toast.classList.remove('show');
+    setTimeout(function () { toast.remove(); }, 350);
+  },
+
+  success: function (message, duration) { this.show(message, 'success', duration); },
+  error: function (message, duration) { this.show(message, 'error', duration); },
+  info: function (message, duration) { this.show(message, 'info', duration); }
+};

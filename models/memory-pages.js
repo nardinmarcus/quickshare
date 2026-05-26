@@ -54,7 +54,8 @@ class MemoryPageRepository {
       code_type: page.codeType || 'html',
       title: page.title || null,
       description: page.description || null,
-      expires_at: page.expiresAt || null
+      expires_at: page.expiresAt || null,
+      markdown_theme: page.markdownTheme || null
     });
 
     return { id: page.id };
@@ -232,6 +233,9 @@ class MemoryPageRepository {
       page.is_protected = options.isProtected ? 1 : 0;
       page.password_hash = options.passwordHash || null;
       page.encrypted_password = options.encryptedPassword || null;
+    }
+    if (options.markdownTheme !== undefined) {
+      page.markdown_theme = options.markdownTheme || null;
     }
 
     return true;

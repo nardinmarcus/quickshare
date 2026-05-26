@@ -549,13 +549,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 显示代码类型标记
   function updateCodeTypeIndicator(codeType, content) {
-    // 获取已存在的指示器
     const indicator = document.getElementById('code-type-indicator');
     const codeTypeText = document.getElementById('code-type-text');
-    
+    const themeSelector = document.getElementById('markdown-theme-selector');
+
     if (!indicator || !codeTypeText) {
-      console.error('代码类型指示器元素不存在');
       return;
+    }
+
+    if (themeSelector) {
+      if (codeType === 'markdown' && content && content.trim() !== '') {
+        themeSelector.classList.remove('hidden');
+      } else {
+        themeSelector.classList.add('hidden');
+      }
     }
     
     // 如果没有内容，隐藏指示器
@@ -707,6 +714,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const requestBody = { htmlContent, isProtected, codeType };
         if (isProtected && userCustomPassword) {
           requestBody.password = userCustomPassword;
+        }
+        if (codeType === 'markdown') {
+          var themeSelect = document.getElementById('markdown-theme');
+          requestBody.markdownTheme = themeSelect ? themeSelect.value : 'random';
         }
         const response = await fetch('/api/pages/create', {
           method: 'POST',

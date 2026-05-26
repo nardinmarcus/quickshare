@@ -608,7 +608,8 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
         description: sharedPage.description,
         isProtected: sharedPage.is_protected === 1,
         password: visiblePagePassword(sharedPage),
-        expiresAt: sharedPage.expires_at
+        expiresAt: sharedPage.expires_at,
+        markdownTheme: sharedPage.markdown_theme
       },
       publicUrl: publicPageUrl(req, sharedPage.id)
     });
@@ -635,7 +636,7 @@ app.put('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       });
     }
 
-    const { title, description, htmlContent, expiresAt, isProtected, password } = req.body;
+    const { title, description, htmlContent, expiresAt, isProtected, password, markdownTheme } = req.body;
     const updateOptions = {};
 
     if (title !== undefined) {
@@ -650,6 +651,9 @@ app.put('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
     if (expiresAt !== undefined) {
       const parsed = Number.parseInt(expiresAt, 10);
       updateOptions.expiresAt = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    }
+    if (markdownTheme !== undefined) {
+      updateOptions.markdownTheme = markdownTheme || null;
     }
 
     if (isProtected !== undefined) {
@@ -694,6 +698,7 @@ app.put('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
         isProtected: updatedPage.is_protected === 1,
         password: visiblePagePassword(updatedPage),
         expiresAt: updatedPage.expires_at,
+        markdownTheme: updatedPage.markdown_theme,
         createdAt: updatedPage.created_at
       }
     });
@@ -737,7 +742,7 @@ app.post('/api/pages/create', requireApiAdmin, requireCsrf, async (req, res) => 
   try {
     await ensureDatabase();
 
-    const { htmlContent, isProtected, codeType, title, description, password: customPassword } = req.body;
+    const { htmlContent, isProtected, codeType, title, description, password: customPassword, markdownTheme } = req.body;
 
     if (!htmlContent || typeof htmlContent !== 'string') {
       return res.status(400).json({
@@ -761,7 +766,8 @@ app.post('/api/pages/create', requireApiAdmin, requireCsrf, async (req, res) => 
       title: pageTitle,
       description,
       createdAt,
-      expiresAt: null
+      expiresAt: null,
+      markdownTheme: normalizedCodeType === 'markdown' ? (markdownTheme || 'random') : null
     });
 
     return res.json({
@@ -784,7 +790,7 @@ app.post('/api/v1/share', requireApiKey, async (req, res) => {
   try {
     await ensureDatabase();
 
-    const { htmlContent, codeType, title, description, isProtected, password: customPassword } = req.body;
+    const { htmlContent, codeType, title, description, isProtected, password: customPassword, markdownTheme } = req.body;
 
     if (!htmlContent || typeof htmlContent !== 'string') {
       return res.status(400).json({ success: false, error: '请提供内容' });
@@ -805,7 +811,8 @@ app.post('/api/v1/share', requireApiKey, async (req, res) => {
       title: pageTitle,
       description,
       createdAt,
-      expiresAt: null
+      expiresAt: null,
+      markdownTheme: normalizedCodeType === 'markdown' ? (markdownTheme || 'random') : null
     });
 
     const base = config.shareBaseUrl || `${req.protocol}://${req.get('host')}`;
@@ -994,7 +1001,7 @@ app.get('/view/:id', async (req, res) => {
       contentType = 'html';
     }
 
-    const renderedContent = await renderContent(processedContent, contentType);
+    const renderedContent = await renderContent(processedContent, contentType, page.markdown_theme);
     const contentWithTypeInfo = injectCodeTypeMeta(renderedContent, contentType);
 
     return res.send(renderSandboxedDocument(contentWithTypeInfo, contentType));

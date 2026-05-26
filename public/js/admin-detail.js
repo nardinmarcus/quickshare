@@ -159,6 +159,11 @@
       isProtected: isProtected
     };
 
+    var themeSelect = document.getElementById('edit-theme');
+    if (themeSelect) {
+      payload.markdownTheme = themeSelect.value;
+    }
+
     if (expiresAtValue) {
       payload.expiresAt = new Date(expiresAtValue).getTime();
     } else {
@@ -191,17 +196,48 @@
         originalData.isProtected = data.page.isProtected;
         originalData.expiresAt = data.page.expiresAt;
         originalData.password = data.page.password;
+        originalData.markdownTheme = data.page.markdownTheme || '';
 
         updateViewMode(data.page);
         exitEditMode();
       } else {
-        alert(data.error || 'Failed to save changes');
+        Toast.error(data.error || 'Failed to save changes');
       }
     } catch (err) {
-      alert('Network error: ' + err.message);
+      Toast.error('Network error: ' + err.message);
     } finally {
       saveBtn.disabled = false;
       saveBtn.textContent = 'Save Changes';
     }
   });
 })();
+
+// ===== Tab 切换 =====
+document.querySelectorAll('.admin-tab').forEach(function (tab) {
+  tab.addEventListener('click', function () {
+    var targetPanel = tab.dataset.tab;
+
+    document.querySelectorAll('.admin-tab').forEach(function (t) {
+      t.classList.remove('active');
+      t.setAttribute('aria-selected', 'false');
+    });
+    tab.classList.add('active');
+    tab.setAttribute('aria-selected', 'true');
+
+    document.querySelectorAll('.admin-tab-panel').forEach(function (p) {
+      p.classList.remove('active');
+      p.hidden = true;
+    });
+    var panel = document.querySelector('[data-panel="' + targetPanel + '"]');
+    panel.classList.add('active');
+    panel.hidden = false;
+
+    if (targetPanel === 'rendered') {
+      var iframe = document.getElementById('rendered-preview');
+      if (iframe && !iframe.dataset.loaded) {
+        iframe.src = '/p/' + window.pageData.id;
+        iframe.dataset.loaded = 'true';
+      }
+    }
+  });
+});

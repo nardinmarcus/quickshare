@@ -56,12 +56,14 @@ class PostgresPageRepository {
         code_type TEXT DEFAULT 'html',
         title TEXT,
         description TEXT,
-        expires_at BIGINT
+        expires_at BIGINT,
+        markdown_theme TEXT
       )
     `);
 
     await this.pool.query('CREATE INDEX IF NOT EXISTS idx_pages_created_at ON pages (created_at DESC)');
     await this.pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS encrypted_password TEXT');
+    await this.pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS markdown_theme TEXT');
   }
 
   async create(page) {
@@ -69,9 +71,9 @@ class PostgresPageRepository {
       `
         INSERT INTO pages (
           id, html_content, created_at, password_hash, encrypted_password, is_protected,
-          code_type, title, description, expires_at
+          code_type, title, description, expires_at, markdown_theme
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       `,
       [
         page.id,
@@ -83,7 +85,8 @@ class PostgresPageRepository {
         page.codeType || 'html',
         page.title || null,
         page.description || null,
-        page.expiresAt || null
+        page.expiresAt || null,
+        page.markdownTheme || null
       ]
     );
 
@@ -279,6 +282,11 @@ class PostgresPageRepository {
       paramIndex += 1;
       fields.push(`encrypted_password = $${paramIndex}`);
       params.push(options.encryptedPassword || null);
+      paramIndex += 1;
+    }
+    if (options.markdownTheme !== undefined) {
+      fields.push(`markdown_theme = $${paramIndex}`);
+      params.push(options.markdownTheme || null);
       paramIndex += 1;
     }
 

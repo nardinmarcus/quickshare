@@ -121,6 +121,16 @@
             <% } %>
           </p>
         </div>
+        <div class="admin-edit-field" id="theme-field" <%= sharedPage.codeType !== 'markdown' ? 'hidden' : '' %>>
+          <label for="edit-theme">Markdown Theme</label>
+          <select id="edit-theme" name="markdownTheme">
+            <option value="random" <%= !sharedPage.markdownTheme || sharedPage.markdownTheme === 'random' ? 'selected' : '' %>>🎲 Random</option>
+            <option value="bytedance" <%= sharedPage.markdownTheme === 'bytedance' ? 'selected' : '' %>>ByteDance</option>
+            <option value="github" <%= sharedPage.markdownTheme === 'github' ? 'selected' : '' %>>GitHub</option>
+            <option value="apple" <%= sharedPage.markdownTheme === 'apple' ? 'selected' : '' %>>Apple</option>
+            <option value="notion" <%= sharedPage.markdownTheme === 'notion' ? 'selected' : '' %>>Notion</option>
+          </select>
+        </div>
       </div>
       <div class="admin-edit-actions">
         <button type="button" class="cyber-btn cyber-btn-secondary" id="edit-cancel">Cancel</button>
@@ -131,12 +141,29 @@
 
   <section class="card admin-card" id="content-section">
     <div class="admin-content-header">
-      <h2>Content</h2>
+      <div class="admin-content-tabs">
+        <button type="button" class="admin-tab active" data-tab="raw" aria-selected="true" role="tab">
+          <i class="fas fa-code" aria-hidden="true"></i>
+          <span>Raw</span>
+        </button>
+        <button type="button" class="admin-tab" data-tab="rendered" aria-selected="false" role="tab">
+          <i class="fas fa-eye" aria-hidden="true"></i>
+          <span>Preview</span>
+        </button>
+      </div>
       <a class="admin-icon-link" href="<%= publicUrl %>" target="_blank" rel="noopener noreferrer" aria-label="Open public page">
         <i class="fas fa-external-link-alt" aria-hidden="true"></i>
       </a>
     </div>
-    <textarea class="admin-content-viewer" id="content-textarea" readonly><%= sharedPage.htmlContent %></textarea>
+
+    <div class="admin-tab-content">
+      <div class="admin-tab-panel active" data-panel="raw" role="tabpanel">
+        <textarea class="admin-content-viewer" id="content-textarea" readonly aria-label="Raw content"><%= sharedPage.htmlContent %></textarea>
+      </div>
+      <div class="admin-tab-panel" data-panel="rendered" role="tabpanel" hidden>
+        <iframe id="rendered-preview" class="admin-rendered-preview" sandbox="allow-downloads allow-forms allow-modals allow-popups allow-scripts" title="Rendered content preview"></iframe>
+      </div>
+    </div>
   </section>
 </div>
 
@@ -147,7 +174,9 @@
     description: sharedPage.description || '',
     isProtected: sharedPage.isProtected,
     expiresAt: sharedPage.expiresAt ? Number(sharedPage.expiresAt) : null,
-    htmlContent: sharedPage.htmlContent
+    htmlContent: sharedPage.htmlContent,
+    codeType: sharedPage.codeType,
+    markdownTheme: sharedPage.markdownTheme || ''
   }) %>;
 </script>
 <script src="/js/admin-detail.js"></script>

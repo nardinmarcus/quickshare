@@ -6,6 +6,15 @@
 const { marked } = require('marked');
 const { CODE_TYPES } = require('./codeDetector');
 
+const MARKDOWN_THEMES = {
+  bytedance: '/css/markdown-bytedance.css',
+  github: '/css/markdown-github.css',
+  apple: '/css/markdown-apple.css',
+  notion: '/css/markdown-notion.css'
+};
+
+const THEME_KEYS = Object.keys(MARKDOWN_THEMES);
+
 function debugLog(...args) {
   if (process.env.DEBUG_RENDERER === 'true') {
     console.log(...args);
@@ -97,7 +106,9 @@ function renderHtml(content) {
  * @param {string} content - Markdownu5185u5bb9
  * @returns {string} - u6e32u67d3u540eu7684HTML
  */
-async function renderMarkdown(content) {
+async function renderMarkdown(content, theme) {
+  const resolvedTheme = resolveTheme(theme);
+  const themeCss = MARKDOWN_THEMES[resolvedTheme] || MARKDOWN_THEMES.bytedance;
   // 预处理内容，处理独立的 Mermaid 代码
   const processedContent = await preprocessMarkdown(content);
   
@@ -328,7 +339,7 @@ async function renderMarkdown(content) {
       <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
       <meta name="apple-mobile-web-app-title" content="QuickShare">
       
-      <link rel="stylesheet" href="/css/markdown-bytedance.css">
+      <link rel="stylesheet" href="${themeCss}">
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-dark.min.css">
       <link rel="preconnect" href="https://fonts.googleapis.com">
       <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -741,17 +752,17 @@ function escapeHtml(unsafe) {
  * @param {string} contentType - u5185u5bb9u7c7bu578b
  * @returns {Promise<string>} - u6e32u67d3u540eu7684HTML
  */
-async function renderContent(content, contentType) {
+async function renderContent(content, contentType, theme) {
   debugLog(`[DEBUG] renderContent 被调用，内容类型: ${contentType}`);
   debugLog(`[DEBUG] 内容长度: ${content.length} 字符`);
-  
+
   switch (contentType) {
     case CODE_TYPES.HTML:
       debugLog('[DEBUG] 使用 HTML 渲染器');
       return renderHtml(content);
     case CODE_TYPES.MARKDOWN:
       debugLog('[DEBUG] 使用 Markdown 渲染器');
-      const markdownResult = await renderMarkdown(content);
+      const markdownResult = await renderMarkdown(content, theme);
       debugLog(`[DEBUG] Markdown 渲染完成，结果长度: ${markdownResult.length} 字符`);
       return markdownResult;
     case CODE_TYPES.SVG:
@@ -761,10 +772,16 @@ async function renderContent(content, contentType) {
       debugLog('[DEBUG] 使用 Mermaid 渲染器');
       return await renderMermaid(content);
     default:
-      // 默认使用Markdown渲染器，与代码检测逻辑保持一致
       debugLog(`[DEBUG] 使用默认渲染器 (Markdown)，因为内容类型 '${contentType}' 未知`);
-      return await renderMarkdown(content);
+      return await renderMarkdown(content, theme);
   }
+}
+
+function resolveTheme(theme) {
+  if (!theme || theme === 'random') {
+    return THEME_KEYS[Math.floor(Math.random() * THEME_KEYS.length)];
+  }
+  return MARKDOWN_THEMES[theme] ? theme : 'bytedance';
 }
 
 /**
