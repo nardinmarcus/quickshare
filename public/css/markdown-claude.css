@@ -1,0 +1,193 @@
+/* ===== Claude Warm Editorial Markdown 主题 ===== */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+
+.markdown-body {
+  font-family: 'Inter', 'StyreneB', system-ui, -apple-system, sans-serif;
+  font-size: 16px;
+  line-height: 1.55;
+  color: #3d3d3a;
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 32px 24px;
+  word-wrap: break-word;
+  background-color: #faf9f5;
+}
+
+/* ===== Headings — serif display ===== */
+.markdown-body h1, .markdown-body h2, .markdown-body h3,
+.markdown-body h4, .markdown-body h5, .markdown-body h6 {
+  font-family: Georgia, 'Copernicus', 'Tiempos Headline', serif;
+  color: #141413;
+  line-height: 1.15;
+  font-weight: 400;
+  letter-spacing: -0.3px;
+}
+
+.markdown-body h1 {
+  font-size: 2.25em;
+  margin-top: 1.2em;
+  margin-bottom: 0.5em;
+  letter-spacing: -1px;
+  padding-bottom: 0.4em;
+  border-bottom: 2px solid #e6dfd8;
+}
+
+.markdown-body h2 {
+  font-size: 1.6em;
+  margin-top: 1.5em;
+  margin-bottom: 0.4em;
+  letter-spacing: -0.5px;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid #ebe6df;
+}
+
+.markdown-body h3 {
+  font-size: 1.3em;
+  margin-top: 1.3em;
+  margin-bottom: 0.4em;
+}
+
+.markdown-body h4 { font-size: 1.1em; margin-top: 1.2em; margin-bottom: 0.3em; }
+.markdown-body h5 { font-size: 1em; margin-top: 1em; margin-bottom: 0.3em; font-weight: 500; }
+.markdown-body h6 { font-size: 0.9em; margin-top: 1em; margin-bottom: 0.3em; font-weight: 500; color: #6c6a64; }
+
+/* ===== Body text ===== */
+.markdown-body p {
+  margin-top: 0;
+  margin-bottom: 1em;
+}
+
+.markdown-body strong { font-weight: 600; color: #141413; }
+.markdown-body em { font-style: italic; }
+
+/* ===== Links — coral ===== */
+.markdown-body a {
+  color: #cc785c;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  transition: color 0.15s ease;
+}
+
+.markdown-body a:hover {
+  color: #a9583e;
+}
+
+/* ===== Blockquote ===== */
+.markdown-body blockquote {
+  margin: 0 0 1em 0;
+  padding: 0.75em 1em;
+  color: #6c6a64;
+  border-left: 3px solid #cc785c;
+  background-color: #f5f0e8;
+  border-radius: 0 6px 6px 0;
+}
+
+.markdown-body blockquote p:last-child { margin-bottom: 0; }
+
+/* ===== Code — dark surface ===== */
+.markdown-body code {
+  padding: 0.15em 0.4em;
+  margin: 0;
+  font-size: 87%;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  background-color: #efe9de;
+  border-radius: 4px;
+  color: #141413;
+}
+
+.markdown-body pre {
+  margin-top: 0;
+  margin-bottom: 1em;
+  padding: 1em 1.25em;
+  overflow: auto;
+  font-size: 14px;
+  line-height: 1.6;
+  background-color: #181715;
+  color: #faf9f5;
+  border-radius: 8px;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.markdown-body pre code {
+  padding: 0;
+  margin: 0;
+  font-size: 100%;
+  white-space: pre;
+  background: transparent;
+  border-radius: 0;
+  color: inherit;
+}
+
+/* ===== Tables ===== */
+.markdown-body table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+  margin-bottom: 1em;
+  font-size: 14px;
+}
+
+.markdown-body th, .markdown-body td {
+  padding: 10px 14px;
+  border: 1px solid #e6dfd8;
+}
+
+.markdown-body th {
+  font-weight: 600;
+  color: #141413;
+  background-color: #f5f0e8;
+}
+
+.markdown-body tr { background-color: #faf9f5; }
+.markdown-body tr:nth-child(even) { background-color: #f5f0e8; }
+
+/* ===== Lists ===== */
+.markdown-body ul, .markdown-body ol {
+  margin-top: 0;
+  margin-bottom: 1em;
+  padding-left: 2em;
+}
+
+.markdown-body li { margin-bottom: 0.3em; }
+.markdown-body li + li { margin-top: 0.3em; }
+
+/* ===== HR ===== */
+.markdown-body hr {
+  height: 1px;
+  padding: 0;
+  margin: 2em 0;
+  background-color: #e6dfd8;
+  border: 0;
+}
+
+/* ===== Images ===== */
+.markdown-body img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+/* ===== Kbd ===== */
+.markdown-body kbd {
+  display: inline-block;
+  padding: 3px 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #141413;
+  vertical-align: middle;
+  background-color: #efe9de;
+  border: 1px solid #e6dfd8;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ===== Inline mark / highlight ===== */
+.markdown-body mark {
+  background-color: #cc785c;
+  color: #faf9f5;
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}

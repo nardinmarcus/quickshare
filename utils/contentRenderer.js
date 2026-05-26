@@ -10,7 +10,8 @@ const MARKDOWN_THEMES = {
   bytedance: '/css/markdown-bytedance.css',
   github: '/css/markdown-github.css',
   apple: '/css/markdown-apple.css',
-  notion: '/css/markdown-notion.css'
+  notion: '/css/markdown-notion.css',
+  claude: '/css/markdown-claude.css'
 };
 
 const THEME_KEYS = Object.keys(MARKDOWN_THEMES);
