@@ -1,5 +1,7 @@
 # QuickShare 后台优化 — 设计稿
 
+> **状态**：Toast 通知系统、内容预览 Tab、Markdown 多主题系统均已实现并上线（见 commit `5c9351b` 及后续）。本设计稿保留作为视觉规范参考。
+
 ## 视觉方向
 
 延续现有的 cyberpunk dark-first 卡片式设计语言。所有新增组件严格复用现有 CSS 自定义属性，保持 16px 圆角、微妙阴影、状态 pills 的视觉一致性。微交互仅使用 transform/opacity，保证 60fps 流畅度。
@@ -382,7 +384,7 @@ function loadRenderedPreview() {
 ### 行为
 - 首页：当代码类型检测为 Markdown 时，在密码保护区域下方显示主题选择器
 - 后台编辑：编辑表单中增加主题字段，仅当 codeType 为 markdown 时显示
-- 下拉选择，包含「随机」+ 7 套预设主题
+- 下拉选择，包含 5 套预设主题
 - 主题名称使用中英文双语标签
 
 ### 首页修改 `views/index.ejs`
@@ -396,11 +398,11 @@ function loadRenderedPreview() {
     <span class="theme-label">Markdown Theme</span>
   </div>
   <select id="markdown-theme" class="theme-select">
-    <option value="random">🎲 Random (random)</option>
     <option value="bytedance" selected>ByteDance 蓝绿 (bytedance)</option>
     <option value="github">GitHub 经典 (github)</option>
     <option value="apple">Apple 极简 (apple)</option>
     <option value="notion">Notion 笔记 (notion)</option>
+    <option value="claude">Claude 暖调 (claude)</option>
   </select>
 </div>
 ```
@@ -413,11 +415,11 @@ function loadRenderedPreview() {
 <div class="admin-edit-field" id="theme-field" <%= sharedPage.codeType !== 'markdown' ? 'hidden' : '' %>>
   <label for="edit-theme">Markdown Theme</label>
   <select id="edit-theme" name="markdownTheme">
-    <option value="random" <%= !sharedPage.markdownTheme || sharedPage.markdownTheme === 'random' ? 'selected' : '' %>>🎲 Random</option>
-    <option value="bytedance" <%= sharedPage.markdownTheme === 'bytedance' ? 'selected' : '' %>>ByteDance</option>
+    <option value="bytedance" <%= !sharedPage.markdownTheme || sharedPage.markdownTheme === 'bytedance' ? 'selected' : '' %>>ByteDance</option>
     <option value="github" <%= sharedPage.markdownTheme === 'github' ? 'selected' : '' %>>GitHub</option>
     <option value="apple" <%= sharedPage.markdownTheme === 'apple' ? 'selected' : '' %>>Apple</option>
     <option value="notion" <%= sharedPage.markdownTheme === 'notion' ? 'selected' : '' %>>Notion</option>
+    <option value="claude" <%= sharedPage.markdownTheme === 'claude' ? 'selected' : '' %>>Claude</option>
   </select>
 </div>
 ```
@@ -530,10 +532,11 @@ function updateThemeSelectorVisibility(codeType) {
 | `public/css/markdown-github.css` | 新增 | GitHub 经典主题 |
 | `public/css/markdown-apple.css` | 新增 | Apple 极简主题 |
 | `public/css/markdown-notion.css` | 新增 | Notion 笔记主题 |
+| `public/css/markdown-claude.css` | 新增 | Claude 暖调主题 |
 
 ---
 
-## 4 套 Markdown 主题 — 详细设计规范
+## 5 套 Markdown 主题 — 详细设计规范
 
 参考 Google Stitch DESIGN.md 格式，每套主题包含完整色板、字体层级、组件样式、间距系统和 Do/Don't。
 
@@ -781,6 +784,12 @@ function updateThemeSelectorVisibility(codeType) {
 - Inline code 使用红色 `#eb5757`，是 Notion 的标志性特征
 - Callout 块是核心组件，支持 emoji 前缀
 - 整体灰度偏高，无鲜艳主色
+
+---
+
+### Theme 5: Claude
+
+> 后添加的暖调主题（commit `6094f05`）。设计规范见 `public/css/markdown-claude.css`。
 
 ---
 

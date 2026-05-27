@@ -59,15 +59,25 @@ api/              Vercel function 入口
 app.js            Express app 工厂和路由
 config.js         环境变量聚合
 server.js         本地服务器入口
+vercel-app.js     Vercel 构建时使用的 app 包装
 models/           数据层（Repository 选择器 + Postgres / 内存实现）
-views/            EJS 模板
-public/           静态资源
-utils/            security.js, contentRenderer.js, codeDetector.js
+views/            EJS 模板（含 admin-* 管理后台页面）
+middleware/       中间件（auth.js）
+routes/           路由模块（pages.js 已废弃）
+public/           静态资源（css/ js/ icon/）
+utils/            security.js, contentRenderer.js, codeDetector.js, pageTitle.js
 scripts/          hash-password.js
 test/             Node test runner
+docs/             部署指南
+DESIGN.md         后台 UI 设计稿
 ```
 
 ## 当前安全边界
+
+系统有两层独立认证：
+
+- **前端登录**（`/login`）：控制首页创建分享功能。
+- **管理后台**（`/admin/login`）：控制 pages 管理、统计面板和审计日志。
 
 分享页会以 sandbox iframe 呈现用户内容，默认允许脚本执行，但不允许 iframe 拥有父页面同源权限。这样能保留 HTML 预览能力，同时避免分享内容直接读取管理页面 DOM 或同源 cookie。
 
@@ -92,6 +102,8 @@ npm test
 - signed token scope 校验。
 - CSRF token 绑定校验。
 - Share API（创建、鉴权拒绝、空内容、类型自动检测、密码保护）。
+- Admin 路由（CRUD、批量删除、克隆、审计日志）。
+- Admin 仓库层。
 
 ## Share API
 

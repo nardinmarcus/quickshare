@@ -315,8 +315,11 @@ function injectCodeTypeMeta(renderedContent, contentType) {
   );
 }
 
-function renderSandboxedDocument(renderedContent, contentType) {
+function renderSandboxedDocument(renderedContent, contentType, { title, description, pageUrl } = {}) {
   const escapedContent = escapeHtml(renderedContent);
+  const pageTitle = title ? `${escapeHtml(title)} - QuickShare` : 'QuickShare';
+  const ogDescription = description ? escapeHtml(description) : '通过 QuickShare 分享的内容';
+  const ogUrl = pageUrl ? escapeHtml(pageUrl) : '';
 
   return `
     <!DOCTYPE html>
@@ -325,7 +328,15 @@ function renderSandboxedDocument(renderedContent, contentType) {
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <meta name="code-type" content="${escapeHtml(contentType)}">
-      <title>QuickShare Viewer</title>
+      <title>${pageTitle}</title>
+      <meta property="og:title" content="${pageTitle}">
+      <meta property="og:description" content="${ogDescription}">
+      <meta property="og:type" content="article">
+      ${ogUrl ? `<meta property="og:url" content="${ogUrl}">` : ''}
+      <meta property="og:image" content="/icon/web/icon-512.png">
+      <meta name="twitter:card" content="summary">
+      <meta name="twitter:title" content="${pageTitle}">
+      <meta name="twitter:description" content="${ogDescription}">
       <style>
         html, body {
           width: 100%;
@@ -1165,7 +1176,12 @@ app.get('/view/:id', async (req, res) => {
     // Track view count (fire-and-forget; don't block response)
     pageRepository.incrementViewCount(req.params.id).catch(() => {});
 
-    return res.send(renderSandboxedDocument(contentWithTypeInfo, contentType));
+    const pageUrl = `${req.protocol}://${req.get('host')}/view/${req.params.id}`;
+    return res.send(renderSandboxedDocument(contentWithTypeInfo, contentType, {
+      title: page.title,
+      description: page.description,
+      pageUrl
+    }));
   } catch (error) {
     console.error('View page failed:', error);
     return res.status(500).render('error', {
