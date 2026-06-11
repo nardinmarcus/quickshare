@@ -76,13 +76,51 @@ const MERMAID_THEME_CSS = `
 `;
 
 const MERMAID_CDN = 'https://cdn.jsdelivr.net/npm/mermaid@11.6.0/dist/mermaid.min.js';
+const HIGHLIGHT_CSS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-dark.min.css';
+const HIGHLIGHT_JS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js';
 
 const THEME_KEYS = Object.keys(MARKDOWN_THEMES);
+const MERMAID_PATTERNS = [
+  /^(graph|flowchart)\s+(TB|TD|BT|RL|LR)\b/m,
+  /^sequenceDiagram\b/m,
+  /^classDiagram\b/m,
+  /^stateDiagram(-v2)?\b/m,
+  /^erDiagram\b/m,
+  /^gantt\b/m,
+  /^pie\b/m,
+  /^journey\b/m,
+  /^gitGraph\b/m,
+  /^mindmap\b/m,
+  /^timeline\b/m,
+  /^C4Context\b/m
+];
 
 function debugLog(...args) {
   if (process.env.DEBUG_RENDERER === 'true') {
     console.log(...args);
   }
+}
+
+function isMermaidCode(code) {
+  return MERMAID_PATTERNS.some(pattern => pattern.test(code));
+}
+
+function normalizeCodeRendererArgs(args) {
+  const [first, language, isEscaped] = args;
+
+  if (first && typeof first === 'object') {
+    return {
+      code: first.text || '',
+      language: first.lang || '',
+      isEscaped: Boolean(first.escaped)
+    };
+  }
+
+  return {
+    code: first || '',
+    language: language || '',
+    isEscaped: Boolean(isEscaped)
+  };
 }
 
 /**
@@ -194,38 +232,22 @@ async function renderMarkdown(content, theme) {
   const originalCodeRenderer = renderer.code.bind(renderer);
   
   // 重写代码块渲染器
-  renderer.code = function(code, language, isEscaped) {
-    // 检查是否是 Mermaid 代码
-    const isMermaidCode = (code) => {
-      const mermaidPatterns = [
-        /^(graph|flowchart)\s+(TB|TD|BT|RL|LR)\b/m,
-        /^sequenceDiagram\b/m,
-        /^classDiagram\b/m,
-        /^stateDiagram(-v2)?\b/m,
-        /^erDiagram\b/m,
-        /^gantt\b/m,
-        /^pie\b/m,
-        /^journey\b/m,
-        /^gitGraph\b/m,
-        /^mindmap\b/m,
-        /^timeline\b/m,
-        /^C4Context\b/m
-      ];
-      return mermaidPatterns.some(pattern => pattern.test(code));
-    };
-    
+  renderer.code = function(...args) {
+    const { code, language } = normalizeCodeRendererArgs(args);
+    const normalizedLanguage = String(language || '').toLowerCase();
+
     // 如果是 Mermaid 代码或语言标记为 mermaid
-    if (language === 'mermaid' || isMermaidCode(code)) {
-      return `<div class="mermaid">${code}</div>`;
+    if (normalizedLanguage === 'mermaid' || isMermaidCode(code)) {
+      return `<div class="mermaid">${escapeHtml(code)}</div>`;
     }
     
     // 如果是 SVG 代码
-    if (language === 'svg') {
+    if (normalizedLanguage === 'svg') {
       return `<div class="embedded-svg-container">${code}</div>`;
     }
     
     // 否则使用原始渲染器
-    return originalCodeRenderer(code, language, isEscaped);
+    return originalCodeRenderer(...args);
   };
   
   // 使用自定义渲染器
@@ -233,6 +255,8 @@ async function renderMarkdown(content, theme) {
   
   // 将Markdown转换为HTML
   const htmlContent = marked.parse(content);
+  const usesMermaid = htmlContent.includes('class="mermaid"') || htmlContent.includes("class='mermaid'");
+  const usesCodeHighlight = htmlContent.includes('<pre><code');
   
   // 使用与 renderMermaid 一致的 Mermaid CDN 版本
   const mermaidScript = `
@@ -363,6 +387,23 @@ async function renderMarkdown(content, theme) {
   </style>
   `;
 
+  const mermaidAssets = usesMermaid ? `${mermaidStyles}
+      ${mermaidScript}` : '';
+  const highlightStylesheet = usesCodeHighlight
+    ? `<link rel="stylesheet" href="${HIGHLIGHT_CSS_CDN}">`
+    : '';
+  const highlightScript = usesCodeHighlight
+    ? `
+      <script src="${HIGHLIGHT_JS_CDN}"></script>
+      <script>
+        document.addEventListener('DOMContentLoaded', () => {
+          document.querySelectorAll('pre code').forEach((block) => {
+            hljs.highlightElement(block);
+          });
+        });
+      </script>`
+    : '';
+
   // 添加嵌入内容的样式
   const embeddedStyles = `
     .embedded-svg-container {
@@ -402,10 +443,7 @@ async function renderMarkdown(content, theme) {
       <meta name="apple-mobile-web-app-title" content="QuickShare">
       
       <link rel="stylesheet" href="${themeCss}">
-      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-dark.min.css">
-      <link rel="preconnect" href="https://fonts.googleapis.com">
-      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-      <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Noto+Serif+SC:wght@400;500;600&display=swap" rel="stylesheet">
+      ${highlightStylesheet}
       <style>
         body {
           margin: 0;
@@ -419,22 +457,13 @@ async function renderMarkdown(content, theme) {
         }
         ${embeddedStyles}
       </style>
-      ${mermaidStyles}
-      ${mermaidScript}
+      ${mermaidAssets}
     </head>
     <body>
       <div class="markdown-body">
         ${htmlContent}
       </div>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
-      <script>
-        document.addEventListener('DOMContentLoaded', () => {
-          // 代码高亮
-          document.querySelectorAll('pre code').forEach((block) => {
-            hljs.highlightElement(block);
-          });
-        });
-      </script>
+      ${highlightScript}
     </body>
     </html>
   `;
@@ -932,23 +961,7 @@ function resolveTheme(theme) {
 async function preprocessMarkdown(content) {
   // 检查是否是独立的 Mermaid 代码
   const isMermaidContent = (code) => {
-    // 检查是否包含 Mermaid 图表的常见语法元素
-    const mermaidPatterns = [
-      /^(graph|flowchart)\s+(TB|TD|BT|RL|LR)\b/m,  // 流程图
-      /^sequenceDiagram\b/m,                        // 序列图
-      /^classDiagram\b/m,                          // 类图
-      /^stateDiagram(-v2)?\b/m,                    // 状态图
-      /^erDiagram\b/m,                             // ER图
-      /^gantt\b/m,                                 // 甘特图
-      /^pie\b/m,                                   // 饼图
-      /^journey\b/m,                               // 用户旅程图
-      /^gitGraph\b/m,                              // Git图
-      /^mindmap\b/m,                               // 思维导图
-      /^timeline\b/m,                              // 时间线
-      /^C4Context\b/m                              // C4图
-    ];
-    
-    return mermaidPatterns.some(pattern => pattern.test(code));
+    return isMermaidCode(code);
   };
   
   // 如果是独立的 Mermaid 代码，直接将其包裹在 mermaid 类中

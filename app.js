@@ -52,7 +52,16 @@ app.use(bodyParser.urlencoded({ extended: true, limit: '15mb' }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
+function shouldRunDatabaseInit() {
+  const isProductionRuntime = config.env === 'production' || process.env.VERCEL_ENV === 'production';
+  return !isProductionRuntime || process.env.RUN_SCHEMA_INIT === 'true';
+}
+
 function ensureDatabase() {
+  if (!shouldRunDatabaseInit()) {
+    return Promise.resolve();
+  }
+
   if (!initPromise) {
     initPromise = pageRepository.init();
   }
