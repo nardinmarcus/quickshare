@@ -224,3 +224,73 @@ test('admin page detail returns 404 for missing pages', async () => {
 
   assert.equal(response.status, 404);
 });
+
+
+test('API management creates, documents, and deletes managed keys', async () => {
+  const cookie = await loginDashboard();
+  const pageResponse = await request('/admin/apis', {
+    headers: { Cookie: cookie }
+  });
+
+  assert.equal(pageResponse.status, 200);
+  assert.match(pageResponse.text, /API Management/);
+  assert.match(pageResponse.text, /POST<\/span>\s*<code>\/api\/v1\/share<\/code>/);
+  assert.doesNotMatch(pageResponse.text, /key_hash/);
+
+  const csrfMatch = pageResponse.text.match(/name="csrf-token" content="([^"]+)"/);
+  assert.ok(csrfMatch);
+
+  const createResponse = await request('/admin/apis/keys', {
+    method: 'POST',
+    headers: {
+      Cookie: cookie,
+      'Content-Type': 'application/json',
+      'X-CSRF-Token': csrfMatch[1]
+    },
+    body: JSON.stringify({ name: 'API management test' })
+  });
+
+  assert.equal(createResponse.status, 201);
+  const created = JSON.parse(createResponse.text).apiKey;
+  assert.match(created.secret, /^qs\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+  assert.equal(created.key_hash, undefined);
+
+  const apiResponse = await request('/api/v1/share', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-API-Key': created.secret
+    },
+    body: JSON.stringify({ htmlContent: '<h1>Managed route key</h1>' })
+  });
+
+  assert.equal(apiResponse.status, 200);
+
+  const listResponse = await request('/admin/apis', {
+    headers: { Cookie: cookie }
+  });
+  assert.match(listResponse.text, /API management test/);
+  assert.doesNotMatch(listResponse.text, new RegExp(created.secret));
+  assert.doesNotMatch(listResponse.text, /key_hash/);
+
+  const deleteResponse = await request('/admin/apis/keys/' + encodeURIComponent(created.id), {
+    method: 'DELETE',
+    headers: {
+      Cookie: cookie,
+      'X-CSRF-Token': csrfMatch[1]
+    }
+  });
+
+  assert.equal(deleteResponse.status, 200);
+
+  const revokedResponse = await request('/api/v1/share', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-API-Key': created.secret
+    },
+    body: JSON.stringify({ htmlContent: '<h1>Should not be created</h1>' })
+  });
+
+  assert.equal(revokedResponse.status, 401);
+});
