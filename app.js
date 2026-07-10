@@ -631,7 +631,11 @@ app.post('/admin/apis/keys', requireDashboardAdmin, requireDashboardCsrf, async 
     return res.status(201).json({
       success: true,
       apiKey: {
-        ...apiKey,
+        id: apiKey.id,
+        name: apiKey.name,
+        key_prefix: apiKey.key_prefix,
+        created_at: apiKey.created_at,
+        last_used_at: apiKey.last_used_at,
         secret: `qs.${id}.${secret}`
       }
     });
