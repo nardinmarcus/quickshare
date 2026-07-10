@@ -42,6 +42,7 @@ class PostgresPageRepository {
       ssl: process.env.POSTGRES_SSL === 'false' ? false : { rejectUnauthorized: false },
       max: Number.parseInt(process.env.POSTGRES_POOL_MAX || '3', 10)
     });
+    this.apiKeysInitPromise = null;
   }
 
   async init() {
@@ -80,17 +81,32 @@ class PostgresPageRepository {
     await this.pool.query('CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC)');
     await this.pool.query('CREATE INDEX IF NOT EXISTS idx_audit_logs_page_id ON audit_logs (page_id)');
 
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS api_keys (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        key_hash TEXT NOT NULL,
-        key_prefix TEXT NOT NULL,
-        created_at BIGINT NOT NULL,
-        last_used_at BIGINT
-      )
-    `);
-    await this.pool.query('CREATE INDEX IF NOT EXISTS idx_api_keys_created_at ON api_keys (created_at DESC)');
+    await this.ensureApiKeyTable();
+  }
+
+  async ensureApiKeyTable() {
+    if (!this.apiKeysInitPromise) {
+      this.apiKeysInitPromise = (async () => {
+        await this.pool.query(`
+          CREATE TABLE IF NOT EXISTS api_keys (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            key_hash TEXT NOT NULL,
+            key_prefix TEXT NOT NULL,
+            created_at BIGINT NOT NULL,
+            last_used_at BIGINT
+          )
+        `);
+        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_api_keys_created_at ON api_keys (created_at DESC)');
+      })();
+    }
+
+    try {
+      await this.apiKeysInitPromise;
+    } catch (error) {
+      this.apiKeysInitPromise = null;
+      throw error;
+    }
   }
 
   async create(page) {
@@ -397,6 +413,7 @@ class PostgresPageRepository {
   }
 
   async createApiKey(apiKey) {
+    await this.ensureApiKeyTable();
     const result = await this.pool.query(
       `
         INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at)
@@ -410,6 +427,7 @@ class PostgresPageRepository {
   }
 
   async listApiKeys() {
+    await this.ensureApiKeyTable();
     const result = await this.pool.query(
       `
         SELECT id, name, key_prefix, created_at, last_used_at
@@ -422,6 +440,7 @@ class PostgresPageRepository {
   }
 
   async getApiKeyById(id) {
+    await this.ensureApiKeyTable();
     const result = await this.pool.query(
       'SELECT id, name, key_hash, key_prefix, created_at, last_used_at FROM api_keys WHERE id = $1 LIMIT 1',
       [id]
@@ -431,11 +450,13 @@ class PostgresPageRepository {
   }
 
   async deleteApiKey(id) {
+    await this.ensureApiKeyTable();
     const result = await this.pool.query('DELETE FROM api_keys WHERE id = $1', [id]);
     return result.rowCount > 0;
   }
 
   async touchApiKey(id, usedAt = Date.now()) {
+    await this.ensureApiKeyTable();
     await this.pool.query('UPDATE api_keys SET last_used_at = $2 WHERE id = $1', [id, usedAt]);
   }
 
