@@ -33,6 +33,7 @@ class MemoryPageRepository {
     this.pages = new Map();
     this.auditLogs = [];
     this.auditIdCounter = 0;
+    this.apiKeys = new Map();
   }
 
   async init() {
@@ -62,6 +63,48 @@ class MemoryPageRepository {
     });
 
     return { id: page.id };
+  }
+
+  async createApiKey(apiKey) {
+    if (this.apiKeys.has(apiKey.id)) {
+      const error = new Error('UNIQUE constraint failed: api_keys.id');
+      error.code = 'SQLITE_CONSTRAINT';
+      throw error;
+    }
+
+    const record = {
+      id: apiKey.id,
+      name: apiKey.name,
+      key_hash: apiKey.keyHash,
+      key_prefix: apiKey.keyPrefix,
+      created_at: apiKey.createdAt,
+      last_used_at: null
+    };
+
+    this.apiKeys.set(record.id, record);
+    return { ...record };
+  }
+
+  async listApiKeys() {
+    return Array.from(this.apiKeys.values())
+      .sort((left, right) => Number(right.created_at) - Number(left.created_at))
+      .map(({ key_hash, ...apiKey }) => ({ ...apiKey }));
+  }
+
+  async getApiKeyById(id) {
+    return this.apiKeys.get(id) || null;
+  }
+
+  async deleteApiKey(id) {
+    return this.apiKeys.delete(id);
+  }
+
+  async touchApiKey(id, usedAt = Date.now()) {
+    const apiKey = this.apiKeys.get(id);
+
+    if (apiKey) {
+      apiKey.last_used_at = usedAt;
+    }
   }
 
   async getById(id) {
