@@ -1,0 +1,155 @@
+<%- include('partials/header', { title, page, csrfToken }) %>
+
+<div class="admin-container">
+  <header class="admin-header">
+    <div>
+      <p class="admin-kicker">QuickShare</p>
+      <h1 class="admin-title">API Management</h1>
+      <p class="admin-subtitle">Manage API access keys and use the code-backed Share API reference.</p>
+    </div>
+    <div class="admin-actions">
+      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/stats">
+        <i class="fas fa-chart-bar" aria-hidden="true"></i>
+        <span>Stats</span>
+      </a>
+      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/pages">
+        <i class="fas fa-table" aria-hidden="true"></i>
+        <span>Pages</span>
+      </a>
+      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/audit">
+        <i class="fas fa-history" aria-hidden="true"></i>
+        <span>Audit</span>
+      </a>
+    </div>
+  </header>
+
+  <section class="card api-key-create">
+    <div class="admin-content-header">
+      <div>
+        <h2>Access Keys</h2>
+        <p class="admin-muted">Create a separate key for every automation. The full secret is shown only once.</p>
+      </div>
+    </div>
+
+    <form id="api-key-form" class="api-key-form">
+      <label for="api-key-name">Key name</label>
+      <div class="api-key-form-row">
+        <input id="api-key-name" name="name" class="cyber-input" maxlength="80" required placeholder="e.g. Namoo QuickShare skill" autocomplete="off">
+        <button class="cyber-btn cyber-btn-primary" type="submit">
+          <i class="fas fa-key" aria-hidden="true"></i>
+          <span>Create key</span>
+        </button>
+      </div>
+    </form>
+
+    <div id="new-api-key-panel" class="api-key-secret-panel" hidden>
+      <div>
+        <strong>Copy this key now</strong>
+        <p>It will not be shown again after you leave this page.</p>
+      </div>
+      <div class="api-key-secret-row">
+        <code id="new-api-key-value"></code>
+        <button id="copy-api-key-btn" class="cyber-btn cyber-btn-secondary" type="button">Copy</button>
+      </div>
+    </div>
+  </section>
+
+  <% if (legacyApiKeyConfigured) { %>
+    <section class="card api-legacy-notice">
+      <i class="fas fa-info-circle" aria-hidden="true"></i>
+      <p><strong>Legacy environment key active.</strong> <code>SHARE_API_KEY</code> continues to work for compatibility, but it cannot be viewed or revoked here.</p>
+    </section>
+  <% } %>
+
+  <section class="card admin-card">
+    <div class="admin-content-header">
+      <div>
+        <h2>Managed Keys</h2>
+        <p class="admin-muted"><%= apiKeys.length %> active key<%= apiKeys.length === 1 ? '' : 's' %></p>
+      </div>
+    </div>
+
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Prefix</th>
+            <th>Created</th>
+            <th>Last used</th>
+            <th class="admin-actions-col">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="api-keys-body">
+          <% if (apiKeys.length === 0) { %>
+            <tr id="api-keys-empty">
+              <td colspan="5" class="api-key-empty">No managed keys yet.</td>
+            </tr>
+          <% } %>
+          <% apiKeys.forEach((apiKey) => { %>
+            <tr data-api-key-id="<%= apiKey.id %>">
+              <td><strong><%= apiKey.name %></strong></td>
+              <td><code class="api-key-prefix"><%= apiKey.key_prefix %></code></td>
+              <td><time datetime="<%= new Date(Number(apiKey.created_at)).toISOString() %>"><%= new Date(Number(apiKey.created_at)).toLocaleString('zh-CN', { hour12: false }) %></time></td>
+              <td>
+                <% if (apiKey.last_used_at) { %>
+                  <time datetime="<%= new Date(Number(apiKey.last_used_at)).toISOString() %>"><%= new Date(Number(apiKey.last_used_at)).toLocaleString('zh-CN', { hour12: false }) %></time>
+                <% } else { %>
+                  <span class="admin-muted">Never</span>
+                <% } %>
+              </td>
+              <td>
+                <button type="button" class="admin-delete-btn api-key-delete-btn" data-api-key-id="<%= apiKey.id %>" data-api-key-name="<%= apiKey.name %>">
+                  <i class="fas fa-trash-alt" aria-hidden="true"></i>
+                  <span>Delete</span>
+                </button>
+              </td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="api-docs-grid">
+    <article class="card api-doc-card">
+      <div class="api-doc-heading">
+        <span class="api-method">POST</span>
+        <code>/api/v1/share</code>
+      </div>
+      <p>Create a QuickShare page from HTML, Markdown, SVG, or Mermaid content.</p>
+      <h3>Authentication</h3>
+      <p>Send a managed key in the <code>X-API-Key</code> header. The existing <code>SHARE_API_KEY</code> remains supported when configured.</p>
+      <pre><code>curl -s -X POST "$QUICKSHARE_URL/api/v1/share" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $QUICKSHARE_API_KEY" \
+  -d '{
+    "htmlContent": "&lt;h1&gt;Hello&lt;/h1&gt;",
+    "codeType": "html",
+    "title": "Hello"
+  }'</code></pre>
+    </article>
+
+    <article class="card api-doc-card">
+      <h2>Request body</h2>
+      <dl class="api-field-list">
+        <div><dt><code>htmlContent</code> <span>required</span></dt><dd>Content to share.</dd></div>
+        <div><dt><code>codeType</code></dt><dd><code>html</code>, <code>markdown</code>, <code>svg</code>, or <code>mermaid</code>. Auto-detected when omitted.</dd></div>
+        <div><dt><code>title</code> / <code>description</code></dt><dd>Optional page metadata.</dd></div>
+        <div><dt><code>isProtected</code></dt><dd>When true, QuickShare creates a page password and returns it once.</dd></div>
+      </dl>
+      <h2>Response</h2>
+      <pre><code>{
+  "success": true,
+  "urlId": "…",
+  "url": "https://…/view/…",
+  "codeType": "html",
+  "isProtected": false
+}</code></pre>
+    </article>
+  </section>
+</div>
+
+<script src="/js/admin.js"></script>
+<script src="/js/admin-apis.js"></script>
+<%- include('partials/footer', { page }) %>
