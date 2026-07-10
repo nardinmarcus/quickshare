@@ -82,7 +82,13 @@ class MemoryPageRepository {
     };
 
     this.apiKeys.set(record.id, record);
-    return { ...record };
+    return {
+      id: record.id,
+      name: record.name,
+      key_prefix: record.key_prefix,
+      created_at: record.created_at,
+      last_used_at: record.last_used_at
+    };
   }
 
   async listApiKeys() {
