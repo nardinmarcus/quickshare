@@ -31,7 +31,7 @@ const DASHBOARD_ADMIN_COOKIE = 'dashboard_admin_session';
 const ADMIN_TTL_MS = 24 * 60 * 60 * 1000;
 const PAGE_ACCESS_TTL_MS = 24 * 60 * 60 * 1000;
 const VALID_CODE_TYPES = new Set(['html', 'markdown', 'svg', 'mermaid']);
-const timingSafeEqual = require('crypto').timingSafeEqual;
+const { randomBytes, timingSafeEqual } = require('crypto');
 
 const app = express();
 const pageRepository = createPageRepository();
@@ -163,23 +163,70 @@ function requireCsrf(req, res, next) {
   return next();
 }
 
-function requireApiKey(req, res, next) {
-  if (!config.shareApiKey) {
-    return res.status(503).json({ success: false, error: 'API key not configured' });
+function requireDashboardCsrf(req, res, next) {
+  if (!config.authEnabled) {
+    return next();
   }
 
+  const sessionToken = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE];
+  const csrfToken = req.get('x-csrf-token') || req.body?._csrf;
+
+  if (!verifyCsrfToken(sessionToken, csrfToken)) {
+    return res.status(403).json({
+      success: false,
+      error: 'Invalid CSRF token'
+    });
+  }
+
+  return next();
+}
+
+async function requireApiKey(req, res, next) {
   const key = req.get('x-api-key');
+
   if (!key) {
     return res.status(401).json({ success: false, error: 'Missing X-API-Key header' });
   }
 
-  const expected = Buffer.from(config.shareApiKey);
-  const provided = Buffer.from(key);
-  if (expected.length !== provided.length || !timingSafeEqual(expected, provided)) {
+  if (config.shareApiKey) {
+    const expected = Buffer.from(config.shareApiKey);
+    const provided = Buffer.from(key);
+
+    if (expected.length === provided.length && timingSafeEqual(expected, provided)) {
+      return next();
+    }
+  }
+
+  const match = /^qs\.([A-Za-z0-9_-]{1,64})\.([A-Za-z0-9_-]{20,})$/.exec(key);
+
+  if (!match) {
     return res.status(401).json({ success: false, error: 'Invalid API key' });
   }
 
-  return next();
+  try {
+    await ensureDatabase();
+
+    const apiKey = await pageRepository.getApiKeyById(match[1]);
+    const isValid = apiKey && await verifySecret(match[2], apiKey.key_hash);
+
+    if (!isValid) {
+      return res.status(401).json({ success: false, error: 'Invalid API key' });
+    }
+
+    req.managedApiKey = {
+      id: apiKey.id,
+      name: apiKey.name
+    };
+
+    pageRepository.touchApiKey(apiKey.id).catch((error) => {
+      console.error('API key usage update failed:', error);
+    });
+
+    return next();
+  } catch (error) {
+    console.error('API key validation failed:', error);
+    return res.status(503).json({ success: false, error: 'API authentication unavailable' });
+  }
 }
 
 async function verifyAdminPassword(password) {
@@ -525,6 +572,110 @@ app.get('/admin', (req, res) => {
   }
 
   return res.redirect('/admin/login');
+});
+
+app.get('/admin/apis', requireDashboardAdmin, async (req, res) => {
+  try {
+    await ensureDatabase();
+
+    const apiKeys = await pageRepository.listApiKeys();
+    const sessionToken = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE] || '';
+
+    return res.render('admin-apis', {
+      title: 'QuickShare | API Management',
+      page: 'admin-apis',
+      apiKeys,
+      legacyApiKeyConfigured: Boolean(config.shareApiKey),
+      csrfToken: config.authEnabled ? createCsrfToken(sessionToken) : ''
+    });
+  } catch (error) {
+    console.error('API management page failed:', error);
+    return res.status(500).render('error', {
+      title: 'Server Error',
+      page: 'error-page',
+      message: 'Unable to load API management'
+    });
+  }
+});
+
+app.post('/admin/apis/keys', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
+  try {
+    await ensureDatabase();
+
+    const name = String(req.body?.name || '').trim();
+
+    if (!name || name.length > 80) {
+      return res.status(400).json({
+        success: false,
+        error: 'Key name must be between 1 and 80 characters'
+      });
+    }
+
+    const id = generateId(12);
+    const secret = randomBytes(32).toString('base64url');
+    const apiKey = await pageRepository.createApiKey({
+      id,
+      name,
+      keyHash: await hashSecret(secret),
+      keyPrefix: `qs.${id.slice(0, 8)}…`,
+      createdAt: Date.now()
+    });
+
+    pageRepository.createAuditLog({
+      action: 'api_key.create',
+      pageId: null,
+      details: JSON.stringify({ apiKeyId: apiKey.id, name: apiKey.name }),
+      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+    }).catch((err) => { console.error('Audit log failed:', err); });
+
+    return res.status(201).json({
+      success: true,
+      apiKey: {
+        id: apiKey.id,
+        name: apiKey.name,
+        key_prefix: apiKey.key_prefix,
+        created_at: apiKey.created_at,
+        last_used_at: apiKey.last_used_at,
+        secret: `qs.${id}.${secret}`
+      }
+    });
+  } catch (error) {
+    console.error('Create API key failed:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to create API key'
+    });
+  }
+});
+
+app.delete('/admin/apis/keys/:id', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
+  try {
+    await ensureDatabase();
+
+    const deleted = await pageRepository.deleteApiKey(req.params.id);
+
+    if (!deleted) {
+      return res.status(404).json({
+        success: false,
+        error: 'API key not found'
+      });
+    }
+
+    pageRepository.createAuditLog({
+      action: 'api_key.delete',
+      pageId: null,
+      details: JSON.stringify({ apiKeyId: req.params.id }),
+      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+    }).catch((err) => { console.error('Audit log failed:', err); });
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Delete API key failed:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to delete API key'
+    });
+  }
 });
 
 app.get('/admin/pages/export', requireDashboardAdmin, async (req, res) => {

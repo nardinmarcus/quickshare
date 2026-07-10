@@ -79,6 +79,18 @@ class PostgresPageRepository {
     `);
     await this.pool.query('CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC)');
     await this.pool.query('CREATE INDEX IF NOT EXISTS idx_audit_logs_page_id ON audit_logs (page_id)');
+
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS api_keys (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        key_hash TEXT NOT NULL,
+        key_prefix TEXT NOT NULL,
+        created_at BIGINT NOT NULL,
+        last_used_at BIGINT
+      )
+    `);
+    await this.pool.query('CREATE INDEX IF NOT EXISTS idx_api_keys_created_at ON api_keys (created_at DESC)');
   }
 
   async create(page) {
@@ -382,6 +394,49 @@ class PostgresPageRepository {
     if (!Array.isArray(ids) || ids.length === 0) return 0;
     const result = await this.pool.query('DELETE FROM pages WHERE id = ANY($1)', [ids]);
     return result.rowCount;
+  }
+
+  async createApiKey(apiKey) {
+    const result = await this.pool.query(
+      `
+        INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, name, key_prefix, created_at, last_used_at
+      `,
+      [apiKey.id, apiKey.name, apiKey.keyHash, apiKey.keyPrefix, apiKey.createdAt]
+    );
+
+    return result.rows[0];
+  }
+
+  async listApiKeys() {
+    const result = await this.pool.query(
+      `
+        SELECT id, name, key_prefix, created_at, last_used_at
+        FROM api_keys
+        ORDER BY created_at DESC
+      `
+    );
+
+    return result.rows;
+  }
+
+  async getApiKeyById(id) {
+    const result = await this.pool.query(
+      'SELECT id, name, key_hash, key_prefix, created_at, last_used_at FROM api_keys WHERE id = $1 LIMIT 1',
+      [id]
+    );
+
+    return result.rows[0] || null;
+  }
+
+  async deleteApiKey(id) {
+    const result = await this.pool.query('DELETE FROM api_keys WHERE id = $1', [id]);
+    return result.rowCount > 0;
+  }
+
+  async touchApiKey(id, usedAt = Date.now()) {
+    await this.pool.query('UPDATE api_keys SET last_used_at = $2 WHERE id = $1', [id, usedAt]);
   }
 
   async createAuditLog({ action, pageId, details, ip }) {

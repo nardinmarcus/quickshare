@@ -3602,3 +3602,161 @@ body:hover::-webkit-scrollbar,
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.15);
 }
+
+/* ===== API management ===== */
+.api-key-create {
+  gap: 1rem;
+}
+
+.api-key-form {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.api-key-form label {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.api-key-form-row {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.api-key-form-row .cyber-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.api-key-secret-panel {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid rgba(var(--primary-rgb), 0.45);
+  border-radius: 10px;
+  background: rgba(var(--primary-rgb), 0.08);
+}
+
+.api-key-secret-panel p,
+.api-legacy-notice p {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.api-key-secret-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.api-key-secret-row code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 0.75rem;
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.api-legacy-notice {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.api-legacy-notice > i {
+  color: var(--primary);
+  margin-top: 0.25rem;
+}
+
+.api-key-prefix {
+  color: var(--text-secondary);
+}
+
+.api-key-empty {
+  padding: 2rem !important;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.api-docs-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.api-doc-card {
+  gap: 1rem;
+}
+
+.api-doc-card h2,
+.api-doc-card h3 {
+  font-size: 1rem;
+}
+
+.api-doc-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-family: 'Fira Code', monospace;
+  font-size: 0.95rem;
+}
+
+.api-method {
+  padding: 0.25rem 0.45rem;
+  border-radius: 5px;
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.api-doc-card > p,
+.api-field-list dd {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.api-doc-card pre {
+  overflow-x: auto;
+  padding: 1rem;
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: 'Fira Code', monospace;
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.api-field-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.api-field-list > div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.api-field-list dt {
+  font-weight: 600;
+}
+
+.api-field-list dt span {
+  color: #f59e0b;
+  font-size: 0.75rem;
+}
+
+@media (max-width: 720px) {
+  .api-docs-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .api-key-form-row,
+  .api-key-secret-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
