@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { MemoryPageRepository } = require('../models/memory-pages');
+const { PostgresPageRepository } = require('../models/postgres-pages');
 
 test('admin page listing is sorted by creation time and paginated', async () => {
   const repository = new MemoryPageRepository();
@@ -75,4 +76,33 @@ test('admin stats aggregate totals, protection, types, and recent days', async (
   ]);
   assert.equal(stats.recentDays.length, 14);
   assert.equal(stats.recentDays.at(-1).count, 3);
+});
+
+
+test('Postgres API key methods create their schema once on first use', async () => {
+  const repository = Object.create(PostgresPageRepository.prototype);
+  const queries = [];
+
+  repository.pool = {
+    async query(sql) {
+      queries.push(sql);
+
+      if (sql.includes('SELECT id, name, key_prefix')) {
+        return { rows: [] };
+      }
+
+      return { rows: [] };
+    }
+  };
+  repository.apiKeysInitPromise = null;
+
+  const [first, second] = await Promise.all([
+    repository.listApiKeys(),
+    repository.listApiKeys()
+  ]);
+
+  assert.deepEqual(first, []);
+  assert.deepEqual(second, []);
+  assert.equal(queries.filter(sql => sql.includes('CREATE TABLE IF NOT EXISTS api_keys')).length, 1);
+  assert.equal(queries.filter(sql => sql.includes('CREATE INDEX IF NOT EXISTS idx_api_keys_created_at')).length, 1);
 });
