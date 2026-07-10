@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('http');
+const { hashSecret } = require('../utils/security');
 
 process.env.NODE_ENV = 'test';
 process.env.AUTH_ENABLED = 'false';
@@ -144,4 +145,28 @@ test('POST /api/v1/share supports password protection', async () => {
   assert.equal(res.body.isProtected, true);
   assert.ok(res.body.password);
   assert.ok(/^\d{6}$/.test(res.body.password));
+});
+
+
+test('POST /api/v1/share accepts a managed API key', async () => {
+  const id = 'managed-api-key-test';
+  const secret = 'managed-api-key-secret-12345';
+
+  await app.locals.pageRepository.createApiKey({
+    id,
+    name: 'Managed API test',
+    keyHash: await hashSecret(secret),
+    keyPrefix: 'qs.managed-…',
+    createdAt: Date.now()
+  });
+
+  const res = await post('/api/v1/share', {
+    htmlContent: '<h1>Managed key</h1>'
+  }, { 'X-API-Key': `qs.${id}.${secret}` });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.success, true);
+
+  const apiKey = await app.locals.pageRepository.getApiKeyById(id);
+  assert.ok(apiKey.last_used_at);
 });
