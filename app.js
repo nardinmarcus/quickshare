@@ -6,6 +6,7 @@ const bodyParser = require('body-parser');
 const morgan = require('morgan');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const { performance } = require('node:perf_hooks');
 
 const config = require('./config');
 const { createPageRepository } = require('./models/pageRepository');
@@ -34,6 +35,7 @@ const ADMIN_TTL_MS = 24 * 60 * 60 * 1000;
 const PAGE_ACCESS_TTL_MS = 24 * 60 * 60 * 1000;
 const VALID_CODE_TYPES = new Set(['html', 'markdown', 'svg', 'mermaid']);
 const { randomBytes, timingSafeEqual } = require('crypto');
+let nextViewRequestIsColdStart = true;
 
 const app = express();
 const pageRepository = createPageRepository();
@@ -43,13 +45,25 @@ const parseShareJson = bodyParser.json({ limit: config.shareBodyLimit });
 
 app.locals.config = config;
 app.locals.pageRepository = pageRepository;
+app.locals.requestLogStream = process.stdout;
+app.locals.viewPerformanceLogger = config.env === 'test' ? { info() {} } : console;
 
 app.set('views', path.join(__dirname, 'views'));
 app.set('view engine', 'ejs');
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
 
-app.use(morgan(config.logLevel));
+morgan.token('url', safeRequestLogUrl);
+morgan.token('referrer', safeRequestLogReferrer);
+app.use(morgan(config.logLevel, {
+  skip: shouldSkipGenericRequestLog,
+  stream: {
+    write(line) {
+      const stream = app.locals.requestLogStream || process.stdout;
+      stream.write(line);
+    }
+  }
+}));
 app.use(cors({ origin: false }));
 app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
@@ -68,6 +82,126 @@ function setPrivateNoStore(res) {
 function privateNoStore(req, res, next) {
   setPrivateNoStore(res);
   return next();
+}
+
+function exactViewRoute(pathname) {
+  const match = /^\/view\/[^/]+(?:\/(password|view-event))?\/?$/i.exec(pathname);
+
+  if (!match) {
+    return null;
+  }
+
+  return match[1] ? `/view/:id/${match[1]}` : '/view/:id';
+}
+
+function safeViewLogPath(pathname) {
+  return exactViewRoute(pathname)
+    || (/^\/view\/[^/]+(?:\/.*)?$/i.test(pathname) ? '/view/:id/*' : null);
+}
+
+function safeRequestLogUrl(req) {
+  return safeViewLogPath(req.path) || req.originalUrl || req.url;
+}
+
+function safeRequestLogReferrer(req) {
+  const value = req.get('referer') || req.get('referrer');
+
+  if (!value) {
+    return '-';
+  }
+
+  try {
+    const referrer = new URL(value, 'http://localhost');
+    const safeRoute = safeViewLogPath(referrer.pathname);
+
+    if (safeRoute) {
+      return safeRoute;
+    }
+
+    referrer.search = '';
+    referrer.hash = '';
+    return referrer.toString();
+  } catch (error) {
+    return '-';
+  }
+}
+
+function shouldSkipGenericRequestLog(req) {
+  return ['GET', 'HEAD'].includes(req.method) && exactViewRoute(req.path) === '/view/:id';
+}
+
+function roundDuration(value) {
+  return Math.max(0, Number(value.toFixed(3)));
+}
+
+function responseByteLength(res) {
+  const header = res.getHeader('content-length');
+  const value = Array.isArray(header) ? header[0] : header;
+  const parsed = Number.parseInt(String(value || '0'), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function beginViewPerformance(req, res) {
+  const metrics = {
+    startedAt: performance.now(),
+    dbMs: 0,
+    renderMs: 0,
+    contentType: null,
+    protected: null,
+    outcome: 'unknown',
+    phase: 'routing',
+    coldStart: nextViewRequestIsColdStart
+  };
+  let finalized = false;
+
+  nextViewRequestIsColdStart = false;
+
+  function finalize(closedEarly = false) {
+    if (finalized) {
+      return;
+    }
+
+    finalized = true;
+
+    if (closedEarly) {
+      metrics.outcome = 'client_closed';
+    }
+
+    const event = {
+      event: 'quickshare.view',
+      route: '/view/:id',
+      method: req.method,
+      outcome: metrics.outcome,
+      status: res.statusCode,
+      total_ms: roundDuration(performance.now() - metrics.startedAt),
+      db_ms: roundDuration(metrics.dbMs),
+      render_ms: roundDuration(metrics.renderMs),
+      response_bytes: responseByteLength(res),
+      content_type: metrics.contentType,
+      protected: metrics.protected,
+      cold_start: metrics.coldStart
+    };
+
+    try {
+      (app.locals.viewPerformanceLogger || console).info(JSON.stringify(event));
+    } catch (error) {
+      // Observability must never change the response path.
+    }
+  }
+
+  res.once('finish', () => finalize(false));
+  res.once('close', () => finalize(!res.writableFinished));
+  return metrics;
+}
+
+function safeContentType(value) {
+  return VALID_CODE_TYPES.has(value) ? value : 'unknown';
+}
+
+function safeErrorCode(error) {
+  return typeof error?.code === 'string' && /^[A-Z0-9_]{1,32}$/.test(error.code)
+    ? error.code
+    : 'UNKNOWN';
 }
 
 function getAdminSession(req) {
@@ -1413,10 +1547,23 @@ app.post('/view/:id/password', privateNoStore, parseSmallJson, async (req, res) 
 });
 
 app.get('/view/:id', async (req, res) => {
+  const metrics = beginViewPerformance(req, res);
+
   try {
-    const publicPage = await pageRepository.getPublicById(req.params.id, Date.now());
+    metrics.phase = 'database';
+    const databaseStartedAt = performance.now();
+    let publicPage;
+
+    try {
+      publicPage = await pageRepository.getPublicById(req.params.id, Date.now());
+    } finally {
+      metrics.dbMs = performance.now() - databaseStartedAt;
+    }
+
+    metrics.phase = 'routing';
 
     if (!publicPage) {
+      metrics.outcome = 'not_found';
       return res.status(404).render('error', {
         title: '页面未找到',
         page: 'error-page',
@@ -1424,7 +1571,12 @@ app.get('/view/:id', async (req, res) => {
       });
     }
 
+    const { page } = publicPage;
+    metrics.contentType = safeContentType(page.code_type);
+    metrics.protected = page.is_protected === 1;
+
     if (publicPage.expired) {
+      metrics.outcome = 'expired';
       return res.status(410).render('error', {
         title: '分享已失效',
         page: 'error-page',
@@ -1432,13 +1584,12 @@ app.get('/view/:id', async (req, res) => {
       });
     }
 
-    const { page } = publicPage;
-
     if (page.is_protected === 1) {
       setPrivateNoStore(res);
     }
 
     if (page.is_protected === 1 && !hasPageAccess(req, req.params.id)) {
+      metrics.outcome = 'password_required';
       return res.render('password', {
         title: 'QuickShare | 密码保护',
         page: 'password-page',
@@ -1447,11 +1598,23 @@ app.get('/view/:id', async (req, res) => {
       });
     }
 
-    const prepared = await prepareSandboxContent(
-      page.html_content,
-      page.code_type,
-      page.markdown_theme
-    );
+    metrics.phase = 'render';
+    const renderStartedAt = performance.now();
+    let prepared;
+
+    try {
+      prepared = await prepareSandboxContent(
+        page.html_content,
+        page.code_type,
+        page.markdown_theme
+      );
+    } finally {
+      metrics.renderMs = performance.now() - renderStartedAt;
+    }
+
+    metrics.phase = 'response';
+    metrics.contentType = safeContentType(prepared.contentType);
+    metrics.outcome = 'served';
 
     // Track view count (fire-and-forget; don't block response)
     pageRepository.incrementViewCount(req.params.id).catch(() => {});
@@ -1463,7 +1626,15 @@ app.get('/view/:id', async (req, res) => {
       pageUrl
     }));
   } catch (error) {
-    console.error('View page failed:', error);
+    metrics.outcome = metrics.phase === 'database'
+      ? 'database_error'
+      : metrics.phase === 'render'
+        ? 'render_error'
+        : 'server_error';
+    console.error('View page failed:', {
+      name: error?.name || 'Error',
+      code: safeErrorCode(error)
+    });
     return res.status(500).render('error', {
       title: '服务器错误',
       page: 'error-page',

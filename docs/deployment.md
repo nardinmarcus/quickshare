@@ -75,6 +75,13 @@ npm run hash-password -- "your-admin-password"
 - 在 Vercel Firewall 的 Traffic/Security Events 中观察 `429` 和正常请求量；如出现正常用户误伤，先基于数据调整阈值，不要增加应用进程内的内存计数器。
 - 回滚时可独立禁用或删除该 Firewall 规则；应用请求上限和响应头不依赖它。
 
+### `/view` 性能日志
+
+- 每次 `GET /view/:id` 只输出一条 JSON 事件，`event` 固定为 `quickshare.view`，`route` 固定为 `/view/:id`；HEAD 会记录真实 `method=HEAD`，统计 GET 基线时按 `method=GET` 过滤。
+- 可聚合字段包括 `total_ms`、`db_ms`、`render_ms`、`response_bytes`、`content_type`、`protected`、`outcome`、`status` 和 `cold_start`。
+- `cold_start` 只表示当前函数实例收到的第一条 `/view` 请求；p50 / p95 必须在日志平台按时间窗口聚合，应用进程不保存统计结果。
+- 日志不包含分享 ID、query、cookie、标题、正文、密码或完整错误对象。动态密码路由在普通访问日志中固定显示为 `/view/:id/password`，Referer 中的动态分享路径也会改写为固定模板。
+
 ### 本地预检
 
 ```bash
