@@ -30,3 +30,9 @@
 - SQL placeholders such as `$1` inside a double-quoted shell command must be escaped or the shell will remove them before Node receives the query.
 - Prefer a script file or an argument-safe invocation for multi-line verification logic; if an inline command is unavoidable, verify shell-sensitive characters before execution.
 - A failed read-only syntax query is not evidence. Fix the invocation and repeat the same observable checks before recording results.
+
+## 2026-07-14 — Treat previews as cancellable derived snapshots
+
+- A non-persistent preview is still asynchronous state: publishing, clearing, continuing, or editing must abort or invalidate any older response.
+- Mark a published receipt as the previous result as soon as the draft changes, so copy/open actions never imply that the current editor contents are already live.
+- Keep the preview sandbox stricter than the published viewer when full form, popup, modal, and download behavior is not required for pre-publish inspection.

@@ -15,11 +15,12 @@
         </div>
 
         <div id="code-input-container" role="tabpanel">
+          <label for="html-input" class="content-label">分享内容</label>
           <div id="code-type-indicator" class="code-type-indicator html-type">
-            <i class="fas fa-code"></i>
+            <i class="fas fa-code" aria-hidden="true"></i>
             <span id="code-type-text">HTML</span>
           </div>
-          <textarea id="html-input" class="cyber-input" placeholder="在这里粘贴你的 HTML / Markdown / SVG / Mermaid 代码..." aria-label="代码输入区域"></textarea>
+          <textarea id="html-input" class="cyber-input" placeholder="在这里粘贴你的 HTML / Markdown / SVG / Mermaid 代码..."></textarea>
         </div>
 
         <div class="hidden">
@@ -121,35 +122,88 @@
             <button id="clear-button" class="cyber-btn cyber-btn-secondary tooltip micro-interaction" data-tooltip="清空内容" aria-label="清空内容">
               <i class="fas fa-eraser mr-1" aria-hidden="true"></i>清除
             </button>
-            <button id="generate-button" class="cyber-btn cyber-btn-primary tooltip micro-interaction" data-tooltip="发布并生成链接" aria-label="发布并生成链接">
+            <button id="prepublish-preview-button" class="cyber-btn cyber-btn-secondary micro-interaction" type="button" aria-busy="false">
+              <i class="fas fa-eye mr-1" aria-hidden="true"></i>安全预览
+            </button>
+            <button id="generate-button" class="cyber-btn cyber-btn-primary tooltip micro-interaction" data-tooltip="发布并生成链接" aria-label="发布并生成链接" aria-busy="false">
               <i class="fas fa-link mr-1" aria-hidden="true"></i>发布并生成链接
             </button>
           </div>
         </div>
+
+        <p id="publish-status" class="publish-status" role="status" aria-live="polite" aria-atomic="true" data-state="idle">准备发布</p>
+        <p id="publish-error" class="publish-error hidden" role="alert" tabindex="-1"></p>
       </div>
     </div>
 
-    <div id="result-section" class="card result-card hidden" aria-live="polite">
-      <h3 class="section-title">链接已生成</h3>
-      <div class="result-container">
-        <div id="result-url" class="result-url" tabindex="0"></div>
-        <div class="action-buttons">
-          <button id="preview-button" class="action-btn preview-btn tooltip micro-interaction" data-tooltip="在新窗口预览" aria-label="在新窗口预览">
-            <i class="fas fa-external-link-alt" aria-hidden="true"></i>
-          </button>
-          <button id="copy-button" class="action-btn tooltip micro-interaction" data-tooltip="复制链接" aria-label="复制链接">
-            <i class="fas fa-copy" aria-hidden="true"></i>
-          </button>
+    <section id="publish-preview" class="card publish-preview" aria-labelledby="publish-preview-title" hidden>
+      <div class="publish-preview-header">
+        <div>
+          <p class="result-eyebrow">发布前检查</p>
+          <h2 id="publish-preview-title" class="section-title" tabindex="-1">安全预览</h2>
         </div>
+        <button id="close-publish-preview" type="button" class="action-btn action-btn-neutral" aria-label="关闭预览">
+          <i class="fas fa-times" aria-hidden="true"></i>
+        </button>
       </div>
+      <iframe
+        id="publish-preview-frame"
+        class="publish-preview-frame"
+        title="待发布内容预览"
+        sandbox="allow-scripts"
+        referrerpolicy="no-referrer"
+      ></iframe>
+    </section>
+
+    <section id="result-section" class="card result-card hidden" aria-labelledby="result-title">
+      <div class="result-heading">
+        <div>
+          <p id="result-eyebrow" class="result-eyebrow">发布回执</p>
+          <h2 id="result-title" class="section-title" tabindex="-1">已发布</h2>
+          <p id="result-page-title" class="result-page-title"></p>
+        </div>
+        <span class="result-success-mark" aria-hidden="true"><i class="fas fa-check"></i></span>
+      </div>
+
+      <div class="result-container">
+        <a id="result-url" class="result-url" href="#" target="_blank" rel="noopener noreferrer"></a>
+      </div>
+
+      <dl class="result-summary" aria-label="分享设置摘要">
+        <div>
+          <dt>内容类型</dt>
+          <dd id="result-type">—</dd>
+        </div>
+        <div>
+          <dt>访问方式</dt>
+          <dd id="result-access">—</dd>
+        </div>
+        <div>
+          <dt>有效期</dt>
+          <dd id="result-expiry">—</dd>
+        </div>
+      </dl>
 
       <div id="result-password-row" class="result-password-row hidden">
         <span class="password-label">访问密码：</span>
-        <code id="generated-password" class="generated-password" title="点击复制密码"></code>
-        <button type="button" id="copy-password-link" class="copy-password-link">复制密码和网址</button>
+        <code id="generated-password" class="generated-password"></code>
+        <button type="button" id="copy-password-button" class="result-text-button">复制密码</button>
       </div>
 
-    </div>
+      <div class="result-actions">
+        <button id="open-share-button" type="button" class="cyber-btn cyber-btn-primary">
+          <i class="fas fa-external-link-alt mr-1" aria-hidden="true"></i>打开分享页
+        </button>
+        <button id="copy-button" type="button" class="cyber-btn cyber-btn-secondary">
+          <i class="fas fa-copy mr-1" aria-hidden="true"></i>复制链接
+        </button>
+        <button type="button" id="copy-password-link" class="cyber-btn cyber-btn-secondary hidden">
+          <i class="fas fa-key mr-1" aria-hidden="true"></i>复制密码和链接
+        </button>
+        <button id="continue-button" type="button" class="cyber-btn cyber-btn-secondary"><i class="fas fa-plus mr-1" aria-hidden="true"></i>继续创建</button>
+      </div>
+      <textarea id="manual-copy-output" class="manual-copy-output" aria-label="待手动复制的内容" readonly hidden></textarea>
+    </section>
   </div>
 
   <footer class="app-footer">

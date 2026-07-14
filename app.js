@@ -522,6 +522,24 @@ function renderSandboxedDocument(renderedContent, contentType, { title, descript
   `;
 }
 
+async function prepareSandboxContent(rawContent, requestedCodeType, markdownTheme) {
+  let processedContent = rawContent;
+  let contentType = normalizeCodeType(rawContent, requestedCodeType);
+  const codeBlocks = extractCodeBlocks(rawContent);
+
+  if (codeBlocks.length === 1 && codeBlocks[0].content.length > rawContent.length * 0.7) {
+    processedContent = codeBlocks[0].content;
+    contentType = VALID_CODE_TYPES.has(codeBlocks[0].type) ? codeBlocks[0].type : 'html';
+  }
+
+  const renderedContent = await renderContent(processedContent, contentType, markdownTheme);
+
+  return {
+    contentType,
+    renderedContent: injectCodeTypeMeta(renderedContent, contentType)
+  };
+}
+
 function parsePagination(query) {
   const page = Number.parseInt(query.page || '1', 10);
   const safePage = Number.isFinite(page) && page > 0 ? page : 1;
@@ -1218,6 +1236,36 @@ app.post('/api/pages/create', privateNoStore, requireApiAdmin, parseShareJson, r
   }
 });
 
+app.post('/api/pages/preview', privateNoStore, requireApiAdmin, parseShareJson, requireCsrf, async (req, res) => {
+  try {
+    const { htmlContent, codeType, markdownTheme, title, description } = req.body || {};
+
+    if (typeof htmlContent !== 'string' || !htmlContent.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: '请提供内容'
+      });
+    }
+
+    const prepared = await prepareSandboxContent(htmlContent, codeType, markdownTheme);
+
+    return res.json({
+      success: true,
+      codeType: prepared.contentType,
+      document: renderSandboxedDocument(prepared.renderedContent, prepared.contentType, {
+        title: title ? String(title).trim() : null,
+        description: description ? String(description).trim() : null
+      })
+    });
+  } catch (error) {
+    console.error('Preview page failed:', error);
+    return res.status(500).json({
+      success: false,
+      error: '预览生成失败，请稍后重试'
+    });
+  }
+});
+
 app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (req, res) => {
   try {
     await ensureDatabase();
@@ -1458,31 +1506,17 @@ app.get('/view/:id', async (req, res) => {
       });
     }
 
-    let processedContent = page.html_content;
-    let contentType = page.code_type;
-    const codeBlocks = extractCodeBlocks(page.html_content);
-
-    if (!VALID_CODE_TYPES.has(contentType)) {
-      contentType = normalizeCodeType(page.html_content, contentType);
-    }
-
-    if (codeBlocks.length === 1 && codeBlocks[0].content.length > page.html_content.length * 0.7) {
-      processedContent = codeBlocks[0].content;
-      contentType = codeBlocks[0].type;
-    }
-
-    if (!VALID_CODE_TYPES.has(contentType)) {
-      contentType = 'html';
-    }
-
-    const renderedContent = await renderContent(processedContent, contentType, page.markdown_theme);
-    const contentWithTypeInfo = injectCodeTypeMeta(renderedContent, contentType);
+    const prepared = await prepareSandboxContent(
+      page.html_content,
+      page.code_type,
+      page.markdown_theme
+    );
 
     // Track view count (fire-and-forget; don't block response)
     pageRepository.incrementViewCount(req.params.id).catch(() => {});
 
     const pageUrl = `${req.protocol}://${req.get('host')}/view/${req.params.id}`;
-    return res.send(renderSandboxedDocument(contentWithTypeInfo, contentType, {
+    return res.send(renderSandboxedDocument(prepared.renderedContent, prepared.contentType, {
       title: page.title,
       description: page.description,
       pageUrl

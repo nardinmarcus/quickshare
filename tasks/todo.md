@@ -138,12 +138,20 @@ Estimated engineering effort: 3–5 focused days, excluding observation time.
 
 ### WP5: Restructure the creation flow
 
-- [ ] Organize the page as Content -> Publish settings -> Publish result.
-- [ ] Rename the main CTA to “发布并生成链接”.
-- [ ] Represent idle, busy, success, and failure explicitly; use the CTA as the busy indicator.
-- [ ] Add an explicit pre-publish preview action using the existing sandbox boundary; do not execute untrusted content in the parent origin.
-- [ ] After success, show link, preview, access summary, password copy, and “继续创建”.
-- [ ] Use `navigator.clipboard` with a safe fallback instead of repeated `execCommand` implementations.
+- [x] Organize the page as Content -> Publish settings -> Publish result.
+- [x] Rename the main CTA to “发布并生成链接”.
+- [x] Represent idle, busy, success, and failure explicitly; use the CTA as the busy indicator.
+- [x] Add an explicit pre-publish preview action using the existing sandbox boundary; do not execute untrusted content in the parent origin.
+- [x] After success, show link, preview, access summary, password copy, and “继续创建”.
+- [x] Use `navigator.clipboard` with a safe fallback instead of repeated `execCommand` implementations.
+
+WP5 verification (2026-07-14):
+
+- Full Node suite: `59/59` passed.
+- Chromium desktop flow: Markdown preview, protected publish, result focus, link copy, and “继续创建” reset all passed.
+- Race/fallback flow: clearing cancels an in-flight preview; edited drafts mark the receipt as previous; exact manual-copy text remains available when both clipboard paths fail.
+- Chromium 375 px flow: no page-level horizontal overflow; primary action heights were `45.4 / 45.4 / 44 px`; sandbox preview rendered successfully.
+- Browser console and page errors: none.
 
 ### WP6: Accessibility and responsive admin
 

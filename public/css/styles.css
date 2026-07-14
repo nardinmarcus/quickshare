@@ -3742,6 +3742,223 @@ body:hover::-webkit-scrollbar,
   cursor: pointer;
 }
 
+/* Publishing flow: preview and post-publish handoff */
+[hidden] {
+  display: none !important;
+}
+
+.content-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.publish-status,
+.publish-error {
+  margin: 10px 0 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.publish-status {
+  color: var(--text-secondary);
+}
+
+.publish-status[data-state="busy"] {
+  color: var(--primary);
+}
+
+.publish-status[data-state="success"] {
+  color: var(--success-color);
+}
+
+.publish-status[data-state="error"],
+.publish-error {
+  color: var(--error-text);
+}
+
+.publish-error {
+  padding: 10px 12px;
+  border: 1px solid var(--error-border);
+  border-radius: 8px;
+  background: var(--error-bg);
+}
+
+.publish-preview {
+  gap: 14px;
+}
+
+.publish-preview-header,
+.result-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.publish-preview-header .section-title,
+.result-heading .section-title {
+  margin-bottom: 0;
+}
+
+.publish-preview-frame {
+  display: block;
+  width: 100%;
+  min-height: 480px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.action-btn-neutral {
+  min-width: 44px;
+  width: 44px;
+  height: 44px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border-color);
+  box-shadow: none;
+}
+
+.action-btn-neutral:hover {
+  color: var(--text-primary);
+  background: var(--button-hover);
+}
+
+.result-card {
+  gap: 16px;
+  border-color: rgba(var(--primary-rgb), 0.35);
+}
+
+.result-eyebrow {
+  margin-bottom: 4px;
+  color: var(--primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.result-page-title {
+  margin-top: 5px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.result-success-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  border-radius: 50%;
+  color: #ffffff;
+  background: var(--success-color);
+}
+
+.result-container {
+  margin-bottom: 0;
+}
+
+.result-url {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.result-url:hover {
+  text-decoration: underline;
+}
+
+.result-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+}
+
+.result-summary > div {
+  min-width: 0;
+  padding: 12px 14px;
+}
+
+.result-summary > div + div {
+  border-left: 1px solid var(--border-color);
+}
+
+.result-summary dt {
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.result-summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.result-password-row {
+  margin-top: 0;
+  padding: 12px 14px;
+  border: 1px dashed var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}
+
+.result-text-button {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--primary);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.result-actions .cyber-btn,
+.button-group .cyber-btn {
+  min-height: 44px;
+}
+
+.result-card[data-status="previous"] {
+  border-color: var(--border-color);
+}
+
+.result-card[data-status="previous"] .result-eyebrow {
+  color: var(--text-secondary);
+}
+
+.manual-copy-output {
+  width: 100%;
+  min-height: 84px;
+  padding: 10px 12px;
+  resize: vertical;
+  border: 1px solid var(--primary);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: 0.85rem/1.5 'Fira Code', monospace;
+}
+
+.cyber-btn:disabled {
+  cursor: wait;
+  opacity: 0.72;
+  transform: none;
+}
+
 @media (max-width: 720px) {
   .publish-settings-grid,
   .access-mode-options {
@@ -3759,6 +3976,27 @@ body:hover::-webkit-scrollbar,
 
   .custom-password-row .custom-password-input {
     min-width: calc(100% - 2.6rem);
+  }
+
+  .button-group {
+    flex-wrap: wrap;
+  }
+
+  .result-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .result-summary > div + div {
+    border-top: 1px solid var(--border-color);
+    border-left: 0;
+  }
+
+  .publish-preview-frame {
+    min-height: 380px;
+  }
+
+  .result-actions .cyber-btn {
+    flex: 1 1 calc(50% - 5px);
   }
 }
 
