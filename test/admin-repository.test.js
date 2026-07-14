@@ -106,3 +106,45 @@ test('Postgres API key methods create their schema once on first use', async () 
   assert.equal(queries.filter(sql => sql.includes('CREATE TABLE IF NOT EXISTS api_keys')).length, 1);
   assert.equal(queries.filter(sql => sql.includes('CREATE INDEX IF NOT EXISTS idx_api_keys_created_at')).length, 1);
 });
+
+test('Postgres public lookup reports expiry in one query', async () => {
+  const repository = Object.create(PostgresPageRepository.prototype);
+  const queries = [];
+
+  repository.pool = {
+    async query(sql, params) {
+      queries.push({ sql, params });
+
+      if (params[0] === 'missing-page') {
+        return { rows: [] };
+      }
+
+      return {
+        rows: [{
+          id: params[0],
+          html_content: '<h1>Page</h1>',
+          expires_at: 5000,
+          is_expired: params[0] === 'expired-page'
+        }]
+      };
+    }
+  };
+
+  const result = await repository.getPublicById('expired-page', 5000);
+  const activeResult = await repository.getPublicById('active-page', 4999);
+  const missingResult = await repository.getPublicById('missing-page', 5000);
+
+  assert.deepEqual(result, {
+    page: {
+      id: 'expired-page',
+      html_content: '<h1>Page</h1>',
+      expires_at: 5000
+    },
+    expired: true
+  });
+  assert.equal(activeResult.expired, false);
+  assert.equal(missingResult, null);
+  assert.equal(queries.length, 3);
+  assert.deepEqual(queries[0].params, ['expired-page', 5000]);
+  assert.match(queries[0].sql, /expires_at IS NOT NULL AND expires_at <= \$2/);
+});

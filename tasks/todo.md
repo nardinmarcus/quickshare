@@ -66,10 +66,10 @@ Rollback: application-only; no schema change.
 
 Files expected: `models/postgres-pages.js`, `models/memory-pages.js`, `app.js`, new `test/view-routes.test.js`.
 
-- [ ] Add `getPublicById(id, now)` to both repositories; keep `getById` for admin use.
-- [ ] Use the public method in `/view/:id`, `/view/:id/password`, and public metadata routes.
-- [ ] Treat `expires_at <= now` as expired and return `410` with a generic message.
-- [ ] Keep expired rows visible and editable in admin; do not auto-delete them.
+- [x] Add `getPublicById(id, now)` to both repositories; keep `getById` for admin use.
+- [x] Use the public method in `/view/:id`, `/view/:id/password`, and public metadata routes.
+- [x] Treat `expires_at <= now` as expired and return `410` with a generic message.
+- [x] Keep expired rows visible and editable in admin; do not auto-delete them.
 
 Verify:
 

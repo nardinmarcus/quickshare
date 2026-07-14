@@ -141,6 +141,29 @@ class PostgresPageRepository {
     return result.rows[0] || null;
   }
 
+  async getPublicById(id, now = Date.now()) {
+    const result = await this.pool.query(
+      `
+        SELECT *, (expires_at IS NOT NULL AND expires_at <= $2) AS is_expired
+        FROM pages
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [id, now]
+    );
+    const row = result.rows[0];
+
+    if (!row) {
+      return null;
+    }
+
+    const { is_expired: isExpired, ...page } = row;
+    return {
+      page,
+      expired: Boolean(isExpired)
+    };
+  }
+
   async listRecent(limit = 10) {
     const result = await this.pool.query(
       `

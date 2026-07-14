@@ -117,6 +117,19 @@ class MemoryPageRepository {
     return this.pages.get(id) || null;
   }
 
+  async getPublicById(id, now = Date.now()) {
+    const page = this.pages.get(id);
+
+    if (!page) {
+      return null;
+    }
+
+    return {
+      page,
+      expired: page.expires_at !== null && Number(page.expires_at) <= now
+    };
+  }
+
   async listRecent(limit = 10) {
     return Array.from(this.pages.values())
       .sort((left, right) => right.created_at - left.created_at)

@@ -1201,14 +1201,23 @@ app.get('/api/pages/:id', async (req, res) => {
   try {
     await ensureDatabase();
 
-    const page = await pageRepository.getById(req.params.id);
+    const publicPage = await pageRepository.getPublicById(req.params.id, Date.now());
 
-    if (!page) {
+    if (!publicPage) {
       return res.status(404).json({
         success: false,
         error: '页面不存在'
       });
     }
+
+    if (publicPage.expired) {
+      return res.status(410).json({
+        success: false,
+        error: '此分享已失效'
+      });
+    }
+
+    const { page } = publicPage;
 
     return res.json({
       success: true,
@@ -1273,9 +1282,24 @@ app.post('/view/:id/password', async (req, res) => {
   try {
     await ensureDatabase();
 
-    const page = await pageRepository.getById(req.params.id);
+    const publicPage = await pageRepository.getPublicById(req.params.id, Date.now());
 
-    if (!page || page.is_protected !== 1) {
+    if (!publicPage) {
+      return res.status(404).json({
+        valid: false
+      });
+    }
+
+    if (publicPage.expired) {
+      return res.status(410).json({
+        valid: false,
+        error: '此分享已失效'
+      });
+    }
+
+    const { page } = publicPage;
+
+    if (page.is_protected !== 1) {
       return res.status(404).json({
         valid: false
       });
@@ -1306,15 +1330,25 @@ app.get('/view/:id', async (req, res) => {
   try {
     await ensureDatabase();
 
-    const page = await pageRepository.getById(req.params.id);
+    const publicPage = await pageRepository.getPublicById(req.params.id, Date.now());
 
-    if (!page) {
+    if (!publicPage) {
       return res.status(404).render('error', {
         title: '页面未找到',
         page: 'error-page',
         message: '您请求的页面不存在或已被删除'
       });
     }
+
+    if (publicPage.expired) {
+      return res.status(410).render('error', {
+        title: '分享已失效',
+        page: 'error-page',
+        message: '此分享已失效，无法继续访问'
+      });
+    }
+
+    const { page } = publicPage;
 
     if (page.is_protected === 1 && !hasPageAccess(req, req.params.id)) {
       const decryptedPassword = page.encrypted_password ? decryptSecret(page.encrypted_password) : null;
