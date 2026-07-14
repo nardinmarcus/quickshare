@@ -24,3 +24,9 @@
 - Vercel can report a Preview as Ready even when the first function invocation fails during application startup.
 - Check required environment-variable scope before debugging code; production-only authentication secrets can make a generic Preview fail safely.
 - Do not relax production startup checks or copy production credentials broadly. Use a one-off SSO-protected Preview with temporary auth settings and explicitly blank database URLs when the goal is isolated runtime verification.
+
+## 2026-07-14 — Keep shell interpolation out of database verification commands
+
+- SQL placeholders such as `$1` inside a double-quoted shell command must be escaped or the shell will remove them before Node receives the query.
+- Prefer a script file or an argument-safe invocation for multi-line verification logic; if an inline command is unavoidable, verify shell-sensitive characters before execution.
+- A failed read-only syntax query is not evidence. Fix the invocation and repeat the same observable checks before recording results.

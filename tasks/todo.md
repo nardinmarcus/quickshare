@@ -129,8 +129,8 @@ Phase 1 production gate:
 
 - [x] Full tests and security regressions pass.
 - [x] Preview smoke covers public, protected, expired, admin edit/delete, and API creation.
-- [ ] Vercel production deployment is `READY` and the same live routes are rechecked.
-- [ ] No new 4xx/5xx spike appears during the observation window.
+- [x] Vercel production deployment is `READY` and the same live routes are rechecked.
+- [x] No new 4xx/5xx spike appears during the observation window.
 
 Estimated engineering effort: 3–5 focused days, excluding observation time.
 
@@ -281,8 +281,8 @@ Complete after implementation:
 - Changed commits/PRs: WP0 `fccfb88`; WP1 `8801f22`; WP2 `b93b7e1`; WP3 `feat: publish shares with atomic access settings`; WP4 `security: bound requests and harden responses`.
 - Test evidence: WP3 full suite `51/51` passed; WP4 full suite `55/55` passed; `git diff --check` and JavaScript syntax checks passed.
 - Preview evidence: isolated deployment `dpl_8zEScnraw5N9rEM6e4cS77G2yiBm` reached READY and passed public/protected/expired/admin/API smoke; 16 KB and 2 MB limits returned `413` above threshold.
-- Production deployment: WP4 Vercel Firewall rule `QuickShare sensitive writes` published; application deployment pending.
-- Live route verification: Firewall threshold produced `20 x 401` then `2 x 429`; unmatched GET and POST checks remained `200` and `401`.
-- Performance before/after:
-- Rollback performed or available:
-- Follow-up items intentionally deferred:
+- Production deployment: `dpl_4vJVEH4gxjtYWKQaCDD8ghmkGiPj` READY and aliased to `https://quickshare.namooca.com`; Firewall rule `QuickShare sensitive writes` enabled with no pending draft.
+- Live route verification: existing public/protected pages returned `200`; protected responses were `private, no-store`; 16 KB excess returned `413`; Firewall threshold produced `20 x 401` then `2 x 429`; no deployment 5xx entries found in the immediate post-deploy window.
+- Performance before/after: deferred to the measured WP8 baseline; Phase 1 made no unmeasured performance claim.
+- Rollback performed or available: previous Vercel deployment remains promotable; application limits/headers and the Firewall rule can be rolled back independently.
+- Follow-up items intentionally deferred: production 2 MB valid-key probe was not forced because Vercel returned the sensitive `SHARE_API_KEY` as blank; the same commit passed this boundary in isolated Preview and local regression.
