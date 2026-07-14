@@ -109,12 +109,12 @@ Rollback: UI and compatible API changes in one package; no destructive migration
 
 Files/config expected: `app.js`, `config.js`, `.env.example`, `docs/deployment.md`, Vercel Firewall/WAF, security tests.
 
-- [ ] Replace the global 15 MB parser with route-appropriate limits: small auth/form limits and the approved share-content limit.
-- [ ] Add edge rate limits for `/login`, `/admin/login`, `/view/:id/password`, `/api/pages/create`, and `/api/v1/share`; do not use an in-process Map as reliable limiter state.
-- [ ] Start with monitored conservative thresholds and tune from 429/error data.
-- [ ] Disable `x-powered-by`; add `X-Content-Type-Options` and `Referrer-Policy`.
-- [ ] Mark login, admin, password, and protected responses `private, no-store`.
-- [ ] Delay strict CSP until inline scripts and unnecessary third-party admin scripts are removed in Phase 3.
+- [x] Replace the global 15 MB parser with route-appropriate limits: small auth/form limits and the approved share-content limit.
+- [x] Add edge rate limits for `/login`, `/admin/login`, `/view/:id/password`, `/api/pages/create`, and `/api/v1/share`; do not use an in-process Map as reliable limiter state.
+- [x] Start with monitored conservative thresholds and tune from 429/error data.
+- [x] Disable `x-powered-by`; add `X-Content-Type-Options` and `Referrer-Policy`.
+- [x] Mark login, admin, password, and protected responses `private, no-store`.
+- [x] Delay strict CSP until inline scripts and unnecessary third-party admin scripts are removed in Phase 3.
 
 Verify:
 
@@ -127,8 +127,8 @@ Rollback: WAF rules and application headers/limits can be disabled independently
 
 Phase 1 production gate:
 
-- [ ] Full tests and security regressions pass.
-- [ ] Preview smoke covers public, protected, expired, admin edit/delete, and API creation.
+- [x] Full tests and security regressions pass.
+- [x] Preview smoke covers public, protected, expired, admin edit/delete, and API creation.
 - [ ] Vercel production deployment is `READY` and the same live routes are rechecked.
 - [ ] No new 4xx/5xx spike appears during the observation window.
 
@@ -278,11 +278,11 @@ Estimated engineering effort: 5–8 focused days. This estimate excludes comment
 
 Complete after implementation:
 
-- Changed commits/PRs: WP0 `fccfb88`; WP1 `8801f22`; WP2 `b93b7e1`; WP3 `feat: publish shares with atomic access settings`.
-- Test evidence: WP3 full suite `51/51` passed; `git diff --check` and JavaScript syntax checks passed.
-- Preview evidence: local HTTP flow verified at 1440 px and 375 px; protected creation, wrong-password `401`, correct-password `200`, and unlocked content confirmed.
-- Production deployment:
-- Live route verification:
+- Changed commits/PRs: WP0 `fccfb88`; WP1 `8801f22`; WP2 `b93b7e1`; WP3 `feat: publish shares with atomic access settings`; WP4 `security: bound requests and harden responses`.
+- Test evidence: WP3 full suite `51/51` passed; WP4 full suite `55/55` passed; `git diff --check` and JavaScript syntax checks passed.
+- Preview evidence: isolated deployment `dpl_8zEScnraw5N9rEM6e4cS77G2yiBm` reached READY and passed public/protected/expired/admin/API smoke; 16 KB and 2 MB limits returned `413` above threshold.
+- Production deployment: WP4 Vercel Firewall rule `QuickShare sensitive writes` published; application deployment pending.
+- Live route verification: Firewall threshold produced `20 x 401` then `2 x 429`; unmatched GET and POST checks remained `200` and `401`.
 - Performance before/after:
 - Rollback performed or available:
 - Follow-up items intentionally deferred:

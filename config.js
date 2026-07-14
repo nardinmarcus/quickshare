@@ -39,5 +39,7 @@ module.exports = {
   baseUrl: process.env.BASE_URL || '',
   shareBaseUrl: process.env.SHARE_BASE_URL || process.env.BASE_URL || '',
   shareApiKey: process.env.SHARE_API_KEY || '',
+  smallBodyLimit: process.env.SMALL_BODY_LIMIT || '16kb',
+  shareBodyLimit: process.env.SHARE_BODY_LIMIT || '2mb',
   uiTheme
 };

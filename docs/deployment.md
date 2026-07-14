@@ -47,6 +47,16 @@ npm run hash-password -- "your-admin-password"
 - `POST /api/v1/share` 带有效 `X-API-Key` 可创建分享并返回 URL。
 - `POST /api/v1/share` 不带或带错误 key 返回 401。
 
+### 请求边界与 Vercel Firewall
+
+- 登录、密码校验和小型管理请求默认限制为 `16kb`。
+- 分享创建和后台正文更新默认限制为 `2mb`。2026-07-14 的生产只读统计为 174 条记录，p99 约 319 KB、最大约 329 KB，因此 2 MB 对现有内容有充足余量。
+- 超限请求由应用返回 `413` 和统一 JSON 错误；不要把全局解析上限重新放大。
+- Vercel Hobby 计划只有一条 Rate Limit 规则额度。当前规则 `QuickShare sensitive writes` 仅匹配以下 POST 路径：`/login`、`/admin/login`、`/view/:id/password`、`/api/pages/create`、`/api/v1/share`。
+- 规则使用 IP 固定窗口：`20 requests / 60 seconds`；同一 IP 在上述 5 个匹配路径之间共享计数。超限动作必须保持默认 Rate Limit（HTTP `429`），不要改成 Deny（HTTP `403`）。
+- 在 Vercel Firewall 的 Traffic/Security Events 中观察 `429` 和正常请求量；如出现正常用户误伤，先基于数据调整阈值，不要增加应用进程内的内存计数器。
+- 回滚时可独立禁用或删除该 Firewall 规则；应用请求上限和响应头不依赖它。
+
 ### 本地预检
 
 ```bash
@@ -121,4 +131,6 @@ docker-compose up -d --build # 更新并重启
 | `SECURE_COOKIES` | 否 | 默认生产环境为 `true` |
 | `LOG_LEVEL` | 否 | 默认 `dev`（开发）/ `combined`（生产） |
 | `SHARE_API_KEY` | 否 | `POST /api/v1/share` 的 API Key 鉴权，未设置则该端点返回 503 |
+| `SMALL_BODY_LIMIT` | 否 | 登录、密码及小型 JSON/form 请求上限，默认 `16kb` |
+| `SHARE_BODY_LIMIT` | 否 | 分享正文和后台正文更新上限，默认 `2mb`；调整前先核对生产内容分布 |
 | `UI_THEME` | 否 | UI 主题，可选 `default` / `hacker` / `cyberpunk` / `popart`，默认 `default` |

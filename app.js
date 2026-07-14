@@ -37,6 +37,9 @@ const { randomBytes, timingSafeEqual } = require('crypto');
 
 const app = express();
 const pageRepository = createPageRepository();
+const parseSmallJson = bodyParser.json({ limit: config.smallBodyLimit });
+const parseSmallForm = bodyParser.urlencoded({ extended: true, limit: config.smallBodyLimit });
+const parseShareJson = bodyParser.json({ limit: config.shareBodyLimit });
 
 let initPromise = null;
 
@@ -46,13 +49,28 @@ app.locals.pageRepository = pageRepository;
 app.set('views', path.join(__dirname, 'views'));
 app.set('view engine', 'ejs');
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
 
 app.use(morgan(config.logLevel));
 app.use(cors({ origin: false }));
-app.use(bodyParser.json({ limit: '15mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '15mb' }));
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  return next();
+});
+app.use('/login', privateNoStore);
+app.use('/admin', privateNoStore);
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
+
+function setPrivateNoStore(res) {
+  res.set('Cache-Control', 'private, no-store');
+}
+
+function privateNoStore(req, res, next) {
+  setPrivateNoStore(res);
+  return next();
+}
 
 function shouldRunDatabaseInit() {
   const isProductionRuntime = config.env === 'production' || process.env.VERCEL_ENV === 'production';
@@ -572,7 +590,7 @@ app.get('/login', (req, res) => {
   });
 });
 
-app.post('/login', async (req, res) => {
+app.post('/login', parseSmallForm, async (req, res) => {
   if (!config.authEnabled) {
     return res.redirect('/');
   }
@@ -614,7 +632,7 @@ app.get('/admin/login', (req, res) => {
   });
 });
 
-app.post('/admin/login', async (req, res) => {
+app.post('/admin/login', parseSmallForm, async (req, res) => {
   if (!config.authEnabled) {
     return res.redirect('/admin/stats');
   }
@@ -691,7 +709,7 @@ app.get('/admin/apis', requireDashboardAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/apis/keys', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
+app.post('/admin/apis/keys', requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
   try {
     await ensureDatabase();
 
@@ -964,7 +982,7 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
   }
 });
 
-app.put('/admin/pages/:id', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
+app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashboardCsrf, async (req, res) => {
   try {
     await ensureDatabase();
 
@@ -1066,7 +1084,7 @@ app.put('/admin/pages/:id', requireDashboardAdmin, requireDashboardCsrf, async (
   }
 });
 
-app.delete('/admin/pages/batch', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
+app.delete('/admin/pages/batch', requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
   try {
     await ensureDatabase();
 
@@ -1130,7 +1148,7 @@ app.delete('/admin/pages/:id', requireDashboardAdmin, requireDashboardCsrf, asyn
   }
 });
 
-app.post('/admin/pages/:id/clone', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
+app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requireDashboardCsrf, async (req, res) => {
   try {
     await ensureDatabase();
 
@@ -1160,7 +1178,7 @@ app.post('/admin/pages/:id/clone', requireDashboardAdmin, requireDashboardCsrf, 
   }
 });
 
-app.post('/api/pages/create', requireApiAdmin, requireCsrf, async (req, res) => {
+app.post('/api/pages/create', privateNoStore, requireApiAdmin, parseShareJson, requireCsrf, async (req, res) => {
   try {
     await ensureDatabase();
 
@@ -1200,7 +1218,7 @@ app.post('/api/pages/create', requireApiAdmin, requireCsrf, async (req, res) => 
   }
 });
 
-app.post('/api/v1/share', requireApiKey, async (req, res) => {
+app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (req, res) => {
   try {
     await ensureDatabase();
 
@@ -1280,6 +1298,10 @@ app.get('/api/pages/:id', async (req, res) => {
 
     const { page } = publicPage;
 
+    if (page.is_protected === 1) {
+      setPrivateNoStore(res);
+    }
+
     return res.json({
       success: true,
       page: {
@@ -1302,7 +1324,7 @@ app.get('/api/pages/:id', async (req, res) => {
   }
 });
 
-app.post('/api/pages/:id/protect', requireApiAdmin, requireCsrf, async (req, res) => {
+app.post('/api/pages/:id/protect', privateNoStore, requireApiAdmin, parseSmallJson, requireCsrf, async (req, res) => {
   try {
     await ensureDatabase();
 
@@ -1351,7 +1373,7 @@ app.post('/api/pages/:id/protect', requireApiAdmin, requireCsrf, async (req, res
   }
 });
 
-app.post('/view/:id/password', async (req, res) => {
+app.post('/view/:id/password', privateNoStore, parseSmallJson, async (req, res) => {
   try {
     await ensureDatabase();
 
@@ -1423,6 +1445,10 @@ app.get('/view/:id', async (req, res) => {
 
     const { page } = publicPage;
 
+    if (page.is_protected === 1) {
+      setPrivateNoStore(res);
+    }
+
     if (page.is_protected === 1 && !hasPageAccess(req, req.params.id)) {
       return res.render('password', {
         title: 'QuickShare | 密码保护',
@@ -1469,6 +1495,17 @@ app.get('/view/:id', async (req, res) => {
       message: '查看页面时发生错误，请稍后再试'
     });
   }
+});
+
+app.use((error, req, res, next) => {
+  if (error?.type === 'entity.too.large') {
+    return res.status(413).json({
+      success: false,
+      error: '请求内容过大'
+    });
+  }
+
+  return next(error);
 });
 
 app.use((req, res) => {
