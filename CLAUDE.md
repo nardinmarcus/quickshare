@@ -65,7 +65,7 @@ routes/          路由模块（pages.js 已废弃，返回 410）
 session/         会话存储（vercel-kv-store.js 未使用的死代码）
 public/          静态资源（css/ js/ icon/）
   css/           styles.css + login.css + markdown-*.css（bytedance / github / apple / notion / claude）
-  js/            main.js + admin.js + admin-detail.js + paste-fix.js + syntax-highlight.js + theme.js
+  js/            main.js + login.js + password.js + admin*.js + paste-fix.js + theme.js
 utils/           security.js（token/CSRF/hash/encrypt）、contentRenderer.js、codeDetector.js、pageTitle.js
 scripts/         hash-password.js
 test/            Node test runner（5 个测试文件）

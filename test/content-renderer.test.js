@@ -1,7 +1,33 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { renderMarkdown } = require('../utils/contentRenderer');
+const { renderHtml, renderMarkdown } = require('../utils/contentRenderer');
+
+test('renderHtml loads highlighting only for partial HTML with a preformatted code block', () => {
+  const plain = renderHtml('<p>Plain partial HTML</p>');
+  const code = renderHtml('<pre><code>const answer = 42;</code></pre>');
+
+  assert.doesNotMatch(plain, /highlight\.min\.js/);
+  assert.doesNotMatch(plain, /atom-one-dark\.min\.css/);
+  assert.equal((code.match(/highlight\.min\.js/g) || []).length, 1);
+  assert.equal((code.match(/atom-one-dark\.min\.css/g) || []).length, 1);
+});
+
+test('renderHtml preserves complete documents without injecting QuickShare assets', () => {
+  const documents = [
+    '<!DOCTYPE html><html><head><link href="/user.css" rel="stylesheet"></head><body><script>window.userScript = true</script></body></html>',
+    '<!doctype html><html><body><pre><code>lowercase doctype</code></pre></body></html>',
+    '<HTML><body><pre><code>mixed case element</code></pre></body></HTML>'
+  ];
+
+  for (const document of documents) {
+    const html = renderHtml(document);
+
+    assert.equal(html, document);
+    assert.doesNotMatch(html, /highlight\.min\.js/);
+    assert.doesNotMatch(html, /\/css\/styles\.css/);
+  }
+});
 
 test('renderMarkdown avoids heavy external assets for plain markdown', async () => {
   const html = await renderMarkdown('# Plain Report\n\nThis page has no code blocks.');

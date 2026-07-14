@@ -15,14 +15,9 @@
     </div>
   </div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/languages/javascript.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/languages/css.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/languages/xml.min.js"></script>
   <script src="/js/theme.js"></script>
-  <% if (typeof page === 'undefined' || page !== 'login-page') { %>
+  <% if (typeof page !== 'undefined' && page === 'home-page') { %>
     <script src="/js/main.js"></script>
-    <script src="/js/syntax-highlight.js"></script>
   <% } %>
 </body>
 </html>

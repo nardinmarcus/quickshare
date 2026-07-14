@@ -189,18 +189,18 @@ test('global feedback, focus, targets, and responsive admin CSS are accessible',
   assert.match(css, /\.admin-delete-btn[\s\S]*?min-height:\s*44px/);
 });
 
-test('the HTML syntax highlighter loads the valid highlight.js language module', () => {
+test('trusted application pages do not execute third-party syntax highlighting', () => {
+  const header = fs.readFileSync(path.join(__dirname, '../views/partials/header.ejs'), 'utf8');
   const footer = fs.readFileSync(path.join(__dirname, '../views/partials/footer.ejs'), 'utf8');
 
-  assert.doesNotMatch(footer, /languages\/html\.min\.js/);
-  assert.match(footer, /languages\/xml\.min\.js/);
+  assert.doesNotMatch(header, /highlight\.js/);
+  assert.doesNotMatch(footer, /highlight\.js/);
+  assert.doesNotMatch(footer, /syntax-highlight\.js/);
 });
 
-test('syntax highlighting degrades safely when the CDN is unavailable', () => {
-  const syntaxScript = fs.readFileSync(path.join(__dirname, '../public/js/syntax-highlight.js'), 'utf8');
+test('sandboxed content highlighting degrades safely when the CDN is unavailable', () => {
   const contentRenderer = fs.readFileSync(path.join(__dirname, '../utils/contentRenderer.js'), 'utf8');
 
-  assert.match(syntaxScript, /if \(typeof window\.hljs === 'undefined'\) return;/);
   assert.equal((contentRenderer.match(/if \(window\.hljs\) \{/g) || []).length, 2);
 });
 
@@ -208,6 +208,7 @@ test('password entry and mutation flows expose labels, live updates, and busy st
   const login = fs.readFileSync(path.join(__dirname, '../views/login.ejs'), 'utf8');
   const homepage = fs.readFileSync(path.join(__dirname, '../views/index.ejs'), 'utf8');
   const password = fs.readFileSync(path.join(__dirname, '../views/password.ejs'), 'utf8');
+  const passwordScript = fs.readFileSync(path.join(__dirname, '../public/js/password.js'), 'utf8');
   const detail = fs.readFileSync(path.join(__dirname, '../views/admin-page-detail.ejs'), 'utf8');
   const detailScript = fs.readFileSync(path.join(__dirname, '../public/js/admin-detail.js'), 'utf8');
 
@@ -215,7 +216,8 @@ test('password entry and mutation flows expose labels, live updates, and busy st
   assert.match(homepage, /id="password-mode-summary"[^>]+aria-live="polite"/);
   assert.match(homepage, /id="custom-password-hint"[^>]+aria-live="polite"/);
   assert.match(password, /<form[^\n]*id="passwordForm"[^\n]*aria-busy="false"/);
-  assert.match(password, /setAttribute\('aria-busy'/);
+  assert.match(password, /src="\/js\/password\.js"/);
+  assert.match(passwordScript, /setAttribute\('aria-busy'/);
   assert.match(detail, /id="edit-form"[^>]+aria-busy="false"/);
   assert.match(detail, /id="protection-hint"[^>]+aria-live="polite"/);
   assert.match(detailScript, /editForm\.setAttribute\('aria-busy'/);

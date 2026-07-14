@@ -34,6 +34,24 @@ const DASHBOARD_ADMIN_COOKIE = 'dashboard_admin_session';
 const ADMIN_TTL_MS = 24 * 60 * 60 * 1000;
 const PAGE_ACCESS_TTL_MS = 24 * 60 * 60 * 1000;
 const VALID_CODE_TYPES = new Set(['html', 'markdown', 'svg', 'mermaid']);
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const FAVICON_PATH = path.join(PUBLIC_DIR, 'icon/web/favicon.ico');
+const STATIC_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
+const STATIC_CACHE_CONTROL = 'public, max-age=300, must-revalidate';
+const EMBEDDABLE_UI_CSP = [
+  "default-src 'self'",
+  "base-uri 'none'",
+  "object-src 'none'",
+  "script-src 'self'",
+  "script-src-attr 'none'",
+  "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com",
+  "font-src 'self' data: https://cdnjs.cloudflare.com https://fonts.gstatic.com",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "form-action 'self'",
+  "frame-src 'self'"
+].join('; ');
+const TRUSTED_UI_CSP = `${EMBEDDABLE_UI_CSP}; frame-ancestors 'none'`;
 const { randomBytes, timingSafeEqual } = require('crypto');
 let nextViewRequestIsColdStart = true;
 
@@ -68,12 +86,27 @@ app.use(cors({ origin: false }));
 app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+
+  if (isTrustedUiPath(req.path)) {
+    setTrustedUiCsp(res);
+  }
+
   return next();
 });
 app.use('/login', privateNoStore);
 app.use('/admin', privateNoStore);
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname, 'public')));
+app.get('/favicon.ico', (req, res) => res.sendFile(FAVICON_PATH, {
+  maxAge: STATIC_CACHE_MAX_AGE_MS,
+  immutable: false,
+  headers: { 'Cache-Control': STATIC_CACHE_CONTROL }
+}));
+app.use(express.static(PUBLIC_DIR, {
+  maxAge: STATIC_CACHE_MAX_AGE_MS,
+  immutable: false,
+  etag: true,
+  setHeaders: setStaticCacheHeaders
+}));
 
 function setPrivateNoStore(res) {
   res.set('Cache-Control', 'private, no-store');
@@ -82,6 +115,18 @@ function setPrivateNoStore(res) {
 function privateNoStore(req, res, next) {
   setPrivateNoStore(res);
   return next();
+}
+
+function isTrustedUiPath(pathname) {
+  return /^\/login\/?$/i.test(pathname) || /^\/admin(?:\/|$)/i.test(pathname);
+}
+
+function setTrustedUiCsp(res, { allowFraming = false } = {}) {
+  res.set('Content-Security-Policy', allowFraming ? EMBEDDABLE_UI_CSP : TRUSTED_UI_CSP);
+}
+
+function setStaticCacheHeaders(res) {
+  res.setHeader('Cache-Control', STATIC_CACHE_CONTROL);
 }
 
 function exactViewRoute(pathname) {
@@ -1564,6 +1609,7 @@ app.get('/view/:id', async (req, res) => {
 
     if (!publicPage) {
       metrics.outcome = 'not_found';
+      setTrustedUiCsp(res, { allowFraming: true });
       return res.status(404).render('error', {
         title: '页面未找到',
         page: 'error-page',
@@ -1577,6 +1623,7 @@ app.get('/view/:id', async (req, res) => {
 
     if (publicPage.expired) {
       metrics.outcome = 'expired';
+      setTrustedUiCsp(res, { allowFraming: true });
       return res.status(410).render('error', {
         title: '分享已失效',
         page: 'error-page',
@@ -1590,6 +1637,7 @@ app.get('/view/:id', async (req, res) => {
 
     if (page.is_protected === 1 && !hasPageAccess(req, req.params.id)) {
       metrics.outcome = 'password_required';
+      setTrustedUiCsp(res, { allowFraming: true });
       return res.render('password', {
         title: 'QuickShare | 密码保护',
         page: 'password-page',
@@ -1635,6 +1683,7 @@ app.get('/view/:id', async (req, res) => {
       name: error?.name || 'Error',
       code: safeErrorCode(error)
     });
+    setTrustedUiCsp(res, { allowFraming: true });
     return res.status(500).render('error', {
       title: '服务器错误',
       page: 'error-page',
@@ -1655,6 +1704,7 @@ app.use((error, req, res, next) => {
 });
 
 app.use((req, res) => {
+  setTrustedUiCsp(res);
   res.status(404).render('error', {
     title: '页面未找到',
     page: 'error-page',
