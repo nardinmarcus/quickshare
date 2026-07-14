@@ -3,6 +3,8 @@
  * Uses highlight.js to add syntax highlighting to code blocks.
  */
 document.addEventListener('DOMContentLoaded', () => {
+  if (typeof window.hljs === 'undefined') return;
+
   // 初始化语法高亮
   hljs.configure({
     languages: ['html', 'xml', 'javascript', 'css', 'php', 'python', 'java', 'json'],

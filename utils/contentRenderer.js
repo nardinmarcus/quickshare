@@ -193,9 +193,11 @@ function renderHtml(content) {
       <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
       <script>
         document.addEventListener('DOMContentLoaded', () => {
-          document.querySelectorAll('pre code').forEach((block) => {
-            hljs.highlightElement(block);
-          });
+          if (window.hljs) {
+            document.querySelectorAll('pre code').forEach((block) => {
+              hljs.highlightElement(block);
+            });
+          }
         });
       </script>
     </body>
@@ -397,9 +399,11 @@ async function renderMarkdown(content, theme) {
       <script src="${HIGHLIGHT_JS_CDN}"></script>
       <script>
         document.addEventListener('DOMContentLoaded', () => {
-          document.querySelectorAll('pre code').forEach((block) => {
-            hljs.highlightElement(block);
-          });
+          if (window.hljs) {
+            document.querySelectorAll('pre code').forEach((block) => {
+              hljs.highlightElement(block);
+            });
+          }
         });
       </script>`
     : '';

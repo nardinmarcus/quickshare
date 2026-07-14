@@ -37,7 +37,7 @@
     const cell = document.createElement('td');
     cell.colSpan = 5;
     cell.className = 'api-key-empty';
-    cell.textContent = 'No managed keys yet.';
+    cell.textContent = '尚未创建托管密钥。';
     row.appendChild(cell);
     keyRows.appendChild(row);
   }
@@ -73,15 +73,17 @@
     createdTime.textContent = formatTime(apiKey.created_at);
     created.appendChild(createdTime);
 
-    const lastUsed = createCell('Never', 'admin-muted');
+    const lastUsed = createCell('从未使用', 'admin-muted');
 
     const actions = document.createElement('td');
+    actions.className = 'admin-actions-col';
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'admin-delete-btn api-key-delete-btn';
     remove.dataset.apiKeyId = apiKey.id;
     remove.dataset.apiKeyName = apiKey.name;
-    remove.textContent = 'Delete';
+    remove.setAttribute('aria-label', '删除 API 密钥 ' + apiKey.name);
+    remove.innerHTML = '<i class="fas fa-trash-alt" aria-hidden="true"></i><span class="sr-only">删除</span>';
     actions.appendChild(remove);
 
     row.append(name, prefix, created, lastUsed, actions);
@@ -90,9 +92,9 @@
 
   async function deleteKey(button) {
     const id = button.dataset.apiKeyId;
-    const name = button.dataset.apiKeyName || 'this key';
+    const name = button.dataset.apiKeyName || '此密钥';
 
-    if (!id || !window.confirm(`Delete ${name}? Any automation using it will stop working immediately.`)) {
+    if (!id || !window.confirm('确定删除“' + name + '”吗？使用此密钥的自动化任务会立即停止工作。')) {
       return;
     }
 
@@ -109,12 +111,12 @@
       const data = await response.json();
 
       if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to delete API key');
+        throw new Error(data.error || '删除 API 密钥失败');
       }
 
       button.closest('tr')?.remove();
       addEmptyState();
-      notify('success', 'API key deleted');
+      notify('success', 'API 密钥已删除');
     } catch (error) {
       button.disabled = false;
       notify('error', error.message);
@@ -133,6 +135,7 @@
     }
 
     submit.disabled = true;
+    form.setAttribute('aria-busy', 'true');
 
     try {
       const response = await fetch('/admin/apis/keys', {
@@ -147,17 +150,18 @@
       const data = await response.json();
 
       if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to create API key');
+        throw new Error(data.error || '创建 API 密钥失败');
       }
 
       secretValue.textContent = data.apiKey.secret;
       secretPanel.hidden = false;
       nameInput.value = '';
       addKeyRow(data.apiKey);
-      notify('success', 'API key created');
+      notify('success', 'API 密钥已创建');
     } catch (error) {
       notify('error', error.message);
     } finally {
+      form.setAttribute('aria-busy', 'false');
       submit.disabled = false;
     }
   });
@@ -169,14 +173,14 @@
 
     try {
       await navigator.clipboard.writeText(secret);
-      notify('success', 'API key copied');
+      notify('success', 'API 密钥已复制');
     } catch (error) {
       const selection = window.getSelection();
       const range = document.createRange();
       range.selectNodeContents(secretValue);
       selection.removeAllRanges();
       selection.addRange(range);
-      notify('info', 'Select and copy the key manually');
+      notify('info', '已选中密钥，请手动复制');
     }
   });
 

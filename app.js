@@ -711,7 +711,7 @@ app.get('/admin/apis', requireDashboardAdmin, async (req, res) => {
     const sessionToken = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE] || '';
 
     return res.render('admin-apis', {
-      title: 'QuickShare | API Management',
+      title: 'QuickShare | API 管理',
       page: 'admin-apis',
       apiKeys,
       legacyApiKeyConfigured: Boolean(config.shareApiKey),
@@ -867,7 +867,7 @@ app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
     const sessionToken = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE] || '';
 
     return res.render('admin-pages', {
-      title: 'QuickShare | Admin Pages',
+      title: 'QuickShare | 分享管理',
       page: 'admin-pages',
       csrfToken: config.authEnabled ? createCsrfToken(sessionToken) : '',
       pages: visiblePages,
@@ -906,7 +906,7 @@ app.get('/admin/stats', requireDashboardAdmin, async (req, res) => {
     const stats = enrichAdminStats(await pageRepository.getAdminStats());
 
     return res.render('admin-stats', {
-      title: 'QuickShare | Admin Stats',
+      title: 'QuickShare | 数据统计',
       page: 'admin-stats',
       stats
     });
@@ -932,7 +932,7 @@ app.get('/admin/audit', requireDashboardAdmin, async (req, res) => {
     const logs = await pageRepository.listAuditLogs({ limit, offset });
 
     return res.render('admin-audit', {
-      title: 'QuickShare | Audit Log',
+      title: 'QuickShare | 审计日志',
       page: 'admin-audit',
       logs,
       pagination: {

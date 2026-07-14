@@ -133,6 +133,8 @@ test('dashboard login rejects the regular creation password', async () => {
 
   assert.equal(response.status, 401);
   assert.doesNotMatch(response.text, /dashboard_admin_session/);
+  assert.match(response.text, /id="login-error"[^>]+role="alert"/);
+  assert.match(response.text, /id="password-input"[^>]+aria-invalid="true"[^>]+aria-describedby="login-error"/);
 });
 
 test('dashboard login and entry default to stats', async () => {
@@ -170,7 +172,7 @@ test('admin pages list and detail expose content without password hashes', async
   });
 
   assert.equal(listResponse.status, 200);
-  assert.match(listResponse.text, /Admin Pages/);
+  assert.match(listResponse.text, /分享管理/);
   assert.match(listResponse.text, /Visible Title/);
   assert.match(listResponse.text, /Protected Title/);
   assert.match(listResponse.text, new RegExp(`/admin/pages/${publicPage.urlId}`));
@@ -209,9 +211,9 @@ test('admin stats render aggregate charts', async () => {
   });
 
   assert.equal(response.status, 200);
-  assert.match(response.text, /Admin Stats/);
-  assert.match(response.text, /Total Shares/);
-  assert.match(response.text, /Content Types/);
+  assert.match(response.text, /数据统计/);
+  assert.match(response.text, /分享总数/);
+  assert.match(response.text, /内容类型/);
   assert.match(response.text, /markdown/);
   assert.doesNotMatch(response.text, /password_hash/);
 });
@@ -372,7 +374,7 @@ test('API management creates, documents, and deletes managed keys', async () => 
   });
 
   assert.equal(pageResponse.status, 200);
-  assert.match(pageResponse.text, /API Management/);
+  assert.match(pageResponse.text, /API 管理/);
   assert.match(pageResponse.text, /POST<\/span>\s*<code>\/api\/v1\/share<\/code>/);
   assert.doesNotMatch(pageResponse.text, /key_hash/);
 

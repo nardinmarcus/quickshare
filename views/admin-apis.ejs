@@ -4,52 +4,39 @@
   <header class="admin-header">
     <div>
       <p class="admin-kicker">QuickShare</p>
-      <h1 class="admin-title">API Management</h1>
-      <p class="admin-subtitle">Manage API access keys and use the code-backed Share API reference.</p>
+      <h1 class="admin-title">API 管理</h1>
+      <p class="admin-subtitle">管理访问密钥，并查看与服务端实现一致的 Share API 说明</p>
     </div>
-    <div class="admin-actions">
-      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/stats">
-        <i class="fas fa-chart-bar" aria-hidden="true"></i>
-        <span>Stats</span>
-      </a>
-      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/pages">
-        <i class="fas fa-table" aria-hidden="true"></i>
-        <span>Pages</span>
-      </a>
-      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/audit">
-        <i class="fas fa-history" aria-hidden="true"></i>
-        <span>Audit</span>
-      </a>
-    </div>
+    <%- include('partials/admin-nav', { current: 'apis' }) %>
   </header>
 
   <section class="card api-key-create">
     <div class="admin-content-header">
       <div>
-        <h2>Access Keys</h2>
-        <p class="admin-muted">Create a separate key for every automation. The full secret is shown only once.</p>
+        <h2>访问密钥</h2>
+        <p class="admin-muted">建议每个自动化任务使用独立密钥；完整密钥只会显示一次。</p>
       </div>
     </div>
 
-    <form id="api-key-form" class="api-key-form">
-      <label for="api-key-name">Key name</label>
+    <form id="api-key-form" class="api-key-form" aria-busy="false">
+      <label for="api-key-name">密钥名称</label>
       <div class="api-key-form-row">
-        <input id="api-key-name" name="name" class="cyber-input" maxlength="80" required placeholder="e.g. Namoo QuickShare skill" autocomplete="off">
+        <input id="api-key-name" name="name" class="cyber-input" maxlength="80" required placeholder="例如：Namoo QuickShare skill" autocomplete="off">
         <button class="cyber-btn cyber-btn-primary" type="submit">
           <i class="fas fa-key" aria-hidden="true"></i>
-          <span>Create key</span>
+          <span>创建密钥</span>
         </button>
       </div>
     </form>
 
-    <div id="new-api-key-panel" class="api-key-secret-panel" hidden>
+    <div id="new-api-key-panel" class="api-key-secret-panel" role="status" aria-live="polite" hidden>
       <div>
-        <strong>Copy this key now</strong>
-        <p>It will not be shown again after you leave this page.</p>
+        <strong>请立即复制此密钥</strong>
+        <p>离开本页后将无法再次查看完整内容。</p>
       </div>
       <div class="api-key-secret-row">
         <code id="new-api-key-value"></code>
-        <button id="copy-api-key-btn" class="cyber-btn cyber-btn-secondary" type="button">Copy</button>
+        <button id="copy-api-key-btn" class="cyber-btn cyber-btn-secondary" type="button">复制</button>
       </div>
     </div>
   </section>
@@ -57,33 +44,34 @@
   <% if (legacyApiKeyConfigured) { %>
     <section class="card api-legacy-notice">
       <i class="fas fa-info-circle" aria-hidden="true"></i>
-      <p><strong>Legacy environment key active.</strong> <code>SHARE_API_KEY</code> continues to work for compatibility, but it cannot be viewed or revoked here.</p>
+      <p><strong>旧版环境变量密钥仍在使用。</strong>为保持兼容，<code>SHARE_API_KEY</code> 仍然有效，但不能在此查看或撤销。</p>
     </section>
   <% } %>
 
   <section class="card admin-card">
     <div class="admin-content-header">
       <div>
-        <h2>Managed Keys</h2>
-        <p class="admin-muted"><%= apiKeys.length %> active key<%= apiKeys.length === 1 ? '' : 's' %></p>
+        <h2>已管理密钥</h2>
+        <p class="admin-muted">当前 <%= apiKeys.length %> 个有效密钥</p>
       </div>
     </div>
 
-    <div class="admin-table-wrap">
+    <div class="admin-table-wrap" tabindex="0" aria-label="API 密钥列表，可横向滚动">
       <table class="admin-table">
+        <caption class="sr-only">API 密钥列表</caption>
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Prefix</th>
-            <th>Created</th>
-            <th>Last used</th>
-            <th class="admin-actions-col">Actions</th>
+            <th scope="col">名称</th>
+            <th scope="col">前缀</th>
+            <th scope="col">创建时间</th>
+            <th scope="col">最近使用</th>
+            <th scope="col" class="admin-actions-col">操作</th>
           </tr>
         </thead>
         <tbody id="api-keys-body">
           <% if (apiKeys.length === 0) { %>
             <tr id="api-keys-empty">
-              <td colspan="5" class="api-key-empty">No managed keys yet.</td>
+              <td colspan="5" class="api-key-empty">尚未创建托管密钥。</td>
             </tr>
           <% } %>
           <% apiKeys.forEach((apiKey) => { %>
@@ -95,13 +83,13 @@
                 <% if (apiKey.last_used_at) { %>
                   <time datetime="<%= new Date(Number(apiKey.last_used_at)).toISOString() %>"><%= new Date(Number(apiKey.last_used_at)).toLocaleString('zh-CN', { hour12: false }) %></time>
                 <% } else { %>
-                  <span class="admin-muted">Never</span>
+                  <span class="admin-muted">从未使用</span>
                 <% } %>
               </td>
-              <td>
-                <button type="button" class="admin-delete-btn api-key-delete-btn" data-api-key-id="<%= apiKey.id %>" data-api-key-name="<%= apiKey.name %>">
+              <td class="admin-actions-col">
+                <button type="button" class="admin-delete-btn api-key-delete-btn" data-api-key-id="<%= apiKey.id %>" data-api-key-name="<%= apiKey.name %>" aria-label="删除 API 密钥 <%= apiKey.name %>">
                   <i class="fas fa-trash-alt" aria-hidden="true"></i>
-                  <span>Delete</span>
+                  <span class="sr-only">删除</span>
                 </button>
               </td>
             </tr>
@@ -117,9 +105,9 @@
         <span class="api-method">POST</span>
         <code>/api/v1/share</code>
       </div>
-      <p>Create a QuickShare page from HTML, Markdown, SVG, or Mermaid content.</p>
-      <h3>Authentication</h3>
-      <p>Send a managed key in the <code>X-API-Key</code> header. The existing <code>SHARE_API_KEY</code> remains supported when configured.</p>
+      <p>通过 HTML、Markdown、SVG 或 Mermaid 内容创建 QuickShare 分享页。</p>
+      <h3>身份验证</h3>
+      <p>在 <code>X-API-Key</code> 请求头中传入托管密钥。已配置的旧版 <code>SHARE_API_KEY</code> 仍然受支持。</p>
       <pre><code>curl -s -X POST "$QUICKSHARE_URL/api/v1/share" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $QUICKSHARE_API_KEY" \
@@ -131,14 +119,14 @@
     </article>
 
     <article class="card api-doc-card">
-      <h2>Request body</h2>
+      <h2>请求体</h2>
       <dl class="api-field-list">
-        <div><dt><code>htmlContent</code> <span>required</span></dt><dd>Content to share.</dd></div>
-        <div><dt><code>codeType</code></dt><dd><code>html</code>, <code>markdown</code>, <code>svg</code>, or <code>mermaid</code>. Auto-detected when omitted.</dd></div>
-        <div><dt><code>title</code> / <code>description</code></dt><dd>Optional page metadata.</dd></div>
-        <div><dt><code>isProtected</code></dt><dd>When true, QuickShare creates a page password and returns it once.</dd></div>
+        <div><dt><code>htmlContent</code> <span>必填</span></dt><dd>要分享的内容。</dd></div>
+        <div><dt><code>codeType</code></dt><dd>可选 <code>html</code>、<code>markdown</code>、<code>svg</code> 或 <code>mermaid</code>；省略时自动检测。</dd></div>
+        <div><dt><code>title</code> / <code>description</code></dt><dd>可选的页面元数据。</dd></div>
+        <div><dt><code>isProtected</code></dt><dd>设为 true 时，QuickShare 会生成页面密码并仅返回一次。</dd></div>
       </dl>
-      <h2>Response</h2>
+      <h2>响应</h2>
       <pre><code>{
   "success": true,
   "urlId": "…",

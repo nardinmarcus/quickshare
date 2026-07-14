@@ -82,7 +82,7 @@
 
             <div id="password-settings" class="password-settings hidden">
               <div id="password-default-mode" class="password-default-mode">
-                <span id="password-mode-summary">自动生成 6 位数字密码</span>
+                <span id="password-mode-summary" aria-live="polite">自动生成 6 位数字密码</span>
                 <button type="button" id="use-custom-password-btn" class="mode-switch-btn">改用自定义密码</button>
               </div>
 
@@ -106,7 +106,7 @@
                   <button type="button" id="confirm-custom-password" class="confirm-btn">使用此密码</button>
                   <button type="button" id="cancel-custom-password" class="mode-switch-btn">使用自动密码</button>
                 </div>
-                <span id="custom-password-hint" class="field-hint">仅限英文字母、数字及 !@#$%^&amp;*()_+-=.,?~</span>
+                <span id="custom-password-hint" class="field-hint" aria-live="polite">仅限英文字母、数字及 !@#$%^&amp;*()_+-=.,?~</span>
               </div>
             </div>
           </fieldset>

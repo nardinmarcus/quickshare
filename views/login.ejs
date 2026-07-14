@@ -10,18 +10,19 @@
 
   <div class="content-area">
     <div class="login-card">
-      <h2 class="card-title"><i class="fas fa-lock" style="margin-right: 10px; color: var(--accent);"></i><%= typeof heading !== 'undefined' ? heading : '请输入访问密码' %></h2>
+      <h2 class="card-title"><i class="fas fa-lock" style="margin-right: 10px; color: var(--accent);" aria-hidden="true"></i><%= typeof heading !== 'undefined' ? heading : '请输入访问密码' %></h2>
 
       <% if (error) { %>
-        <div class="error-message"><%= error %></div>
+        <div id="login-error" class="error-message" role="alert"><%= error %></div>
       <% } %>
 
       <form action="<%= typeof formAction !== 'undefined' ? formAction : '/login' %>" method="post" class="login-form">
         <div class="form-group">
+          <label class="sr-only" for="password-input"><%= typeof heading !== 'undefined' ? heading : '访问密码' %></label>
           <div class="password-field">
-            <input type="password" name="password" id="password-input" class="cyber-input" placeholder="<%= typeof inputPlaceholder !== 'undefined' ? inputPlaceholder : '请输入访问密码...' %>" required autofocus>
+            <input type="password" name="password" id="password-input" class="cyber-input" placeholder="<%= typeof inputPlaceholder !== 'undefined' ? inputPlaceholder : '请输入访问密码...' %>" required autofocus aria-invalid="<%= error ? 'true' : 'false' %>" <% if (error) { %>aria-describedby="login-error"<% } %>>
             <button type="button" id="toggle-password" class="toggle-password" aria-label="显示密码">
-              <i class="fas fa-eye"></i>
+              <i class="fas fa-eye" aria-hidden="true"></i>
             </button>
           </div>
         </div>
@@ -29,7 +30,7 @@
         <div class="form-group">
           <button type="submit" class="submit-btn">
             <span>登录</span>
-            <i class="fas fa-arrow-right"></i>
+            <i class="fas fa-arrow-right" aria-hidden="true"></i>
           </button>
         </div>
       </form>
@@ -55,6 +56,7 @@
       passwordInput.setAttribute('type', type);
       toggleButton.querySelector('i').className =
         type === 'password' ? 'fas fa-eye' : 'fas fa-eye-slash';
+      toggleButton.setAttribute('aria-label', type === 'password' ? '显示密码' : '隐藏密码');
     });
   });
 </script>

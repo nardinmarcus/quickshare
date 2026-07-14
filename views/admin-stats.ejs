@@ -4,72 +4,58 @@
   <header class="admin-header">
     <div>
       <p class="admin-kicker">QuickShare</p>
-      <h1 class="admin-title">Admin Stats</h1>
-      <p class="admin-subtitle">Creation-side metrics from the current shared pages table</p>
+      <h1 class="admin-title">数据统计</h1>
+      <p class="admin-subtitle">基于当前分享记录的创建与访问数据</p>
     </div>
-    <div class="admin-actions">
-      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/pages">
-        <i class="fas fa-table" aria-hidden="true"></i>
-        <span>Pages</span>
-      </a>
-      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/apis">
-        <i class="fas fa-key" aria-hidden="true"></i>
-        <span>API</span>
-      </a>
-      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/audit">
-        <i class="fas fa-history" aria-hidden="true"></i>
-        <span>Audit</span>
-      </a>
-      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/">
-        <i class="fas fa-plus" aria-hidden="true"></i>
-        <span>Create</span>
-      </a>
-    </div>
+    <%- include('partials/admin-nav', { current: 'stats' }) %>
   </header>
 
-  <section class="admin-metric-grid" aria-label="Summary metrics">
+  <section class="admin-metric-grid" aria-label="汇总指标">
     <article class="card admin-metric-card">
-      <span>Total Shares</span>
+      <span>分享总数</span>
       <strong><%= stats.total %></strong>
     </article>
     <article class="card admin-metric-card">
-      <span>Public</span>
+      <span>公开分享</span>
       <strong><%= stats.public %></strong>
-      <small><%= stats.publicPercent %>% of total</small>
+      <small>占总数 <%= stats.publicPercent %>%</small>
     </article>
     <article class="card admin-metric-card">
-      <span>Protected</span>
+      <span>密码保护</span>
       <strong><%= stats.protected %></strong>
-      <small><%= stats.protectedPercent %>% of total</small>
+      <small>占总数 <%= stats.protectedPercent %>%</small>
     </article>
     <article class="card admin-metric-card">
-      <span>Latest Share</span>
+      <span>最近创建</span>
       <strong class="admin-metric-date">
         <% if (stats.latestCreatedAt) { %>
           <%= new Date(Number(stats.latestCreatedAt)).toLocaleString('zh-CN', { hour12: false }) %>
         <% } else { %>
-          -
+          暂无
         <% } %>
       </strong>
     </article>
   </section>
 
   <section class="admin-dashboard-grid">
-    <article class="card admin-chart-card">
+    <article class="card admin-chart-card" aria-labelledby="content-types-title" aria-describedby="content-types-summary">
       <div class="admin-content-header">
-        <h2>Content Types</h2>
+        <h2 id="content-types-title">内容类型</h2>
       </div>
       <% if (stats.byType.length === 0) { %>
-        <p class="admin-muted">No shares yet.</p>
+        <p id="content-types-summary" class="admin-muted">暂无分享。</p>
       <% } else { %>
-        <div class="admin-bar-list">
+        <p id="content-types-summary" class="admin-chart-summary">
+          <%= stats.byType.map((item) => item.codeType + ' ' + item.count + ' 个').join('，') %>。
+        </p>
+        <div class="admin-bar-list" aria-hidden="true">
           <% stats.byType.forEach((item) => { %>
             <div class="admin-bar-row">
               <div class="admin-bar-label">
                 <span><%= item.codeType %></span>
                 <strong><%= item.count %></strong>
               </div>
-              <div class="admin-bar-track" aria-label="<%= item.codeType %> <%= item.count %>">
+              <div class="admin-bar-track">
                 <div class="admin-bar-fill" style="width: <%= item.percent %>%;"></div>
               </div>
             </div>
@@ -78,47 +64,59 @@
       <% } %>
     </article>
 
-    <article class="card admin-chart-card">
+    <article class="card admin-chart-card" aria-labelledby="protection-title" aria-describedby="protection-summary">
       <div class="admin-content-header">
-        <h2>Protection Mix</h2>
+        <h2 id="protection-title">保护方式</h2>
       </div>
-      <div class="admin-stacked-bar" aria-label="Protection mix">
-        <div class="admin-stack-public" style="width: <%= stats.publicPercent %>%;"></div>
-        <div class="admin-stack-protected" style="width: <%= stats.protectedPercent %>%;"></div>
-      </div>
-      <div class="admin-legend">
-        <span><i class="admin-legend-public"></i>Public <%= stats.public %></span>
-        <span><i class="admin-legend-protected"></i>Protected <%= stats.protected %></span>
+      <p id="protection-summary" class="admin-chart-summary">
+        公开分享 <%= stats.public %> 个，密码保护 <%= stats.protected %> 个。
+      </p>
+      <div aria-hidden="true">
+        <div class="admin-stacked-bar">
+          <div class="admin-stack-public" style="width: <%= stats.publicPercent %>%;"></div>
+          <div class="admin-stack-protected" style="width: <%= stats.protectedPercent %>%;"></div>
+        </div>
+        <div class="admin-legend">
+          <span><i class="admin-legend-public"></i>公开 <%= stats.public %></span>
+          <span><i class="admin-legend-protected"></i>密码保护 <%= stats.protected %></span>
+        </div>
       </div>
     </article>
   </section>
 
-  <section class="card admin-chart-card">
+  <section class="card admin-chart-card" aria-labelledby="top-viewed-title" aria-describedby="top-viewed-summary">
     <div class="admin-content-header">
-      <h2>Most Viewed</h2>
+      <h2 id="top-viewed-title">访问最多</h2>
     </div>
     <% if (!stats.topViewed || stats.topViewed.length === 0) { %>
-      <p class="admin-muted">No views yet.</p>
+      <p id="top-viewed-summary" class="admin-muted">暂无访问记录。</p>
     <% } else { %>
+      <p id="top-viewed-summary" class="admin-chart-summary">
+        <%= stats.topViewed.map((item) => item.title + ' ' + item.viewCount + ' 次').join('，') %>。
+      </p>
       <div class="admin-top-viewed-list">
         <% stats.topViewed.forEach((item) => { %>
           <div class="admin-top-viewed-row">
             <a class="admin-top-viewed-title" href="/admin/pages/<%= encodeURIComponent(item.id) %>"><%= item.title %></a>
-            <div class="admin-top-viewed-bar-track" aria-label="<%= item.title %> <%= item.viewCount %> views">
-              <div class="admin-top-viewed-bar-fill" style="width: <%= stats.topViewed[0].viewCount > 0 ? (item.viewCount / stats.topViewed[0].viewCount * 100) : 0 %>%; opacity: <%= 0.4 + (item.viewCount / stats.topViewed[0].viewCount) * 0.6 %>;"></div>
+            <div class="admin-top-viewed-bar-track" aria-hidden="true">
+              <div class="admin-top-viewed-bar-fill" style="width: <%= stats.topViewed[0].viewCount > 0 ? (item.viewCount / stats.topViewed[0].viewCount * 100) : 0 %>%; opacity: <%= stats.topViewed[0].viewCount > 0 ? 0.4 + (item.viewCount / stats.topViewed[0].viewCount) * 0.6 : 0.4 %>;"></div>
             </div>
-            <span class="admin-top-viewed-count"><%= item.viewCount %></span>
+            <span class="admin-top-viewed-count"><%= item.viewCount %> 次</span>
           </div>
         <% }) %>
       </div>
     <% } %>
   </section>
 
-  <section class="card admin-chart-card">
+  <%
+    const recentTotal = stats.recentDays.reduce((sum, day) => sum + Number(day.count || 0), 0);
+  %>
+  <section class="card admin-chart-card" aria-labelledby="recent-shares-title" aria-describedby="recent-shares-summary">
     <div class="admin-content-header">
-      <h2>Shares Created In Last 14 Days</h2>
+      <h2 id="recent-shares-title">最近 14 天创建趋势</h2>
     </div>
-    <div class="admin-timeline" aria-label="Shares created in last 14 days">
+    <p id="recent-shares-summary" class="admin-chart-summary">最近 14 天共创建 <%= recentTotal %> 个分享。</p>
+    <div class="admin-timeline" aria-hidden="true">
       <% stats.recentDays.forEach((day) => { %>
         <div class="admin-day-column">
           <div class="admin-day-count"><%= day.count %></div>

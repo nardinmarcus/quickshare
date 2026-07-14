@@ -36,3 +36,16 @@
 - A non-persistent preview is still asynchronous state: publishing, clearing, continuing, or editing must abort or invalidate any older response.
 - Mark a published receipt as the previous result as soon as the draft changes, so copy/open actions never imply that the current editor contents are already live.
 - Keep the preview sandbox stricter than the published viewer when full form, popup, modal, and download behavior is not required for pre-publish inspection.
+
+## 2026-07-14 — Make accessibility tests parse the artifact they claim to test
+
+- Use HTML tag boundaries such as `<th\b`; a prefix-only expression also matches `<thead>` and creates a false failure.
+- Static EJS contains `%>` inside attributes, so `[^>]*` is not a reliable stand-in for rendered HTML. Exercise the rendered route when attribute order matters, or bound static assertions to one source line.
+- In browser tests, wait for the submitted navigation and asynchronous status text rather than assuming a keypress or a visible-but-empty live region has completed.
+- Allow only the exact expected console error from a deliberate negative request, such as the tested unlock `401`; keep all other console and page errors failing.
+
+## 2026-07-14 — Keep irreversible UI state aligned with the request lifecycle
+
+- Once an irreversible mutation request is dispatched, disable every dismiss path and expose progress until the request succeeds or fails; otherwise the UI can imply cancellation while the server still commits the change.
+- When a control hides a dependent field, clear its stale value and validation state, and gate both validation and payload construction on the controlling state.
+- Invalidate derived previews after their source changes, reload through the real nested iframe consumer, and guard optional CDN globals so a third-party outage degrades without breaking content.

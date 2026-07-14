@@ -3,127 +3,17 @@ function dashboardCsrfToken() {
   return meta ? meta.getAttribute('content') : '';
 }
 
-(function () {
-  const modal = document.getElementById('delete-modal');
-  const modalTarget = document.getElementById('delete-modal-target');
-  const confirmBtn = document.getElementById('delete-modal-confirm');
-  const cancelBtn = document.getElementById('delete-modal-cancel');
-  let currentPageId = null;
-
-  function openModal() {
-    modal.hidden = false;
-    document.body.style.overflow = 'hidden';
-  }
-
-  function closeModal() {
-    modal.hidden = true;
-    document.body.style.overflow = '';
-    currentPageId = null;
-  }
-
-  document.querySelectorAll('.admin-delete-btn').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      currentPageId = btn.dataset.pageId;
-      modalTarget.textContent = btn.dataset.pageTitle || currentPageId;
-      openModal();
-    });
-  });
-
-  cancelBtn.addEventListener('click', closeModal);
-
-  modal.querySelector('.admin-modal-backdrop').addEventListener('click', closeModal);
-
-  confirmBtn.addEventListener('click', async function () {
-    if (!currentPageId) return;
-
-    confirmBtn.disabled = true;
-    confirmBtn.textContent = 'Deleting...';
-
-    try {
-      const response = await fetch('/admin/pages/' + encodeURIComponent(currentPageId), {
-        method: 'DELETE',
-        headers: {
-          'Accept': 'application/json',
-          'X-CSRF-Token': dashboardCsrfToken()
-        }
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        Toast.success('Page deleted');
-        setTimeout(function () { window.location.reload(); }, 800);
-      } else {
-        Toast.error(data.error || 'Failed to delete page');
-        confirmBtn.disabled = false;
-        confirmBtn.textContent = 'Delete';
-      }
-    } catch (err) {
-      Toast.error('Network error: ' + err.message);
-      confirmBtn.disabled = false;
-      confirmBtn.textContent = 'Delete';
-    }
-  });
-
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && !modal.hidden) {
-      closeModal();
-    }
-  });
-
-  // Jump to page
-  var jumpInput = document.getElementById('jump-page-input');
-  var jumpBtn = document.getElementById('jump-page-btn');
-  if (jumpInput && jumpBtn) {
-    function doJump() {
-      var p = parseInt(jumpInput.value, 10);
-      if (!Number.isFinite(p) || p < 1) return;
-      var maxPage = parseInt(jumpInput.max, 10) || 1;
-      if (p > maxPage) p = maxPage;
-      var params = new URLSearchParams(window.location.search);
-      params.set('page', p);
-      window.location.href = '/admin/pages?' + params.toString();
-    }
-    jumpBtn.addEventListener('click', doJump);
-    jumpInput.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') doJump();
-    });
-  }
-
-  // Date range filter
-  var dateFromInput = document.getElementById('filter-date-from');
-  var dateToInput = document.getElementById('filter-date-to');
-  var dateFilterBtn = document.getElementById('date-filter-btn');
-  if (dateFilterBtn && dateFromInput && dateToInput) {
-    dateFilterBtn.addEventListener('click', function () {
-      var params = new URLSearchParams(window.location.search);
-      if (dateFromInput.value) {
-        params.set('dateFrom', dateFromInput.value);
-      } else {
-        params.delete('dateFrom');
-      }
-      if (dateToInput.value) {
-        params.set('dateTo', dateToInput.value);
-      } else {
-        params.delete('dateTo');
-      }
-      params.delete('page');
-      window.location.href = '/admin/pages?' + params.toString();
-    });
-  }
-})();
-
-// ===== Toast 通知系统 =====
 window.Toast = {
   container: null,
 
   init: function () {
     if (this.container) return;
+
     this.container = document.createElement('div');
     this.container.className = 'toast-container';
     this.container.setAttribute('role', 'region');
     this.container.setAttribute('aria-live', 'polite');
-    this.container.setAttribute('aria-label', 'Notifications');
+    this.container.setAttribute('aria-label', '通知');
     document.body.appendChild(this.container);
   },
 
@@ -133,26 +23,33 @@ window.Toast = {
     this.init();
 
     var toast = document.createElement('div');
-    toast.className = 'toast toast-' + type;
-
     var icons = { success: 'fa-check', error: 'fa-times', info: 'fa-info' };
+    toast.className = 'toast toast-' + type;
+    toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    toast.setAttribute('aria-atomic', 'true');
 
-    var contentSpan = document.createElement('span');
-    contentSpan.className = 'toast-content';
-    contentSpan.textContent = message;
+    var icon = document.createElement('span');
+    icon.className = 'toast-icon';
+    icon.innerHTML = '<i class="fas ' + icons[type] + '" aria-hidden="true"></i>';
 
-    toast.innerHTML =
-      '<span class="toast-icon"><i class="fas ' + icons[type] + '" aria-hidden="true"></i></span>';
-    toast.appendChild(contentSpan);
-    toast.innerHTML +=
-      '<button class="toast-close" aria-label="Close notification"><i class="fas fa-times" aria-hidden="true"></i></button>' +
-      '<div class="toast-progress" style="width:100%"></div>';
+    var content = document.createElement('span');
+    content.className = 'toast-content';
+    content.textContent = message;
 
+    var close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'toast-close';
+    close.setAttribute('aria-label', '关闭通知');
+    close.innerHTML = '<i class="fas fa-times" aria-hidden="true"></i>';
+
+    var progress = document.createElement('div');
+    progress.className = 'toast-progress';
+    progress.style.width = '100%';
+
+    toast.append(icon, content, close, progress);
     this.container.appendChild(toast);
-
     requestAnimationFrame(function () { toast.classList.add('show'); });
 
-    var progress = toast.querySelector('.toast-progress');
     var startTime = Date.now();
     var timer = setInterval(function () {
       var elapsed = Date.now() - startTime;
@@ -164,7 +61,7 @@ window.Toast = {
     var self = this;
     var autoClose = setTimeout(function () { self.dismiss(toast, timer); }, duration);
 
-    toast.querySelector('.toast-close').addEventListener('click', function () {
+    close.addEventListener('click', function () {
       clearTimeout(autoClose);
       clearInterval(timer);
       self.dismiss(toast);
@@ -182,99 +79,252 @@ window.Toast = {
   info: function (message, duration) { this.show(message, 'info', duration); }
 };
 
-// ===== Batch Operations =====
-(function () {
-  var selectAll = document.getElementById('select-all');
-  var toolbar = document.getElementById('batch-toolbar');
-  var countSpan = document.getElementById('batch-count');
-  var deleteBtn = document.getElementById('batch-delete-btn');
-  var cancelBtn = document.getElementById('batch-cancel-btn');
-  var checkboxes = document.querySelectorAll('.row-checkbox');
+(function initAdminPages() {
+  var jumpInput = document.getElementById('jump-page-input');
+  var jumpBtn = document.getElementById('jump-page-btn');
+  var dateFromInput = document.getElementById('filter-date-from');
+  var dateToInput = document.getElementById('filter-date-to');
+  var dateFilterBtn = document.getElementById('date-filter-btn');
 
-  if (!selectAll || !toolbar || checkboxes.length === 0) return;
+  if (jumpInput && jumpBtn) {
+    function doJump() {
+      var page = parseInt(jumpInput.value, 10);
+      if (!Number.isFinite(page) || page < 1) return;
 
-  function selectedIds() {
-    var ids = [];
-    checkboxes.forEach(function (cb) { if (cb.checked) ids.push(cb.dataset.id); });
-    return ids;
+      var maxPage = parseInt(jumpInput.max, 10) || 1;
+      var params = new URLSearchParams(window.location.search);
+      params.set('page', Math.min(page, maxPage));
+      window.location.href = '/admin/pages?' + params.toString();
+    }
+
+    jumpBtn.addEventListener('click', doJump);
+    jumpInput.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') doJump();
+    });
   }
 
-  function updateToolbar() {
-    var ids = selectedIds();
-    countSpan.textContent = ids.length + ' selected';
-    deleteBtn.disabled = ids.length === 0;
-    toolbar.hidden = ids.length === 0;
+  if (dateFilterBtn && dateFromInput && dateToInput) {
+    dateFilterBtn.addEventListener('click', function () {
+      var params = new URLSearchParams(window.location.search);
+
+      if (dateFromInput.value) params.set('dateFrom', dateFromInput.value);
+      else params.delete('dateFrom');
+
+      if (dateToInput.value) params.set('dateTo', dateToInput.value);
+      else params.delete('dateTo');
+
+      params.delete('page');
+      window.location.href = '/admin/pages?' + params.toString();
+    });
   }
 
-  selectAll.addEventListener('change', function () {
-    checkboxes.forEach(function (cb) { cb.checked = selectAll.checked; });
-    updateToolbar();
-  });
+  var modal = document.getElementById('delete-modal');
+  var modalTarget = document.getElementById('delete-modal-target');
+  var confirmBtn = document.getElementById('delete-modal-confirm');
+  var cancelBtn = document.getElementById('delete-modal-cancel');
+  var modalStatus = document.getElementById('delete-modal-status');
 
-  checkboxes.forEach(function (cb) {
-    cb.addEventListener('change', function () {
-      selectAll.checked = Array.from(checkboxes).every(function (c) { return c.checked; });
-      updateToolbar();
+  if (!modal || !modalTarget || !confirmBtn || !cancelBtn || !modalStatus) return;
+
+  var pendingDelete = null;
+  var lastFocusedElement = null;
+
+  function focusableElements() {
+    return Array.from(modal.querySelectorAll(
+      'button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter(function (element) {
+      return !element.hidden && element.getAttribute('aria-hidden') !== 'true';
+    });
+  }
+
+  function openDeleteModal(target, onConfirm, trigger) {
+    modalTarget.textContent = target;
+    pendingDelete = onConfirm;
+    lastFocusedElement = trigger || document.activeElement;
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = '删除';
+    cancelBtn.disabled = false;
+    modalStatus.textContent = '';
+    modal.setAttribute('aria-busy', 'false');
+    modal.hidden = false;
+    document.body.style.overflow = 'hidden';
+    cancelBtn.focus();
+  }
+
+  function closeDeleteModal() {
+    if (modal.hidden) return;
+    if (modal.getAttribute('aria-busy') === 'true') return;
+
+    modal.hidden = true;
+    document.body.style.overflow = '';
+    modalTarget.textContent = '';
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = '删除';
+    cancelBtn.disabled = false;
+    modalStatus.textContent = '';
+    modal.setAttribute('aria-busy', 'false');
+    pendingDelete = null;
+
+    if (lastFocusedElement && document.contains(lastFocusedElement)) {
+      lastFocusedElement.focus();
+    }
+    lastFocusedElement = null;
+  }
+
+  async function readJson(response) {
+    try {
+      return await response.json();
+    } catch (error) {
+      return {};
+    }
+  }
+
+  document.querySelectorAll('.admin-delete-btn[data-page-id]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      var pageId = button.dataset.pageId;
+      var pageTitle = button.dataset.pageTitle || pageId;
+
+      openDeleteModal(pageTitle, async function () {
+        var response = await fetch('/admin/pages/' + encodeURIComponent(pageId), {
+          method: 'DELETE',
+          headers: {
+            Accept: 'application/json',
+            'X-CSRF-Token': dashboardCsrfToken()
+          }
+        });
+        var data = await readJson(response);
+
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || '删除分享失败');
+        }
+
+        Toast.success('分享已删除');
+        setTimeout(function () { window.location.reload(); }, 800);
+      }, button);
     });
   });
 
-  cancelBtn.addEventListener('click', function () {
-    selectAll.checked = false;
-    checkboxes.forEach(function (cb) { cb.checked = false; });
-    updateToolbar();
-  });
+  var selectAll = document.getElementById('select-all');
+  var toolbar = document.getElementById('batch-toolbar');
+  var countSpan = document.getElementById('batch-count');
+  var batchDeleteBtn = document.getElementById('batch-delete-btn');
+  var batchCancelBtn = document.getElementById('batch-cancel-btn');
+  var checkboxes = Array.from(document.querySelectorAll('.row-checkbox'));
 
-  deleteBtn.addEventListener('click', async function () {
-    var ids = selectedIds();
-    if (ids.length === 0) return;
+  function selectedIds() {
+    return checkboxes
+      .filter(function (checkbox) { return checkbox.checked; })
+      .map(function (checkbox) { return checkbox.dataset.id; });
+  }
 
-    var targetText = ids.length + ' pages';
-    var modalTarget = document.getElementById('delete-modal-target');
-    var origText = modalTarget.textContent;
-    modalTarget.textContent = targetText;
-    modal.hidden = false;
-    document.body.style.overflow = 'hidden';
+  function updateToolbar() {
+    if (!selectAll || !toolbar || !countSpan || !batchDeleteBtn) return;
 
-    var confirmBtn = document.getElementById('delete-modal-confirm');
-    var origConfirm = confirmBtn.textContent;
+    var count = selectedIds().length;
+    countSpan.textContent = '已选择 ' + count + ' 项';
+    batchDeleteBtn.disabled = count === 0;
+    toolbar.hidden = count === 0;
+    selectAll.checked = count > 0 && count === checkboxes.length;
+    selectAll.indeterminate = count > 0 && count < checkboxes.length;
+  }
 
-    function cleanup() {
-      modal.hidden = true;
-      document.body.style.overflow = '';
-      modalTarget.textContent = origText;
-      confirmBtn.disabled = false;
-      confirmBtn.textContent = origConfirm;
-      confirmBtn.replaceWith(confirmBtn.cloneNode(true));
-    }
+  if (selectAll && toolbar && countSpan && batchDeleteBtn && batchCancelBtn && checkboxes.length > 0) {
+    selectAll.addEventListener('change', function () {
+      checkboxes.forEach(function (checkbox) {
+        checkbox.checked = selectAll.checked;
+      });
+      updateToolbar();
+    });
 
-    confirmBtn.addEventListener('click', async function handler() {
-      confirmBtn.disabled = true;
-      confirmBtn.textContent = 'Deleting...';
+    checkboxes.forEach(function (checkbox) {
+      checkbox.addEventListener('change', updateToolbar);
+    });
 
-      try {
+    batchCancelBtn.addEventListener('click', function () {
+      checkboxes.forEach(function (checkbox) {
+        checkbox.checked = false;
+      });
+      updateToolbar();
+      selectAll.focus();
+    });
+
+    batchDeleteBtn.addEventListener('click', function () {
+      var ids = selectedIds();
+      if (ids.length === 0) return;
+
+      openDeleteModal(ids.length + ' 个分享', async function () {
         var response = await fetch('/admin/pages/batch', {
           method: 'DELETE',
           headers: {
+            Accept: 'application/json',
             'Content-Type': 'application/json',
-            'Accept': 'application/json',
             'X-CSRF-Token': dashboardCsrfToken()
           },
           body: JSON.stringify({ ids: ids })
         });
-        var data = await response.json();
-        if (data.success) {
-          Toast.success(data.deleted + ' pages deleted');
-          setTimeout(function () { window.location.reload(); }, 800);
-        } else {
-          Toast.error(data.error || 'Failed to delete pages');
-          cleanup();
-        }
-      } catch (err) {
-        Toast.error('Network error: ' + err.message);
-        cleanup();
-      }
-    });
+        var data = await readJson(response);
 
-    document.getElementById('delete-modal-cancel').addEventListener('click', cleanup);
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || '批量删除失败');
+        }
+
+        Toast.success('已删除 ' + data.deleted + ' 个分享');
+        setTimeout(function () { window.location.reload(); }, 800);
+      }, batchDeleteBtn);
+    });
+  }
+
+  confirmBtn.addEventListener('click', async function () {
+    if (!pendingDelete || confirmBtn.disabled) return;
+
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = '删除中…';
+    cancelBtn.disabled = true;
+    modalStatus.textContent = '正在删除，请稍候…';
+    modal.setAttribute('aria-busy', 'true');
+    modalStatus.focus();
+
+    try {
+      await pendingDelete();
+    } catch (error) {
+      Toast.error(error.message || '删除失败');
+      modal.setAttribute('aria-busy', 'false');
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = '删除';
+      cancelBtn.disabled = false;
+      modalStatus.textContent = '删除失败，请重试或取消。';
+      confirmBtn.focus();
+    }
+  });
+
+  cancelBtn.addEventListener('click', closeDeleteModal);
+  modal.querySelector('.admin-modal-backdrop').addEventListener('click', closeDeleteModal);
+
+  modal.addEventListener('keydown', function (event) {
+    if (event.key === 'Tab') {
+      var elements = focusableElements();
+      if (elements.length === 0) {
+        event.preventDefault();
+        return;
+      }
+
+      var first = elements[0];
+      var last = elements[elements.length - 1];
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+  });
+
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && !modal.hidden) {
+      event.preventDefault();
+      closeDeleteModal();
+    }
   });
 })();

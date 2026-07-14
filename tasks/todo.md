@@ -155,12 +155,12 @@ WP5 verification (2026-07-14):
 
 ### WP6: Accessibility and responsive admin
 
-- [ ] Add real labels, `role="alert"`/`role="status"`, `aria-busy`, visible focus, and accessible icon names.
-- [ ] Make password and result state changes readable by VoiceOver/NVDA.
-- [ ] Fix admin navigation at 375 px with wrapping or a “更多” menu; keep horizontal scrolling inside table containers only.
-- [ ] Add modal focus entry, trap, Escape handling, and focus restoration.
-- [ ] Add table captions, `scope`, `aria-sort`, and text summaries for charts.
-- [ ] Standardize the interface language on Chinese while keeping normal technical terms.
+- [x] Add real labels, `role="alert"`/`role="status"`, `aria-busy`, visible focus, and accessible icon names.
+- [x] Make password and result state changes readable by VoiceOver/NVDA.
+- [x] Fix admin navigation at 375 px with wrapping or a “更多” menu; keep horizontal scrolling inside table containers only.
+- [x] Add modal focus entry, trap, Escape handling, and focus restoration.
+- [x] Add table captions, `scope`, `aria-sort`, and text summaries for charts.
+- [x] Standardize the interface language on Chinese while keeping normal technical terms.
 
 Verify:
 
@@ -170,6 +170,16 @@ Verify:
 4. Keyboard-only -> login, publish, copy, protected unlock, and delete all complete.
 5. VoiceOver -> publish status, errors, and protected unlock are announced.
 6. Chrome and Safari -> light/dark visual smoke passes.
+
+WP6 verification (2026-07-14):
+
+- Full Node suite: `70/70` passed.
+- Chromium and WebKit: keyboard login, five-item admin navigation, single and batch delete dialog focus trap/Escape/restoration, detail-tab arrow/Home/End behavior, and light/dark smoke all passed.
+- Mutation boundaries: an in-flight delete cannot be dismissed through cancel, backdrop, or Escape; hidden invalid passwords are discarded before saving; updated content invalidates and reloads the sandboxed preview.
+- Protected flow: automatic password remained exactly six numeric digits; empty, wrong, and correct keyboard unlock paths produced distinct accessible states and the successful share rendered through the real sandboxed iframe.
+- Chromium accessibility tree exposed the publish status, wrong-password alert, and named “确认删除” dialog.
+- 375 px: document/body width remained exactly `375 px`; the `760 px` table stayed inside a `245 px` scroll container; measured navigation, checkbox, link, clone, and delete targets were all at least `44×44 px`.
+- 640 px zoom proxy and 1440 px desktop: no page-level overflow; WebKit and Chromium reported no unexpected local resource, console, or page errors, including safe content rendering when Highlight.js CDN assets are unavailable.
 
 Rollback: creation UI and admin accessibility are separate commits; no data changes.
 

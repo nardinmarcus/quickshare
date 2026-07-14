@@ -103,6 +103,18 @@ body, .cyber-input, .cyber-btn, .file-drop-area,
   box-sizing: border-box;
 }
 
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
 body {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   background-color: var(--dark);
@@ -912,6 +924,11 @@ body:hover::-webkit-scrollbar,
   box-shadow: var(--focus-ring);
 }
 
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--primary-light);
+  outline-offset: 3px;
+}
+
 /* 可访问性增强 */
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after {
@@ -937,6 +954,7 @@ body:hover::-webkit-scrollbar,
   width: min(1120px, 100%);
   margin: 0 auto;
   padding: 2rem 1rem;
+  min-width: 0;
 }
 
 .admin-header {
@@ -956,8 +974,38 @@ body:hover::-webkit-scrollbar,
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   flex-shrink: 0;
+}
+
+.admin-nav {
+  justify-content: flex-end;
+}
+
+.admin-nav .cyber-btn,
+.admin-header-utility .cyber-btn,
+.admin-detail-actions .cyber-btn {
+  text-decoration: none;
+}
+
+.admin-nav .cyber-btn[aria-current="page"] {
+  border-color: var(--primary);
+  background: var(--button-hover);
+  color: var(--primary-light);
+}
+
+.admin-header-utility,
+.admin-detail-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: -0.75rem 0 1rem;
+}
+
+.admin-inline-form {
+  display: inline-flex;
 }
 
 .admin-kicker {
@@ -985,6 +1033,26 @@ body:hover::-webkit-scrollbar,
 
 .admin-table-wrap {
   overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--primary) transparent;
+}
+
+.admin-table-wrap::-webkit-scrollbar {
+  height: 8px;
+}
+
+.admin-table-wrap::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.admin-table-wrap::-webkit-scrollbar-thumb {
+  background: var(--primary);
+  border-radius: 999px;
+}
+
+.admin-table-wrap:focus-visible {
+  outline-offset: -2px;
 }
 
 .admin-table {
@@ -1012,6 +1080,12 @@ body:hover::-webkit-scrollbar,
 .admin-detail-grid a {
   color: var(--text-primary);
   text-decoration: none;
+}
+
+.admin-page-title {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
 }
 
 .admin-page-title:hover,
@@ -1057,8 +1131,8 @@ body:hover::-webkit-scrollbar,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2rem;
-  height: 2rem;
+  width: 44px;
+  height: 44px;
   color: var(--text-primary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
@@ -1208,6 +1282,12 @@ body:hover::-webkit-scrollbar,
 
 .admin-chart-card {
   min-height: 220px;
+}
+
+.admin-chart-summary {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
 }
 
 .admin-bar-list {
@@ -1382,6 +1462,7 @@ body:hover::-webkit-scrollbar,
   background: transparent;
   border: none;
   padding: 0.5rem 0;
+  min-height: 44px;
   color: var(--primary);
   font-size: 0.9rem;
   outline: none;
@@ -1412,6 +1493,10 @@ body:hover::-webkit-scrollbar,
 }
 
 .admin-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
   padding: 0.35rem 0.6rem;
   border-radius: 6px;
   font-size: 0.8rem;
@@ -1465,8 +1550,9 @@ body:hover::-webkit-scrollbar,
   background: transparent;
   border: 1px solid var(--error-border);
   color: var(--error-border);
-  width: 2rem;
-  height: 2rem;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
   border-radius: 6px;
   cursor: pointer;
   display: inline-flex;
@@ -1481,7 +1567,8 @@ body:hover::-webkit-scrollbar,
 }
 
 .admin-actions-col {
-  width: 80px;
+  width: 120px;
+  min-width: 120px;
   white-space: nowrap;
 }
 
@@ -1492,12 +1579,17 @@ body:hover::-webkit-scrollbar,
   vertical-align: middle;
 }
 
+.admin-actions-col form {
+  margin-right: 4px;
+}
+
 .admin-clone-btn {
   background: transparent;
   border: 1px solid var(--border-color);
   color: var(--text-secondary);
-  width: 2rem;
-  height: 2rem;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
   border-radius: 6px;
   cursor: pointer;
   display: inline-flex;
@@ -1527,6 +1619,7 @@ body:hover::-webkit-scrollbar,
   background: var(--bg-input);
   color: var(--text-primary);
   font-size: 0.85rem;
+  min-height: 44px;
 }
 
 .admin-date-range span {
@@ -1617,11 +1710,19 @@ body:hover::-webkit-scrollbar,
   font-size: 0.8rem !important;
 }
 
+.admin-modal-status {
+  min-height: 1.5em;
+}
+
 .admin-modal-actions {
   display: flex;
   gap: 0.75rem;
   justify-content: flex-end;
   margin-top: 1.25rem;
+}
+
+.admin-modal-actions .cyber-btn {
+  min-height: 44px;
 }
 
 /* Admin edit form */
@@ -1658,6 +1759,12 @@ body:hover::-webkit-scrollbar,
   font-size: 0.9rem;
   outline: none;
   transition: border-color 0.15s ease;
+}
+
+.admin-edit-field input[type="text"],
+.admin-edit-field input[type="datetime-local"],
+.admin-edit-field select {
+  min-height: 44px;
 }
 
 .admin-edit-field input:focus,
@@ -1697,7 +1804,15 @@ body:hover::-webkit-scrollbar,
 }
 
 .admin-toggle-label input[type="checkbox"] {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.admin-toggle-label input[type="checkbox"]:focus-visible + .admin-toggle-slider {
+  outline: 2px solid var(--primary-light);
+  outline-offset: 3px;
 }
 
 .admin-toggle-slider {
@@ -1799,8 +1914,9 @@ body:hover::-webkit-scrollbar,
   background: transparent;
   border: 1px solid var(--border-color);
   color: var(--text-secondary);
-  width: 2.2rem;
-  height: 2.2rem;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
   border-radius: 6px;
   cursor: pointer;
   display: inline-flex;
@@ -1869,6 +1985,19 @@ body:hover::-webkit-scrollbar,
     flex-direction: column;
   }
 
+  .admin-nav {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .admin-nav .cyber-btn {
+    justify-content: center;
+    min-width: 0;
+    min-height: 44px;
+    padding-inline: 0.65rem;
+  }
+
   .admin-home-link {
     justify-content: center;
   }
@@ -1885,6 +2014,44 @@ body:hover::-webkit-scrollbar,
   .admin-pagination {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .admin-header-utility,
+  .admin-detail-actions {
+    justify-content: stretch;
+    margin-top: -0.5rem;
+  }
+
+  .admin-header-utility .cyber-btn,
+  .admin-detail-actions > * {
+    flex: 1 1 auto;
+  }
+
+  .admin-search-form,
+  .admin-filter-group,
+  .admin-date-range {
+    align-items: stretch;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .admin-filter-label {
+    width: 100%;
+  }
+
+  .admin-filter-buttons {
+    flex-wrap: wrap;
+  }
+
+  .admin-search-box {
+    min-width: 100%;
+  }
+
+  .admin-edit-field input,
+  .admin-edit-field textarea,
+  .admin-edit-field select,
+  .admin-date-range input[type="date"] {
+    font-size: 16px;
   }
 }
 
@@ -3373,6 +3540,7 @@ body:hover::-webkit-scrollbar,
 .batch-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.75rem;
   padding: 0.6rem 1rem;
   background: var(--bg-card, var(--bg-main));
@@ -3386,8 +3554,17 @@ body:hover::-webkit-scrollbar,
 }
 
 .admin-checkbox-cell {
-  width: 40px;
+  width: 56px;
   text-align: center;
+}
+
+.admin-checkbox-target {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  cursor: pointer;
 }
 
 .admin-checkbox-cell input,
@@ -3510,7 +3687,10 @@ body:hover::-webkit-scrollbar,
   border: none;
   color: var(--text-secondary);
   cursor: pointer;
-  padding: 2px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  margin: -10px -10px -10px 0;
   font-size: 13px;
   line-height: 1;
   transition: color 0.2s;
@@ -3559,6 +3739,7 @@ body:hover::-webkit-scrollbar,
   align-items: center;
   gap: 6px;
   font-family: inherit;
+  min-height: 44px;
 }
 
 .admin-tab:hover { color: var(--text-primary); }
@@ -4210,5 +4391,31 @@ body:hover::-webkit-scrollbar,
   .api-key-secret-row {
     flex-direction: column;
     align-items: stretch;
+  }
+}
+
+@media (max-width: 768px) {
+  .admin-edit-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-content-header {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .admin-content-tabs {
+    flex: 1 1 100%;
+  }
+
+  .admin-tab {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .admin-search-box input,
+  .admin-page-jump input,
+  .api-key-form-row input {
+    font-size: 16px;
   }
 }
