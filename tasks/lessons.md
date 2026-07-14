@@ -49,3 +49,8 @@
 - Once an irreversible mutation request is dispatched, disable every dismiss path and expose progress until the request succeeds or fails; otherwise the UI can imply cancellation while the server still commits the change.
 - When a control hides a dependent field, clear its stale value and validation state, and gate both validation and payload construction on the controlling state.
 - Invalidate derived previews after their source changes, reload through the real nested iframe consumer, and guard optional CDN globals so a third-party outage degrades without breaking content.
+
+## 2026-07-15 — Revalidate imports after moving tests into nested suites
+
+- Moving a test from `test/` to `test/integration/` changes every repository-relative import depth; update and syntax-check those imports before running an external integration dependency.
+- A module-resolution failure means the database test never reached the database, so fix the harness and rerun the same assertions before recording migration evidence.

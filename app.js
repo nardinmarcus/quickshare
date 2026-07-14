@@ -41,8 +41,6 @@ const parseSmallJson = bodyParser.json({ limit: config.smallBodyLimit });
 const parseSmallForm = bodyParser.urlencoded({ extended: true, limit: config.smallBodyLimit });
 const parseShareJson = bodyParser.json({ limit: config.shareBodyLimit });
 
-let initPromise = null;
-
 app.locals.config = config;
 app.locals.pageRepository = pageRepository;
 
@@ -70,23 +68,6 @@ function setPrivateNoStore(res) {
 function privateNoStore(req, res, next) {
   setPrivateNoStore(res);
   return next();
-}
-
-function shouldRunDatabaseInit() {
-  const isProductionRuntime = config.env === 'production' || process.env.VERCEL_ENV === 'production';
-  return !isProductionRuntime || process.env.RUN_SCHEMA_INIT === 'true';
-}
-
-function ensureDatabase() {
-  if (!shouldRunDatabaseInit()) {
-    return Promise.resolve();
-  }
-
-  if (!initPromise) {
-    initPromise = pageRepository.init();
-  }
-
-  return initPromise;
 }
 
 function getAdminSession(req) {
@@ -224,8 +205,6 @@ async function requireApiKey(req, res, next) {
   }
 
   try {
-    await ensureDatabase();
-
     const apiKey = await pageRepository.getApiKeyById(match[1]);
     const isValid = apiKey && await verifySecret(match[2], apiKey.key_hash);
 
@@ -705,8 +684,6 @@ app.get('/admin', (req, res) => {
 
 app.get('/admin/apis', requireDashboardAdmin, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const apiKeys = await pageRepository.listApiKeys();
     const sessionToken = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE] || '';
 
@@ -729,8 +706,6 @@ app.get('/admin/apis', requireDashboardAdmin, async (req, res) => {
 
 app.post('/admin/apis/keys', requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const name = String(req.body?.name || '').trim();
 
     if (!name || name.length > 80) {
@@ -779,8 +754,6 @@ app.post('/admin/apis/keys', requireDashboardAdmin, parseSmallJson, requireDashb
 
 app.delete('/admin/apis/keys/:id', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const deleted = await pageRepository.deleteApiKey(req.params.id);
 
     if (!deleted) {
@@ -809,8 +782,6 @@ app.delete('/admin/apis/keys/:id', requireDashboardAdmin, requireDashboardCsrf, 
 
 app.get('/admin/pages/export', requireDashboardAdmin, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const pages = await pageRepository.listAdminPages({ limit: 10000, offset: 0 });
     const exportData = pages.map((page) => ({
       id: page.id,
@@ -833,8 +804,6 @@ app.get('/admin/pages/export', requireDashboardAdmin, async (req, res) => {
 
 app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const requestedPagination = parsePagination(req.query);
     const filterOptions = {
       search: req.query.search || '',
@@ -901,8 +870,6 @@ app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
 
 app.get('/admin/stats', requireDashboardAdmin, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const stats = enrichAdminStats(await pageRepository.getAdminStats());
 
     return res.render('admin-stats', {
@@ -922,8 +889,6 @@ app.get('/admin/stats', requireDashboardAdmin, async (req, res) => {
 
 app.get('/admin/audit', requireDashboardAdmin, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const limit = 50;
     const currentPage = Math.max(1, parseInt(req.query.page, 10) || 1);
     const offset = (currentPage - 1) * limit;
@@ -956,8 +921,6 @@ app.get('/admin/audit', requireDashboardAdmin, async (req, res) => {
 
 app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const sharedPage = await pageRepository.getById(req.params.id);
 
     if (!sharedPage) {
@@ -1002,8 +965,6 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
 
 app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashboardCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const page = await pageRepository.getById(req.params.id);
 
     if (!page) {
@@ -1104,8 +1065,6 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
 
 app.delete('/admin/pages/batch', requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const { ids } = req.body;
 
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -1134,8 +1093,6 @@ app.delete('/admin/pages/batch', requireDashboardAdmin, parseSmallJson, requireD
 
 app.delete('/admin/pages/:id', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const page = await pageRepository.getById(req.params.id);
 
     if (!page) {
@@ -1168,8 +1125,6 @@ app.delete('/admin/pages/:id', requireDashboardAdmin, requireDashboardCsrf, asyn
 
 app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requireDashboardCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const page = await pageRepository.getById(req.params.id);
 
     if (!page) {
@@ -1198,8 +1153,6 @@ app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requir
 
 app.post('/api/pages/create', privateNoStore, requireApiAdmin, parseShareJson, requireCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const result = await createPageFromInput(req.body);
 
     if (result.error) {
@@ -1268,8 +1221,6 @@ app.post('/api/pages/preview', privateNoStore, requireApiAdmin, parseShareJson, 
 
 app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const result = await createPageFromInput(req.body);
 
     if (result.error) {
@@ -1306,8 +1257,6 @@ app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (
 
 app.get('/api/pages/list/recent', requireApiAdmin, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const limit = Math.min(Number.parseInt(req.query.limit || '10', 10), 50);
     const pages = await pageRepository.listRecent(Number.isFinite(limit) ? limit : 10);
 
@@ -1326,8 +1275,6 @@ app.get('/api/pages/list/recent', requireApiAdmin, async (req, res) => {
 
 app.get('/api/pages/:id', async (req, res) => {
   try {
-    await ensureDatabase();
-
     const publicPage = await pageRepository.getPublicById(req.params.id, Date.now());
 
     if (!publicPage) {
@@ -1374,8 +1321,6 @@ app.get('/api/pages/:id', async (req, res) => {
 
 app.post('/api/pages/:id/protect', privateNoStore, requireApiAdmin, parseSmallJson, requireCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const page = await pageRepository.getById(req.params.id);
 
     if (!page) {
@@ -1423,8 +1368,6 @@ app.post('/api/pages/:id/protect', privateNoStore, requireApiAdmin, parseSmallJs
 
 app.post('/view/:id/password', privateNoStore, parseSmallJson, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const publicPage = await pageRepository.getPublicById(req.params.id, Date.now());
 
     if (!publicPage) {
@@ -1471,8 +1414,6 @@ app.post('/view/:id/password', privateNoStore, parseSmallJson, async (req, res) 
 
 app.get('/view/:id', async (req, res) => {
   try {
-    await ensureDatabase();
-
     const publicPage = await pageRepository.getPublicById(req.params.id, Date.now());
 
     if (!publicPage) {

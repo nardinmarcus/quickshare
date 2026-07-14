@@ -1,12 +1,21 @@
-function createPageRepository() {
-  if (process.env.NODE_ENV === 'test') {
+function createPageRepository(env = process.env) {
+  if (env.NODE_ENV === 'test') {
     const { MemoryPageRepository } = require('./memory-pages');
     return new MemoryPageRepository();
   }
 
-  if (process.env.DATABASE_URL || process.env.POSTGRES_URL) {
+  const connectionString = env.DATABASE_URL || env.POSTGRES_URL;
+
+  if (connectionString) {
     const { PostgresPageRepository } = require('./postgres-pages');
-    return new PostgresPageRepository(process.env.DATABASE_URL || process.env.POSTGRES_URL);
+    return new PostgresPageRepository(connectionString, env);
+  }
+
+  const isVercelProduction = env.VERCEL_ENV === 'production';
+  const isStandaloneProduction = env.NODE_ENV === 'production' && !env.VERCEL_ENV;
+
+  if (isVercelProduction || isStandaloneProduction) {
+    throw new Error('DATABASE_URL or POSTGRES_URL is required in production');
   }
 
   const { MemoryPageRepository } = require('./memory-pages');

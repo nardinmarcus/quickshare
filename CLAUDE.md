@@ -6,7 +6,8 @@ Express 4 + EJS + PostgreSQL (生产) / 内存 (开发)。部署在 Vercel。
 
 ## 关键约定
 
-- 仓库选择在 `models/pageRepository.js`，根据 `DATABASE_URL` 自动切换 Postgres / 内存。
+- 仓库选择在 `models/pageRepository.js`；本地无 `DATABASE_URL` 时可用内存，生产缺失持久数据库时必须启动失败。
+- 数据库 schema 只通过 `db/migrations/` 与 `npm run db:migrate` 更新，业务请求和服务启动不得执行 DDL。
 - 认证分两层：
   - **前端登录**（`/login`）：签名 cookie `admin_session`，用于首页创建分享。中间件 `requireAdmin`。
   - **管理后台**（`/admin/login`）：签名 cookie `dashboard_admin_session`，用于 pages/stats/audit 管理。中间件 `requireDashboardAdmin`。
@@ -56,7 +57,8 @@ app.js           Express app 工厂，所有路由定义在此
 config.js        环境变量聚合
 server.js        本地服务器入口
 vercel-app.js    Vercel 构建时使用的 app 包装
-models/          数据层（pageRepository 选择器 + postgres-pages / memory-pages / vercel-pages / vercel-db）
+models/          数据层（pageRepository 选择器 + Postgres / 内存仓储 + 迁移与连接配置）
+db/migrations/  编号 SQL 迁移；应用部署前显式执行
 views/           EJS 模板（index / login / password / admin-* / error / partials/）
 middleware/      中间件（auth.js: isAuthenticated）
 routes/          路由模块（pages.js 已废弃，返回 410）
@@ -88,5 +90,5 @@ npm test
 - `AUTH_PASSWORD`（明文）仅限开发环境，生产环境会被 `config.js` 拒绝。
 - `SHARE_API_KEY` 用于 `POST /api/v1/share` 的 API Key 鉴权，未设置时该端点返回 503。
 - sandbox iframe 只允许脚本执行，不允许同源访问父页面 DOM/cookie。
-- 页面密码支持自定义（4-50 字符）或自动生成（数字），密码以 hash 存储、以 encrypt 存储（供管理后台回显）。
+- 页面密码支持自定义（4-12 个允许的 ASCII 字符）或自动生成（6 位数字），密码以 hash 存储、以 encrypt 存储（供管理后台回显）。
 - 页面访问通过 `page_access_{id}` 签名 cookie 控制，有效期 24 小时。

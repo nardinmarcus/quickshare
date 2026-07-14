@@ -79,7 +79,7 @@ test('admin stats aggregate totals, protection, types, and recent days', async (
 });
 
 
-test('Postgres API key methods create their schema once on first use', async () => {
+test('Postgres runtime methods never create or alter schema', async () => {
   const repository = Object.create(PostgresPageRepository.prototype);
   const queries = [];
 
@@ -94,17 +94,12 @@ test('Postgres API key methods create their schema once on first use', async () 
       return { rows: [] };
     }
   };
-  repository.apiKeysInitPromise = null;
 
-  const [first, second] = await Promise.all([
-    repository.listApiKeys(),
-    repository.listApiKeys()
-  ]);
+  await repository.init();
+  const apiKeys = await repository.listApiKeys();
 
-  assert.deepEqual(first, []);
-  assert.deepEqual(second, []);
-  assert.equal(queries.filter(sql => sql.includes('CREATE TABLE IF NOT EXISTS api_keys')).length, 1);
-  assert.equal(queries.filter(sql => sql.includes('CREATE INDEX IF NOT EXISTS idx_api_keys_created_at')).length, 1);
+  assert.deepEqual(apiKeys, []);
+  assert.equal(queries.some(sql => /\b(?:CREATE|ALTER|DROP)\b/i.test(sql)), false);
 });
 
 test('Postgres public lookup reports expiry in one query', async () => {

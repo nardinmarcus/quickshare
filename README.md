@@ -4,7 +4,7 @@
 
 当前实现已按 Vercel 部署路径收敛：
 
-- Vercel 生产环境通过 `DATABASE_URL` 使用 Postgres。
+- Vercel 生产环境通过 `DATABASE_URL` 使用 Postgres；缺失时直接启动失败，不会退回内存数据。
 - 本地没有 `DATABASE_URL` 时自动使用内存仓库，便于开发和 smoke test。
 - 管理端登录使用签名 cookie，不再依赖文件 session。
 - 管理端写操作带 CSRF token。
@@ -49,6 +49,8 @@ http://localhost:5678
 npm run dev
 npm start
 npm test
+npm run test:postgres
+npm run db:migrate
 npm run hash-password -- "your-admin-password"
 ```
 
@@ -61,12 +63,13 @@ config.js         环境变量聚合
 server.js         本地服务器入口
 vercel-app.js     Vercel 构建时使用的 app 包装
 models/           数据层（Repository 选择器 + Postgres / 内存实现）
+db/migrations/    按编号执行的 Postgres schema 迁移
 views/            EJS 模板（含 admin-* 管理后台页面）
 middleware/       中间件（auth.js）
 routes/           路由模块（pages.js 已废弃）
 public/           静态资源（css/ js/ icon/）
 utils/            security.js, contentRenderer.js, codeDetector.js, pageTitle.js
-scripts/          hash-password.js
+scripts/          迁移、密码 hash 与维护脚本
 test/             Node test runner
 docs/             部署指南
 DESIGN.md         后台 UI 设计稿
@@ -92,6 +95,13 @@ share.example.com
 
 ```bash
 npm test
+```
+
+Postgres 迁移集成测试需要一次性本地测试库，数据库名必须以 `_test` 结尾：
+
+```bash
+POSTGRES_TEST_URL=postgresql://postgres:password@127.0.0.1:5432/quickshare_test?sslmode=disable \
+  npm run test:postgres
 ```
 
 当前测试覆盖：
