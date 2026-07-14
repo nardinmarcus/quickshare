@@ -1,4 +1,4 @@
-<%- include('partials/header', { title, page }) %>
+<%- include('partials/header', { title, page, csrfToken }) %>
 
 <div class="admin-container">
   <header class="admin-header">
@@ -13,6 +13,7 @@
         <span>Edit</span>
       </button>
       <form method="post" action="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>/clone" style="display:inline">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <button type="submit" class="cyber-btn cyber-btn-secondary">
           <i class="fas fa-copy" aria-hidden="true"></i>
           <span>Clone</span>
@@ -175,17 +176,6 @@
   </section>
 </div>
 
-<script>
-  window.pageData = <%- JSON.stringify({
-    id: sharedPage.id,
-    title: sharedPage.title || '',
-    description: sharedPage.description || '',
-    isProtected: sharedPage.isProtected,
-    expiresAt: sharedPage.expiresAt ? Number(sharedPage.expiresAt) : null,
-    htmlContent: sharedPage.htmlContent,
-    codeType: sharedPage.codeType,
-    markdownTheme: sharedPage.markdownTheme || ''
-  }) %>;
-</script>
+<script type="application/json" id="page-data"><%- pageDataJson %></script>
 <script src="/js/admin-detail.js"></script>
 <%- include('partials/footer', { page }) %>

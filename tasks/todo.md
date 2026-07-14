@@ -48,11 +48,11 @@ Rollback: workflow-only commit; no runtime or data effect.
 
 Files expected: `views/admin-page-detail.ejs`, admin views, `public/js/admin.js`, `public/js/admin-detail.js`, `app.js`, route tests.
 
-- [ ] Replace raw inline `JSON.stringify` script injection with safe JSON serialization that escapes `<`, `>`, `&`, U+2028, and U+2029, or an escaped `application/json` data block.
-- [ ] Pass a dashboard CSRF token to every admin mutation page.
-- [ ] Add `requireDashboardCsrf` to update, delete, batch-delete, clone, and any other dashboard mutation.
-- [ ] Send `X-CSRF-Token` from all corresponding admin scripts.
-- [ ] Add regression payloads containing `</script><script>`, quotes, Unicode separators, and HTML content.
+- [x] Replace raw inline `JSON.stringify` script injection with safe JSON serialization that escapes `<`, `>`, `&`, U+2028, and U+2029, using a non-executable `application/json` data block.
+- [x] Pass a dashboard CSRF token to every admin mutation page.
+- [x] Add `requireDashboardCsrf` to update, delete, batch-delete, clone, and any other dashboard mutation.
+- [x] Send `X-CSRF-Token` from all corresponding admin scripts.
+- [x] Add regression payloads containing `</script><script>`, quotes, Unicode separators, and HTML content.
 
 Verify:
 

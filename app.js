@@ -464,6 +464,15 @@ function visiblePagePassword(page) {
   return decryptSecret(page.encrypted_password);
 }
 
+function serializeJsonForHtml(value) {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
 app.get('/login', (req, res) => {
   if (!config.authEnabled || getAdminSession(req)) {
     return res.redirect('/');
@@ -735,10 +744,12 @@ app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
       ...sharedPage,
       visiblePassword: visiblePagePassword(sharedPage)
     }));
+    const sessionToken = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE] || '';
 
     return res.render('admin-pages', {
       title: 'QuickShare | Admin Pages',
       page: 'admin-pages',
+      csrfToken: config.authEnabled ? createCsrfToken(sessionToken) : '',
       pages: visiblePages,
       pagination: {
         ...pagination,
@@ -837,21 +848,26 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       });
     }
 
+    const pageData = {
+      id: sharedPage.id,
+      htmlContent: sharedPage.html_content,
+      createdAt: sharedPage.created_at,
+      codeType: sharedPage.code_type,
+      title: sharedPage.title,
+      description: sharedPage.description,
+      isProtected: sharedPage.is_protected === 1,
+      password: visiblePagePassword(sharedPage),
+      expiresAt: sharedPage.expires_at,
+      markdownTheme: sharedPage.markdown_theme
+    };
+    const sessionToken = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE] || '';
+
     return res.render('admin-page-detail', {
       title: `QuickShare | ${sharedPage.id}`,
       page: 'admin-page-detail',
-      sharedPage: {
-        id: sharedPage.id,
-        htmlContent: sharedPage.html_content,
-        createdAt: sharedPage.created_at,
-        codeType: sharedPage.code_type,
-        title: sharedPage.title,
-        description: sharedPage.description,
-        isProtected: sharedPage.is_protected === 1,
-        password: visiblePagePassword(sharedPage),
-        expiresAt: sharedPage.expires_at,
-        markdownTheme: sharedPage.markdown_theme
-      },
+      csrfToken: config.authEnabled ? createCsrfToken(sessionToken) : '',
+      sharedPage: pageData,
+      pageDataJson: serializeJsonForHtml(pageData),
       publicUrl: publicPageUrl(req, sharedPage.id)
     });
   } catch (error) {
@@ -864,7 +880,7 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
   }
 });
 
-app.put('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
+app.put('/admin/pages/:id', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
   try {
     await ensureDatabase();
 
@@ -959,7 +975,7 @@ app.put('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
   }
 });
 
-app.delete('/admin/pages/batch', requireDashboardAdmin, async (req, res) => {
+app.delete('/admin/pages/batch', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
   try {
     await ensureDatabase();
 
@@ -989,7 +1005,7 @@ app.delete('/admin/pages/batch', requireDashboardAdmin, async (req, res) => {
   }
 });
 
-app.delete('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
+app.delete('/admin/pages/:id', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
   try {
     await ensureDatabase();
 
@@ -1023,7 +1039,7 @@ app.delete('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/pages/:id/clone', requireDashboardAdmin, async (req, res) => {
+app.post('/admin/pages/:id/clone', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
   try {
     await ensureDatabase();
 

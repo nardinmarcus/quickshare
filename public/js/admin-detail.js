@@ -11,6 +11,11 @@
   const passwordInput = document.getElementById('edit-password');
   const togglePasswordBtn = document.getElementById('toggle-password-visibility');
 
+  function csrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute('content') : '';
+  }
+
   const titleDisplay = document.getElementById('page-title-display');
   const descriptionDisplayRow = document.getElementById('description-display-row');
   const descriptionDisplay = document.getElementById('description-display');
@@ -19,7 +24,16 @@
   const statusDisplay = document.getElementById('status-display');
 
   let isEditing = false;
-  const originalData = window.pageData || {};
+  const pageDataElement = document.getElementById('page-data');
+  let originalData = {};
+
+  if (pageDataElement) {
+    try {
+      originalData = JSON.parse(pageDataElement.textContent || '{}');
+    } catch (error) {
+      console.error('Unable to read page data:', error);
+    }
+  }
 
   function enterEditMode() {
     isEditing = true;
@@ -219,7 +233,8 @@
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          'X-CSRF-Token': csrfToken()
         },
         body: JSON.stringify(payload)
       });
@@ -272,7 +287,7 @@ document.querySelectorAll('.admin-tab').forEach(function (tab) {
     if (targetPanel === 'rendered') {
       var iframe = document.getElementById('rendered-preview');
       if (iframe && !iframe.dataset.loaded) {
-        iframe.src = '/view/' + window.pageData.id;
+        iframe.src = '/view/' + encodeURIComponent(originalData.id);
         iframe.dataset.loaded = 'true';
       }
     }

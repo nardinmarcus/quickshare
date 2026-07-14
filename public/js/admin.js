@@ -1,3 +1,8 @@
+function dashboardCsrfToken() {
+  var meta = document.querySelector('meta[name="csrf-token"]');
+  return meta ? meta.getAttribute('content') : '';
+}
+
 (function () {
   const modal = document.getElementById('delete-modal');
   const modalTarget = document.getElementById('delete-modal-target');
@@ -37,7 +42,10 @@
     try {
       const response = await fetch('/admin/pages/' + encodeURIComponent(currentPageId), {
         method: 'DELETE',
-        headers: { 'Accept': 'application/json' }
+        headers: {
+          'Accept': 'application/json',
+          'X-CSRF-Token': dashboardCsrfToken()
+        }
       });
 
       const data = await response.json();
@@ -246,7 +254,11 @@ window.Toast = {
       try {
         var response = await fetch('/admin/pages/batch', {
           method: 'DELETE',
-          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-CSRF-Token': dashboardCsrfToken()
+          },
           body: JSON.stringify({ ids: ids })
         });
         var data = await response.json();
