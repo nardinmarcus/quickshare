@@ -7,10 +7,39 @@ const {
   decryptSecret,
   encryptSecret,
   hashSecret,
+  isValidCustomPassword,
   verifyCsrfToken,
   verifyScopedToken,
   verifySecret
 } = require('../utils/security');
+
+test('custom passwords accept only the approved 4-12 character ASCII allowlist', () => {
+  assert.equal(isValidCustomPassword('Abc1'), true);
+  assert.equal(isValidCustomPassword('Abcdef123!~?'), true);
+
+  for (const symbol of '!@#$%^&*()_+-=.,?~') {
+    assert.equal(isValidCustomPassword(`Ab1${symbol}`), true, `expected ${symbol} to be allowed`);
+  }
+
+  for (const password of [
+    'Ab1',
+    'Abcdef1234567',
+    ' Abc1',
+    'Abc1 ',
+    'Ab c1',
+    '密码Ab1',
+    'Ａbc1',
+    'Ab1🙂',
+    'Ab1/',
+    'Ab1:',
+    'Ab1\\',
+    'Ab1"',
+    "Ab1'",
+    'Ab1\n'
+  ]) {
+    assert.equal(isValidCustomPassword(password), false, `expected ${JSON.stringify(password)} to be rejected`);
+  }
+});
 
 test('hashSecret verifies only the original secret', async () => {
   const hash = await hashSecret('correct-password');

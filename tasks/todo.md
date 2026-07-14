@@ -84,16 +84,16 @@ Rollback: application-only; existing `expires_at` data is untouched.
 
 Files expected: `views/index.ejs`, `public/js/main.js`, `app.js`, `views/password.ejs`, create/view tests.
 
-- [ ] Move access mode, password, Markdown theme, title, description, and expiry controls before the publish button.
-- [ ] Keep a single-page flow; do not introduce a wizard.
-- [ ] Send all policy fields in the initial create request so no share is briefly public.
-- [ ] Add the same validated fields to `/api/v1/share` while preserving existing clients.
-- [ ] Keep generated passwords on the current 6-digit numeric path; do not change `DEFAULT_PASSWORD_LENGTH` or automatic generation behavior.
-- [ ] Replace the PIN-only access UI with a labelled conventional password field so it can unlock both generated numeric and allowed custom passwords.
-- [ ] Add one shared server-side custom-password validator for 4–12 characters using `[A-Za-z0-9!@#$%^&*()_+\-=.,?~]`; use the same rule in homepage, admin, and API flows.
-- [ ] Reject whitespace, non-ASCII letters, emoji, and symbols outside the explicit allowlist with a clear validation error.
-- [ ] Change “此内容已加密” to “此内容受密码保护”.
-- [ ] Preserve user input/settings after server or network failure and prevent duplicate submissions.
+- [x] Move access mode, password, Markdown theme, title, description, and expiry controls before the publish button.
+- [x] Keep a single-page flow; do not introduce a wizard.
+- [x] Send all policy fields in the initial create request so no share is briefly public.
+- [x] Add the same validated fields to `/api/v1/share` while preserving existing clients.
+- [x] Keep generated passwords on the current 6-digit numeric path; do not change `DEFAULT_PASSWORD_LENGTH` or automatic generation behavior.
+- [x] Replace the PIN-only access UI with a labelled conventional password field so it can unlock both generated numeric and allowed custom passwords.
+- [x] Add one shared server-side custom-password validator for 4–12 characters using `[A-Za-z0-9!@#$%^&*()_+\-=.,?~]`; use the same rule in homepage, admin, and API flows.
+- [x] Reject whitespace, non-ASCII letters, emoji, and symbols outside the explicit allowlist with a clear validation error.
+- [x] Change “此内容已加密” to “此内容受密码保护”.
+- [x] Preserve user input/settings after server or network failure and prevent duplicate submissions.
 
 Verify:
 
@@ -278,9 +278,9 @@ Estimated engineering effort: 5–8 focused days. This estimate excludes comment
 
 Complete after implementation:
 
-- Changed commits/PRs:
-- Test evidence:
-- Preview evidence:
+- Changed commits/PRs: WP0 `fccfb88`; WP1 `8801f22`; WP2 `b93b7e1`; WP3 `feat: publish shares with atomic access settings`.
+- Test evidence: WP3 full suite `51/51` passed; `git diff --check` and JavaScript syntax checks passed.
+- Preview evidence: local HTTP flow verified at 1440 px and 375 px; protected creation, wrong-password `401`, correct-password `200`, and unlocked content confirmed.
 - Production deployment:
 - Live route verification:
 - Performance before/after:

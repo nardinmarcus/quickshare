@@ -67,8 +67,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const copyButton = document.getElementById('copy-button');
   const previewButton = document.getElementById('preview-button');
   const loadingIndicator = document.getElementById('loading-indicator');
+  const linkAccessRadio = document.getElementById('access-link');
   const passwordToggle = document.getElementById('password-toggle');
+  const passwordSettings = document.getElementById('password-settings');
+  const passwordModeSummary = document.getElementById('password-mode-summary');
   const generatedPassword = document.getElementById('generated-password');
+  const resultPasswordRow = document.getElementById('result-password-row');
   const copyPasswordLink = document.getElementById('copy-password-link');
   const passwordDefaultMode = document.getElementById('password-default-mode');
   const passwordCustomMode = document.getElementById('password-custom-mode');
@@ -77,9 +81,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const cancelCustomPasswordBtn = document.getElementById('cancel-custom-password');
   const customPasswordInput = document.getElementById('custom-password-input');
   const toggleCustomPasswordBtn = document.getElementById('toggle-custom-password');
+  const shareTitleInput = document.getElementById('share-title');
+  const shareDescriptionInput = document.getElementById('share-description');
+  const shareExpiresInput = document.getElementById('share-expires');
+  const shareExpiresHint = document.getElementById('share-expires-hint');
 
   // 用户自定义密码（空字符串表示使用默认密码）
   let userCustomPassword = '';
+  let isSubmitting = false;
   
   // 创建代码编辑器
   let codeElement = null;
@@ -218,11 +227,46 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
   
-  // 辅助函数：显示默认模式
-  function showPasswordDefaultMode(passwordText) {
+  const customPasswordPattern = /^[A-Za-z0-9!@#$%^&*()_+\-=.,?~]{4,12}$/;
+  const customPasswordError = '自定义密码必须为 4–12 位，仅可包含英文字母、数字及 !@#$%^&*()_+-=.,?~';
+
+  function passwordValidationError(password) {
+    return customPasswordPattern.test(password) ? '' : customPasswordError;
+  }
+
+  function userFacingError(message) {
+    const error = new Error(message);
+    error.userFacing = true;
+    return error;
+  }
+
+  function updatePasswordHint(password) {
+    const passwordHint = document.getElementById('custom-password-hint');
+
+    if (!passwordHint) return;
+
+    if (!password) {
+      passwordHint.textContent = '仅限英文字母、数字及 !@#$%^&*()_+-=.,?~';
+      passwordHint.className = 'field-hint';
+      if (customPasswordInput) customPasswordInput.setAttribute('aria-invalid', 'false');
+      return;
+    }
+
+    const error = passwordValidationError(password);
+    passwordHint.textContent = error || '密码格式有效';
+    passwordHint.className = error ? 'field-hint error' : 'field-hint valid';
+    if (customPasswordInput) customPasswordInput.setAttribute('aria-invalid', error ? 'true' : 'false');
+  }
+
+  // 辅助函数：显示自动/已确认的自定义密码模式
+  function showPasswordDefaultMode() {
     if (passwordDefaultMode) passwordDefaultMode.classList.remove('hidden');
     if (passwordCustomMode) passwordCustomMode.classList.add('hidden');
-    if (generatedPassword) generatedPassword.textContent = passwordText || '';
+    if (passwordModeSummary) {
+      passwordModeSummary.textContent = userCustomPassword
+        ? '将使用已设置的自定义密码'
+        : '自动生成 6 位数字密码';
+    }
   }
 
   // 辅助函数：显示自定义模式
@@ -235,73 +279,30 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // 辅助函数：隐藏所有密码UI
-  function hidePasswordUI() {
+  function syncPasswordSettings() {
+    if (passwordToggle && passwordToggle.checked) {
+      if (passwordSettings) passwordSettings.classList.remove('hidden');
+      showPasswordDefaultMode();
+      return;
+    }
+
+    if (passwordSettings) passwordSettings.classList.add('hidden');
     if (passwordDefaultMode) passwordDefaultMode.classList.add('hidden');
     if (passwordCustomMode) passwordCustomMode.classList.add('hidden');
-    if (copyPasswordLink) copyPasswordLink.classList.add('hidden');
   }
 
-  // 密码开关事件监听
-  if (passwordToggle) {
-    passwordToggle.addEventListener('change', async () => {
-      if (passwordToggle.checked) {
-        // 开关打开：显示默认模式
-        const hasResult = resultUrl && resultUrl.dataset.originalUrl;
-        if (hasResult) {
-          // 已有链接：调用API获取默认密码
-          try {
-            const urlId = resultUrl.dataset.originalUrl.split('/').pop();
-            const response = await fetch(`/api/pages/${urlId}/protect`, {
-              method: 'POST',
-              headers: jsonHeaders(),
-              body: JSON.stringify({ isProtected: true }),
-            });
-            const data = await response.json();
-            if (!response.ok || !data.success) {
-              throw new Error(data.error || '更新保护状态失败');
-            }
-            userCustomPassword = '';
-            showPasswordDefaultMode(data.password || '');
-            if (copyPasswordLink) copyPasswordLink.classList.remove('hidden');
-          } catch (error) {
-            console.error('开启密码保护错误:', error);
-            passwordToggle.checked = false;
-            hidePasswordUI();
-            showErrorToast('开启密码保护失败');
-          }
-        } else {
-          // 没有链接：显示"自动生成"
-          userCustomPassword = '';
-          showPasswordDefaultMode('自动生成');
-        }
-      } else {
-        // 开关关闭：隐藏所有密码UI
-        hidePasswordUI();
-        userCustomPassword = '';
+  function showResultPassword(password) {
+    if (generatedPassword) generatedPassword.textContent = password || '';
+    if (resultPasswordRow) {
+      resultPasswordRow.classList.toggle('hidden', !password);
+    }
+  }
 
-        // 如果有链接，更新后端
-        if (resultUrl && resultUrl.dataset.originalUrl) {
-          try {
-            const urlId = resultUrl.dataset.originalUrl.split('/').pop();
-            const response = await fetch(`/api/pages/${urlId}/protect`, {
-              method: 'POST',
-              headers: jsonHeaders(),
-              body: JSON.stringify({ isProtected: false }),
-            });
-            const data = await response.json();
-            if (!response.ok || !data.success) {
-              throw new Error(data.error || '更新保护状态失败');
-            }
-          } catch (error) {
-            console.error('关闭密码保护错误:', error);
-            passwordToggle.checked = true;
-            showPasswordDefaultMode(generatedPassword ? generatedPassword.textContent : '');
-            showErrorToast('关闭密码保护失败');
-          }
-        }
-      }
-    });
+  if (passwordToggle) {
+    passwordToggle.addEventListener('change', syncPasswordSettings);
+  }
+  if (linkAccessRadio) {
+    linkAccessRadio.addEventListener('change', syncPasswordSettings);
   }
 
   // "自定义密码"按钮 → 切换到输入模式
@@ -313,74 +314,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // "确认"按钮 → 保存自定义密码
   if (confirmCustomPasswordBtn) {
-    confirmCustomPasswordBtn.addEventListener('click', async () => {
-      const password = customPasswordInput ? customPasswordInput.value.trim() : '';
+    confirmCustomPasswordBtn.addEventListener('click', () => {
+      const password = customPasswordInput ? customPasswordInput.value : '';
       if (!password) {
         showErrorToast('请输入密码');
         return;
       }
-      if (password.length < 4 || password.length > 12) {
-        showErrorToast('密码长度应为4-12位');
+
+      const error = passwordValidationError(password);
+      if (error) {
+        updatePasswordHint(password);
+        showErrorToast(error);
         return;
       }
 
-      const hasResult = resultUrl && resultUrl.dataset.originalUrl;
-      if (hasResult) {
-        // 已有链接：调用API更新密码
-        try {
-          const urlId = resultUrl.dataset.originalUrl.split('/').pop();
-          const response = await fetch(`/api/pages/${urlId}/protect`, {
-            method: 'POST',
-            headers: jsonHeaders(),
-            body: JSON.stringify({ isProtected: true, password }),
-          });
-          const data = await response.json();
-          if (!response.ok || !data.success) {
-            throw new Error(data.error || '更新密码失败');
-          }
-          userCustomPassword = password;
-          showPasswordDefaultMode(password);
-          showSuccessToast('密码已更新');
-        } catch (error) {
-          console.error('更新密码错误:', error);
-          showErrorToast('更新密码失败');
-        }
-      } else {
-        // 没有链接：仅保存到变量
-        userCustomPassword = password;
-        showPasswordDefaultMode(password);
-        showSuccessToast('自定义密码已设置');
-      }
+      userCustomPassword = password;
+      showPasswordDefaultMode();
+      showSuccessToast('自定义密码已设置');
     });
   }
 
   // "默认密码"按钮 → 切换回默认模式，使用默认密码
   if (cancelCustomPasswordBtn) {
-    cancelCustomPasswordBtn.addEventListener('click', async () => {
-      const hasResult = resultUrl && resultUrl.dataset.originalUrl;
-      if (hasResult) {
-        try {
-          const urlId = resultUrl.dataset.originalUrl.split('/').pop();
-          const response = await fetch(`/api/pages/${urlId}/protect`, {
-            method: 'POST',
-            headers: jsonHeaders(),
-            body: JSON.stringify({ isProtected: true }),
-          });
-          const data = await response.json();
-          if (!response.ok || !data.success) {
-            throw new Error(data.error || '重置密码失败');
-          }
-          userCustomPassword = '';
-          showPasswordDefaultMode(data.password || '');
-          showSuccessToast('已恢复默认密码');
-        } catch (error) {
-          console.error('重置密码错误:', error);
-          showErrorToast('重置密码失败');
-        }
-      } else {
-        userCustomPassword = '';
-        showPasswordDefaultMode('自动生成');
-      }
+    cancelCustomPasswordBtn.addEventListener('click', () => {
+      userCustomPassword = '';
+      if (customPasswordInput) customPasswordInput.value = '';
+      updatePasswordHint('');
+      showPasswordDefaultMode();
     });
   }
 
@@ -389,32 +349,29 @@ document.addEventListener('DOMContentLoaded', () => {
     toggleCustomPasswordBtn.addEventListener('click', () => {
       const isHidden = customPasswordInput.type === 'password';
       customPasswordInput.type = isHidden ? 'text' : 'password';
+      toggleCustomPasswordBtn.setAttribute('aria-label', isHidden ? '隐藏密码' : '显示密码');
       toggleCustomPasswordBtn.innerHTML = isHidden
         ? '<i class="fas fa-eye-slash" aria-hidden="true"></i>'
         : '<i class="fas fa-eye" aria-hidden="true"></i>';
     });
   }
 
-  // Inline password validation
-  var passwordHint = document.getElementById('custom-password-hint');
-  if (customPasswordInput && passwordHint) {
+  if (customPasswordInput) {
     customPasswordInput.addEventListener('input', () => {
-      var len = customPasswordInput.value.length;
-      if (len === 0) {
-        passwordHint.textContent = '';
-        passwordHint.className = 'field-hint';
-      } else if (len < 4) {
-        passwordHint.textContent = 'Password must be at least 4 characters';
-        passwordHint.className = 'field-hint error';
-      } else if (len > 12) {
-        passwordHint.textContent = 'Password must not exceed 12 characters';
-        passwordHint.className = 'field-hint error';
-      } else {
-        passwordHint.textContent = '✓';
-        passwordHint.className = 'field-hint valid';
-      }
+      updatePasswordHint(customPasswordInput.value);
     });
   }
+
+  if (shareExpiresInput && shareExpiresHint) {
+    shareExpiresInput.addEventListener('change', () => {
+      const expiresAt = shareExpiresInput.value ? new Date(shareExpiresInput.value).getTime() : null;
+      const invalid = expiresAt !== null && (!Number.isFinite(expiresAt) || expiresAt <= Date.now());
+      shareExpiresHint.textContent = invalid ? '到期时间必须晚于当前时间' : '';
+      shareExpiresHint.className = invalid ? 'field-hint error' : 'field-hint';
+    });
+  }
+
+  syncPasswordSettings();
 
   // 代码类型检测函数
   function detectCodeType(code) {
@@ -701,6 +658,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // 生成链接
   if (generateButton) {
     generateButton.addEventListener('click', async () => {
+      if (isSubmitting) {
+        return;
+      }
+
       console.log('生成链接按钮被点击');
       // 确保从编辑器同步到textarea
       syncToTextarea();
@@ -716,6 +677,38 @@ document.addEventListener('DOMContentLoaded', () => {
         showErrorToast('请输入 HTML 内容');
         return;
       }
+
+      const isProtected = passwordToggle ? passwordToggle.checked : false;
+
+      if (isProtected && passwordCustomMode && !passwordCustomMode.classList.contains('hidden')) {
+        const password = customPasswordInput ? customPasswordInput.value : '';
+        const validationError = passwordValidationError(password);
+
+        if (validationError) {
+          updatePasswordHint(password);
+          showErrorToast(validationError);
+          return;
+        }
+
+        userCustomPassword = password;
+        showPasswordDefaultMode();
+      }
+
+      let expiresAt = null;
+      if (shareExpiresInput && shareExpiresInput.value) {
+        expiresAt = new Date(shareExpiresInput.value).getTime();
+
+        if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+          if (shareExpiresHint) {
+            shareExpiresHint.textContent = '到期时间必须晚于当前时间';
+            shareExpiresHint.className = 'field-hint error';
+          }
+          showErrorToast('到期时间必须晚于当前时间');
+          return;
+        }
+      }
+
+      isSubmitting = true;
       
       try {
         // 显示加载指示器
@@ -725,15 +718,19 @@ document.addEventListener('DOMContentLoaded', () => {
         generateButton.innerHTML = '<i class="fas fa-spinner fa-spin loading-spinner"></i> 处理中...';
         generateButton.disabled = true;
         
-        // 检查是否启用密码保护
-        const isProtected = passwordToggle ? passwordToggle.checked : false;
-        
         // 检测代码类型
         const codeType = detectCodeType(htmlContent);
         console.log('检测到的代码类型:', codeType);
         
         // 调用 API 生成链接
-        const requestBody = { htmlContent, isProtected, codeType };
+        const requestBody = {
+          htmlContent,
+          isProtected,
+          codeType,
+          title: shareTitleInput ? shareTitleInput.value : '',
+          description: shareDescriptionInput ? shareDescriptionInput.value : '',
+          expiresAt
+        };
         if (isProtected && userCustomPassword) {
           requestBody.password = userCustomPassword;
         }
@@ -747,10 +744,15 @@ document.addEventListener('DOMContentLoaded', () => {
           body: JSON.stringify(requestBody),
         });
         
-        const data = await response.json();
-        console.log('API响应数据:', { success: data.success, urlId: data.urlId, isProtected: data.isProtected, codeType: data.codeType });
+        const data = await response.json().catch(() => null);
+        console.log('API响应数据:', {
+          success: data?.success,
+          urlId: data?.urlId,
+          isProtected: data?.isProtected,
+          codeType: data?.codeType
+        });
         
-        if (data.success) {
+        if (response.ok && data && data.success) {
           const url = `${window.location.origin}/view/${data.urlId}`;
           
           // 格式化 URL 显示
@@ -762,13 +764,7 @@ document.addEventListener('DOMContentLoaded', () => {
             resultUrl.dataset.originalUrl = url;
           }
           
-          // 根据开关状态显示密码
-          if (passwordToggle && passwordToggle.checked) {
-            showPasswordDefaultMode(data.password || '');
-            if (copyPasswordLink) copyPasswordLink.classList.remove('hidden');
-          } else {
-            hidePasswordUI();
-          }
+          showResultPassword(data.isProtected ? data.password : null);
           
           // 显示结果区域
           if (resultSection) {
@@ -803,30 +799,18 @@ document.addEventListener('DOMContentLoaded', () => {
             generateButton.classList.remove('success-pulse');
           }, 500);
           
-          // 隐藏加载指示器
-          loadingIndicator.classList.remove('show');
-          
           // 不需要显示生成链接的toast提示
         } else {
-          throw new Error(data.error || '生成链接失败');
+          throw userFacingError(data?.error || '发布失败，请稍后重试');
         }
-        
-        // 恢复按钮状态
-        generateButton.innerHTML = '<i class="fas fa-link mr-1"></i>生成链接';
-        generateButton.disabled = false;
-        
-        // 隐藏加载指示器
-        loadingIndicator.classList.remove('show');
       } catch (error) {
         console.error('生成链接错误:', error);
-        showErrorToast('生成链接时发生错误');
-        
-        // 恢复按钮状态
-        generateButton.innerHTML = '<i class="fas fa-link mr-1"></i>生成链接';
+        showErrorToast(error.userFacing ? error.message : '发布失败，请稍后重试');
+      } finally {
+        isSubmitting = false;
+        generateButton.innerHTML = '<i class="fas fa-link mr-1"></i>发布并生成链接';
         generateButton.disabled = false;
-        
-        // 隐藏加载指示器
-        loadingIndicator.classList.remove('show');
+        if (loadingIndicator) loadingIndicator.classList.remove('show');
       }
     });
   }

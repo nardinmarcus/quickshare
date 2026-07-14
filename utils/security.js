@@ -3,6 +3,8 @@ const { promisify } = require('util');
 
 const scryptAsync = promisify(crypto.scrypt);
 const DEFAULT_PASSWORD_LENGTH = 6;
+const CUSTOM_PASSWORD_ERROR = '自定义密码必须为 4–12 位，仅可包含英文字母、数字及 !@#$%^&*()_+-=.,?~';
+const CUSTOM_PASSWORD_PATTERN = /^[A-Za-z0-9!@#$%^&*()_+\-=.,?~]{4,12}$/;
 const ENCRYPTED_SECRET_PREFIX = 'secret-v1';
 
 function getAppSecret() {
@@ -38,6 +40,34 @@ function generateNumericPassword(length = DEFAULT_PASSWORD_LENGTH) {
   }
 
   return password;
+}
+
+function isValidCustomPassword(password) {
+  return typeof password === 'string' && CUSTOM_PASSWORD_PATTERN.test(password);
+}
+
+function parseCustomPassword(password) {
+  if (password === undefined || password === null || password === '') {
+    return {
+      provided: false,
+      value: null,
+      error: null
+    };
+  }
+
+  if (!isValidCustomPassword(password)) {
+    return {
+      provided: true,
+      value: null,
+      error: CUSTOM_PASSWORD_ERROR
+    };
+  }
+
+  return {
+    provided: true,
+    value: password,
+    error: null
+  };
 }
 
 async function hashSecret(secret) {
@@ -204,6 +234,7 @@ function verifyCsrfToken(sessionToken, csrfToken) {
 }
 
 module.exports = {
+  CUSTOM_PASSWORD_ERROR,
   DEFAULT_PASSWORD_LENGTH,
   createCsrfToken,
   createScopedToken,
@@ -213,6 +244,8 @@ module.exports = {
   generateNumericPassword,
   getAppSecret,
   hashSecret,
+  isValidCustomPassword,
+  parseCustomPassword,
   timingSafeEqualString,
   verifyCsrfToken,
   verifyScopedToken,

@@ -13,6 +13,7 @@ const { detectCodeType, extractCodeBlocks } = require('./utils/codeDetector');
 const { renderContent, escapeHtml, resolveTheme } = require('./utils/contentRenderer');
 const { derivePageTitle } = require('./utils/pageTitle');
 const {
+  CUSTOM_PASSWORD_ERROR,
   DEFAULT_PASSWORD_LENGTH,
   createCsrfToken,
   createScopedToken,
@@ -21,6 +22,7 @@ const {
   generateId,
   generateNumericPassword,
   hashSecret,
+  parseCustomPassword,
   verifyCsrfToken,
   verifyScopedToken,
   verifySecret
@@ -358,6 +360,88 @@ async function createPageWithRetry(data) {
   }
 
   throw lastError || new Error('Failed to create a unique page id');
+}
+
+function parseFutureExpiry(expiresAt, now) {
+  if (expiresAt === undefined || expiresAt === null || expiresAt === '') {
+    return { value: null, error: null };
+  }
+
+  const value = Number(expiresAt);
+
+  if (!Number.isSafeInteger(value) || value <= now) {
+    return { value: null, error: '到期时间必须晚于当前时间' };
+  }
+
+  return { value, error: null };
+}
+
+async function createPageFromInput(input) {
+  const {
+    htmlContent,
+    codeType,
+    title,
+    description,
+    expiresAt,
+    isProtected,
+    password: requestedPassword,
+    markdownTheme
+  } = input || {};
+
+  if (!htmlContent || typeof htmlContent !== 'string') {
+    return { error: '请提供内容' };
+  }
+
+  const customPassword = parseCustomPassword(requestedPassword);
+
+  if (customPassword.error) {
+    return { error: customPassword.error };
+  }
+
+  const createdAt = Date.now();
+  const expiry = parseFutureExpiry(expiresAt, createdAt);
+
+  if (expiry.error) {
+    return { error: expiry.error };
+  }
+
+  const normalizedCodeType = normalizeCodeType(htmlContent, codeType);
+  const pageTitle = derivePageTitle(htmlContent, normalizedCodeType, title, createdAt);
+  const pageDescription = description === undefined || description === null
+    ? null
+    : String(description).trim() || null;
+  const password = Boolean(isProtected)
+    ? (customPassword.provided ? customPassword.value : generateNumericPassword(DEFAULT_PASSWORD_LENGTH))
+    : null;
+  const passwordHash = password ? await hashSecret(password) : null;
+  const encryptedPassword = password ? encryptSecret(password) : null;
+  const resolvedTheme = normalizedCodeType === 'markdown'
+    ? resolveTheme(markdownTheme || 'random')
+    : null;
+  const id = await createPageWithRetry({
+    htmlContent,
+    passwordHash,
+    encryptedPassword,
+    isProtected: Boolean(password),
+    codeType: normalizedCodeType,
+    title: pageTitle,
+    description: pageDescription,
+    createdAt,
+    expiresAt: expiry.value,
+    markdownTheme: resolvedTheme
+  });
+
+  return {
+    error: null,
+    id,
+    password,
+    isProtected: Boolean(password),
+    codeType: normalizedCodeType,
+    title: pageTitle,
+    description: pageDescription,
+    expiresAt: expiry.value,
+    markdownTheme: resolvedTheme
+  };
 }
 
 function injectCodeTypeMeta(renderedContent, contentType) {
@@ -894,6 +978,15 @@ app.put('/admin/pages/:id', requireDashboardAdmin, requireDashboardCsrf, async (
     }
 
     const { title, description, htmlContent, expiresAt, isProtected, password, markdownTheme } = req.body;
+    const customPassword = parseCustomPassword(password);
+
+    if (customPassword.error) {
+      return res.status(400).json({
+        success: false,
+        error: CUSTOM_PASSWORD_ERROR
+      });
+    }
+
     const updateOptions = {};
 
     if (title !== undefined) {
@@ -921,22 +1014,20 @@ app.put('/admin/pages/:id', requireDashboardAdmin, requireDashboardCsrf, async (
         updateOptions.isProtected = newProtected;
 
         if (newProtected) {
-          const customPassword = password && String(password).trim();
-          const finalPassword = customPassword || generateNumericPassword(DEFAULT_PASSWORD_LENGTH);
+          const finalPassword = customPassword.provided
+            ? customPassword.value
+            : generateNumericPassword(DEFAULT_PASSWORD_LENGTH);
           updateOptions.passwordHash = await hashSecret(finalPassword);
           updateOptions.encryptedPassword = encryptSecret(finalPassword);
         } else {
           updateOptions.passwordHash = null;
           updateOptions.encryptedPassword = null;
         }
-      } else if (newProtected && password && String(password).trim()) {
+      } else if (newProtected && customPassword.provided) {
         // Protection status unchanged but password explicitly provided - update password
-        const customPassword = String(password).trim();
-        if (customPassword.length >= 4 && customPassword.length <= 50) {
-          updateOptions.isProtected = true;
-          updateOptions.passwordHash = await hashSecret(customPassword);
-          updateOptions.encryptedPassword = encryptSecret(customPassword);
-        }
+        updateOptions.isProtected = true;
+        updateOptions.passwordHash = await hashSecret(customPassword.value);
+        updateOptions.encryptedPassword = encryptSecret(customPassword.value);
       }
     }
 
@@ -1073,47 +1164,32 @@ app.post('/api/pages/create', requireApiAdmin, requireCsrf, async (req, res) => 
   try {
     await ensureDatabase();
 
-    const { htmlContent, isProtected, codeType, title, description, password: customPassword, markdownTheme } = req.body;
+    const result = await createPageFromInput(req.body);
 
-    if (!htmlContent || typeof htmlContent !== 'string') {
+    if (result.error) {
       return res.status(400).json({
         success: false,
-        error: '请提供内容'
+        error: result.error
       });
     }
 
-    const normalizedCodeType = normalizeCodeType(htmlContent, codeType);
-    const createdAt = Date.now();
-    const pageTitle = derivePageTitle(htmlContent, normalizedCodeType, title, createdAt);
-    const password = isProtected ? (customPassword && String(customPassword).trim() ? String(customPassword).trim() : generateNumericPassword(DEFAULT_PASSWORD_LENGTH)) : null;
-    const passwordHash = password ? await hashSecret(password) : null;
-    const encryptedPassword = password ? encryptSecret(password) : null;
-    const id = await createPageWithRetry({
-      htmlContent,
-      passwordHash,
-      encryptedPassword,
-      isProtected: Boolean(isProtected),
-      codeType: normalizedCodeType,
-      title: pageTitle,
-      description,
-      createdAt,
-      expiresAt: null,
-      markdownTheme: normalizedCodeType === 'markdown' ? resolveTheme(markdownTheme || 'random') : null
-    });
-
     pageRepository.createAuditLog({
       action: 'page.create',
-      pageId: id,
-      details: JSON.stringify({ codeType: normalizedCodeType, isProtected: Boolean(password) }),
+      pageId: result.id,
+      details: JSON.stringify({ codeType: result.codeType, isProtected: result.isProtected }),
       ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
     }).catch((err) => { console.error('Audit log failed:', err); });
 
     return res.json({
       success: true,
-      urlId: id,
-      password,
-      isProtected: Boolean(password),
-      codeType: normalizedCodeType
+      urlId: result.id,
+      password: result.password,
+      isProtected: result.isProtected,
+      codeType: result.codeType,
+      title: result.title,
+      description: result.description,
+      expiresAt: result.expiresAt,
+      markdownTheme: result.markdownTheme
     });
   } catch (error) {
     console.error('Create page failed:', error);
@@ -1128,48 +1204,33 @@ app.post('/api/v1/share', requireApiKey, async (req, res) => {
   try {
     await ensureDatabase();
 
-    const { htmlContent, codeType, title, description, isProtected, password: customPassword, markdownTheme } = req.body;
+    const result = await createPageFromInput(req.body);
 
-    if (!htmlContent || typeof htmlContent !== 'string') {
-      return res.status(400).json({ success: false, error: '请提供内容' });
+    if (result.error) {
+      return res.status(400).json({ success: false, error: result.error });
     }
 
-    const normalizedCodeType = normalizeCodeType(htmlContent, codeType);
-    const createdAt = Date.now();
-    const pageTitle = derivePageTitle(htmlContent, normalizedCodeType, title, createdAt);
-    const password = isProtected ? (customPassword && String(customPassword).trim() ? String(customPassword).trim() : generateNumericPassword(DEFAULT_PASSWORD_LENGTH)) : null;
-    const passwordHash = password ? await hashSecret(password) : null;
-    const encryptedPassword = password ? encryptSecret(password) : null;
-    const id = await createPageWithRetry({
-      htmlContent,
-      passwordHash,
-      encryptedPassword,
-      isProtected: Boolean(isProtected),
-      codeType: normalizedCodeType,
-      title: pageTitle,
-      description,
-      createdAt,
-      expiresAt: null,
-      markdownTheme: normalizedCodeType === 'markdown' ? resolveTheme(markdownTheme || 'random') : null
-    });
-
     const base = config.shareBaseUrl || `${req.protocol}://${req.get('host')}`;
-    const url = `${base.replace(/\/+$/, '')}/view/${id}`;
+    const url = `${base.replace(/\/+$/, '')}/view/${result.id}`;
 
     pageRepository.createAuditLog({
       action: 'page.create',
-      pageId: id,
-      details: JSON.stringify({ codeType: normalizedCodeType, isProtected: Boolean(password), source: 'api' }),
+      pageId: result.id,
+      details: JSON.stringify({ codeType: result.codeType, isProtected: result.isProtected, source: 'api' }),
       ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
     }).catch((err) => { console.error('Audit log failed:', err); });
 
     return res.json({
       success: true,
       url,
-      urlId: id,
-      password,
-      isProtected: Boolean(password),
-      codeType: normalizedCodeType
+      urlId: result.id,
+      password: result.password,
+      isProtected: result.isProtected,
+      codeType: result.codeType,
+      title: result.title,
+      description: result.description,
+      expiresAt: result.expiresAt,
+      markdownTheme: result.markdownTheme
     });
   } catch (error) {
     console.error('Share API failed:', error);
@@ -1227,7 +1288,9 @@ app.get('/api/pages/:id', async (req, res) => {
         codeType: page.code_type,
         title: page.title,
         description: page.description,
-        isProtected: page.is_protected === 1
+        isProtected: page.is_protected === 1,
+        expiresAt: page.expires_at,
+        markdownTheme: page.markdown_theme
       }
     });
   } catch (error) {
@@ -1253,8 +1316,18 @@ app.post('/api/pages/:id/protect', requireApiAdmin, requireCsrf, async (req, res
     }
 
     const isProtected = Boolean(req.body.isProtected);
-    const customPassword = req.body.password && String(req.body.password).trim();
-    const password = isProtected ? (customPassword || generateNumericPassword(DEFAULT_PASSWORD_LENGTH)) : null;
+    const customPassword = parseCustomPassword(req.body.password);
+
+    if (customPassword.error) {
+      return res.status(400).json({
+        success: false,
+        error: CUSTOM_PASSWORD_ERROR
+      });
+    }
+
+    const password = isProtected
+      ? (customPassword.provided ? customPassword.value : generateNumericPassword(DEFAULT_PASSWORD_LENGTH))
+      : null;
     const passwordHash = password ? await hashSecret(password) : null;
     const encryptedPassword = password ? encryptSecret(password) : null;
 
@@ -1351,14 +1424,10 @@ app.get('/view/:id', async (req, res) => {
     const { page } = publicPage;
 
     if (page.is_protected === 1 && !hasPageAccess(req, req.params.id)) {
-      const decryptedPassword = page.encrypted_password ? decryptSecret(page.encrypted_password) : null;
-      const passwordLength = decryptedPassword ? decryptedPassword.length : DEFAULT_PASSWORD_LENGTH;
-
       return res.render('password', {
         title: 'QuickShare | 密码保护',
         page: 'password-page',
         id: req.params.id,
-        passwordLength,
         error: null
       });
     }

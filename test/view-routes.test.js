@@ -88,7 +88,7 @@ test('public view works without expiry and before a future expiry', async () => 
   const futureExpiry = await request('/view/future-expiry');
   const metadataResponse = await request('/api/pages/future-expiry');
   const metadata = JSON.parse(metadataResponse.text);
-  const { createdAt, ...metadataPage } = metadata.page;
+  const { createdAt, expiresAt, ...metadataPage } = metadata.page;
 
   assert.equal(noExpiry.status, 200);
   assert.match(noExpiry.text, /&lt;h1&gt;no-expiry&lt;\/h1&gt;/);
@@ -97,12 +97,14 @@ test('public view works without expiry and before a future expiry', async () => 
   assert.equal(metadataResponse.status, 200);
   assert.equal(metadata.success, true);
   assert.ok(Number.isFinite(createdAt));
+  assert.ok(expiresAt > createdAt);
   assert.deepEqual(metadataPage, {
     id: 'future-expiry',
     codeType: 'html',
     title: 'future-expiry',
     description: null,
-    isProtected: false
+    isProtected: false,
+    markdownTheme: null
   });
 });
 
@@ -120,6 +122,19 @@ test('password validation still grants access before expiry', async () => {
     redirectUrl: '/view/future-protected'
   });
   assert.ok(response.headers['set-cookie']?.some(cookie => cookie.startsWith('page_access_future-protected=')));
+});
+
+test('protected view uses a conventional password form compatible with legacy values', async () => {
+  const response = await request('/view/future-protected');
+
+  assert.equal(response.status, 200);
+  assert.match(response.text, /此内容受密码保护/);
+  assert.match(response.text, /<label[^>]*for="page-password"[^>]*>请输入密码<\/label>/);
+  assert.match(response.text, /type="password"/);
+  assert.match(response.text, /autocomplete="current-password"/);
+  assert.match(response.text, /<button[^>]*type="submit"[^>]*>解锁并查看<\/button>/);
+  assert.doesNotMatch(response.text, /inputmode="numeric"/);
+  assert.doesNotMatch(response.text, /pattern="\[0-9\]\*"/);
 });
 
 test('expired public routes return 410 without granting access', async () => {

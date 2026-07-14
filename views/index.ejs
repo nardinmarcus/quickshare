@@ -41,6 +41,76 @@
           </select>
         </div>
 
+        <section id="publish-settings" class="publish-settings" aria-labelledby="publish-settings-title">
+          <h2 id="publish-settings-title" class="publish-settings-title">发布设置</h2>
+
+          <div class="publish-settings-grid">
+            <div class="publish-field">
+              <label for="share-title">标题（可选）</label>
+              <input type="text" id="share-title" maxlength="160" placeholder="留空时自动提取标题">
+            </div>
+            <div class="publish-field">
+              <label for="share-description">描述（可选）</label>
+              <textarea id="share-description" rows="2" maxlength="500" placeholder="用于分享摘要"></textarea>
+            </div>
+            <div class="publish-field">
+              <label for="share-expires">到期时间（可选）</label>
+              <input type="datetime-local" id="share-expires">
+              <span id="share-expires-hint" class="field-hint"></span>
+            </div>
+          </div>
+
+          <fieldset class="access-policy">
+            <legend>访问方式</legend>
+            <div class="access-mode-options">
+              <label class="access-mode-option" for="access-link">
+                <input type="radio" id="access-link" name="access-mode" value="link" checked>
+                <span>
+                  <strong>持有链接可访问</strong>
+                  <small>任何拿到链接的人都可以查看</small>
+                </span>
+              </label>
+              <label class="access-mode-option" for="password-toggle">
+                <input type="radio" id="password-toggle" name="access-mode" value="password">
+                <span>
+                  <strong>密码保护</strong>
+                  <small>查看前需要输入访问密码</small>
+                </span>
+              </label>
+            </div>
+
+            <div id="password-settings" class="password-settings hidden">
+              <div id="password-default-mode" class="password-default-mode">
+                <span id="password-mode-summary">自动生成 6 位数字密码</span>
+                <button type="button" id="use-custom-password-btn" class="mode-switch-btn">改用自定义密码</button>
+              </div>
+
+              <div id="password-custom-mode" class="password-custom-mode hidden">
+                <label for="custom-password-input">自定义密码</label>
+                <div class="custom-password-row">
+                  <input
+                    type="password"
+                    id="custom-password-input"
+                    class="custom-password-input"
+                    placeholder="4–12 位"
+                    minlength="4"
+                    maxlength="12"
+                    autocomplete="new-password"
+                    aria-describedby="custom-password-hint"
+                    aria-invalid="false"
+                  >
+                  <button type="button" id="toggle-custom-password" class="toggle-password-btn" aria-label="显示密码">
+                    <i class="fas fa-eye" aria-hidden="true"></i>
+                  </button>
+                  <button type="button" id="confirm-custom-password" class="confirm-btn">使用此密码</button>
+                  <button type="button" id="cancel-custom-password" class="mode-switch-btn">使用自动密码</button>
+                </div>
+                <span id="custom-password-hint" class="field-hint">仅限英文字母、数字及 !@#$%^&amp;*()_+-=.,?~</span>
+              </div>
+            </div>
+          </fieldset>
+        </section>
+
         <div class="button-row">
           <div>
             <label for="html-file" class="cyber-btn cyber-btn-secondary tooltip micro-interaction" data-tooltip="上传文件" aria-label="上传文件">
@@ -51,8 +121,8 @@
             <button id="clear-button" class="cyber-btn cyber-btn-secondary tooltip micro-interaction" data-tooltip="清空内容" aria-label="清空内容">
               <i class="fas fa-eraser mr-1" aria-hidden="true"></i>清除
             </button>
-            <button id="generate-button" class="cyber-btn cyber-btn-primary tooltip micro-interaction" data-tooltip="生成分享链接" aria-label="生成分享链接">
-              <i class="fas fa-link mr-1" aria-hidden="true"></i>生成链接
+            <button id="generate-button" class="cyber-btn cyber-btn-primary tooltip micro-interaction" data-tooltip="发布并生成链接" aria-label="发布并生成链接">
+              <i class="fas fa-link mr-1" aria-hidden="true"></i>发布并生成链接
             </button>
           </div>
         </div>
@@ -73,41 +143,10 @@
         </div>
       </div>
 
-      <div class="password-protection-toggle">
-        <div class="protection-controls">
-          <div class="switch-container">
-            <input type="checkbox" id="password-toggle" class="switch-checkbox">
-            <label for="password-toggle" class="switch-label"></label>
-          </div>
-
-          <!-- 默认模式：显示密码 + 自定义密码按钮 -->
-          <div id="password-default-mode" class="password-default-mode hidden">
-            <span class="password-label">密码：</span>
-            <span id="generated-password" class="generated-password" title="点击复制密码"></span>
-            <button type="button" id="use-custom-password-btn" class="mode-switch-btn">自定义密码</button>
-          </div>
-
-          <!-- 自定义模式：输入框 + 确认 + 取消 -->
-          <div id="password-custom-mode" class="password-custom-mode hidden">
-            <input
-              type="password"
-              id="custom-password-input"
-              class="custom-password-input"
-              placeholder="4-12位"
-              minlength="4"
-              maxlength="12"
-              autocomplete="new-password"
-            >
-            <span id="custom-password-hint" class="field-hint"></span>
-            <button type="button" id="toggle-custom-password" class="toggle-password-btn" aria-label="Toggle password visibility">
-              <i class="fas fa-eye" aria-hidden="true"></i>
-            </button>
-            <button type="button" id="confirm-custom-password" class="confirm-btn">确认</button>
-            <button type="button" id="cancel-custom-password" class="mode-switch-btn">默认密码</button>
-          </div>
-
-          <a href="#" id="copy-password-link" class="copy-password-link hidden">复制密码和网址</a>
-        </div>
+      <div id="result-password-row" class="result-password-row hidden">
+        <span class="password-label">访问密码：</span>
+        <code id="generated-password" class="generated-password" title="点击复制密码"></code>
+        <button type="button" id="copy-password-link" class="copy-password-link">复制密码和网址</button>
       </div>
 
     </div>

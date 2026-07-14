@@ -111,16 +111,19 @@
                 type="password"
                 id="edit-password"
                 name="password"
-                placeholder="Leave empty to auto-generate"
-                maxlength="50"
+                placeholder="留空则保持当前密码或自动生成"
+                minlength="4"
+                maxlength="12"
                 autocomplete="new-password"
+                aria-describedby="edit-password-hint"
+                aria-invalid="false"
               >
               <span id="edit-password-hint" class="field-hint"></span>
               <button type="button" class="admin-toggle-password-btn" id="toggle-password-visibility" aria-label="Toggle password visibility">
                 <i class="fas fa-eye" aria-hidden="true"></i>
               </button>
             </div>
-            <p class="admin-edit-hint">Leave empty to keep current password or auto-generate a new one.</p>
+            <p class="admin-edit-hint">留空时：已有保护保持当前密码，新开启保护自动生成 6 位数字密码。</p>
           </div>
           <p class="admin-edit-hint" id="protection-hint">
             <% if (sharedPage.isProtected) { %>

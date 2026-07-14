@@ -148,21 +148,23 @@
 
   // Inline password validation
   var passwordHint = document.getElementById('edit-password-hint');
+  var customPasswordPattern = /^[A-Za-z0-9!@#$%^&*()_+\-=.,?~]{4,12}$/;
+  var customPasswordError = '自定义密码必须为 4–12 位，仅可包含英文字母、数字及 !@#$%^&*()_+-=.,?~';
   if (passwordInput && passwordHint) {
     passwordInput.addEventListener('input', function () {
-      var len = passwordInput.value.length;
-      if (len === 0) {
+      var password = passwordInput.value;
+      if (password.length === 0) {
         passwordHint.textContent = '';
         passwordHint.className = 'field-hint';
-      } else if (len < 4) {
-        passwordHint.textContent = 'Password must be at least 4 characters';
+        passwordInput.setAttribute('aria-invalid', 'false');
+      } else if (!customPasswordPattern.test(password)) {
+        passwordHint.textContent = customPasswordError;
         passwordHint.className = 'field-hint error';
-      } else if (len > 50) {
-        passwordHint.textContent = 'Password must not exceed 50 characters';
-        passwordHint.className = 'field-hint error';
+        passwordInput.setAttribute('aria-invalid', 'true');
       } else {
-        passwordHint.textContent = '✓';
+        passwordHint.textContent = '密码格式有效';
         passwordHint.className = 'field-hint valid';
+        passwordInput.setAttribute('aria-invalid', 'false');
       }
     });
   }
@@ -201,7 +203,16 @@
     const htmlContent = contentTextarea.value;
     const expiresAtValue = document.getElementById('edit-expires').value;
     const isProtected = protectedCheckbox.checked;
-    const customPassword = passwordInput ? passwordInput.value.trim() : '';
+    const customPassword = passwordInput ? passwordInput.value : '';
+
+    if (customPassword && !customPasswordPattern.test(customPassword)) {
+      passwordHint.textContent = customPasswordError;
+      passwordHint.className = 'field-hint error';
+      passwordInput.setAttribute('aria-invalid', 'true');
+      Toast.error(customPasswordError);
+      passwordInput.focus();
+      return;
+    }
 
     const payload = {
       title: title || null,
