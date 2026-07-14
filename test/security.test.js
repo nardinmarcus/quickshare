@@ -7,7 +7,9 @@ const {
   decryptSecret,
   encryptSecret,
   hashSecret,
+  isValidAppSecret,
   isValidCustomPassword,
+  isValidScryptHash,
   verifyCsrfToken,
   verifyScopedToken,
   verifySecret
@@ -44,8 +46,17 @@ test('custom passwords accept only the approved 4-12 character ASCII allowlist',
 test('hashSecret verifies only the original secret', async () => {
   const hash = await hashSecret('correct-password');
 
+  assert.equal(isValidScryptHash(hash), true);
+  assert.equal(isValidScryptHash('scrypt$c2FsdA$a2V5'), false);
   assert.equal(await verifySecret('correct-password', hash), true);
   assert.equal(await verifySecret('wrong-password', hash), false);
+});
+
+test('production app secrets require 32 bytes and reject known placeholders', () => {
+  assert.equal(isValidAppSecret('s'.repeat(32)), true);
+  assert.equal(isValidAppSecret('s'.repeat(31)), false);
+  assert.equal(isValidAppSecret('change-this-to-a-long-random-secret'), false);
+  assert.equal(isValidAppSecret(` ${'s'.repeat(32)}`), false);
 });
 
 test('encryptSecret stores recoverable secrets without plaintext', () => {

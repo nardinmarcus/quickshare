@@ -6,12 +6,62 @@ const DEFAULT_PASSWORD_LENGTH = 6;
 const CUSTOM_PASSWORD_ERROR = '自定义密码必须为 4–12 位，仅可包含英文字母、数字及 !@#$%^&*()_+-=.,?~';
 const CUSTOM_PASSWORD_PATTERN = /^[A-Za-z0-9!@#$%^&*()_+\-=.,?~]{4,12}$/;
 const ENCRYPTED_SECRET_PREFIX = 'secret-v1';
+const SCRYPT_SALT_BYTES = 16;
+const SCRYPT_KEY_BYTES = 64;
+const MIN_APP_SECRET_BYTES = 32;
+const RESERVED_APP_SECRETS = new Set([
+  'change-this-to-a-long-random-secret',
+  'dev-only-change-me'
+]);
+
+function isProductionRuntime(env = process.env) {
+  return env.NODE_ENV === 'production' || env.VERCEL_ENV === 'production';
+}
+
+function decodeCanonicalBase64Url(value) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]+$/.test(value)) {
+    return null;
+  }
+
+  const decoded = Buffer.from(value, 'base64url');
+  return decoded.toString('base64url') === value ? decoded : null;
+}
+
+function isValidScryptHash(value) {
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  const [algorithm, encodedSalt, encodedKey, extra] = value.split('$');
+
+  if (algorithm !== 'scrypt' || !encodedSalt || !encodedKey || extra !== undefined) {
+    return false;
+  }
+
+  const salt = decodeCanonicalBase64Url(encodedSalt);
+  const key = decodeCanonicalBase64Url(encodedKey);
+  return salt?.length === SCRYPT_SALT_BYTES && key?.length === SCRYPT_KEY_BYTES;
+}
+
+function isValidAppSecret(value) {
+  if (typeof value !== 'string' || value !== value.trim()) {
+    return false;
+  }
+
+  return Buffer.byteLength(value, 'utf8') >= MIN_APP_SECRET_BYTES
+    && !RESERVED_APP_SECRETS.has(value);
+}
 
 function getAppSecret() {
-  const secret = process.env.SESSION_SECRET || process.env.AUTH_SECRET;
+  const isProduction = isProductionRuntime();
+  const secret = process.env.SESSION_SECRET || (isProduction ? '' : process.env.AUTH_SECRET);
 
-  if (!secret && process.env.NODE_ENV === 'production') {
+  if (!secret && isProduction) {
     throw new Error('SESSION_SECRET is required in production');
+  }
+
+  if (isProduction && !isValidAppSecret(secret)) {
+    throw new Error('SESSION_SECRET must be at least 32 bytes and not a placeholder in production');
   }
 
   return secret || 'dev-only-change-me';
@@ -244,7 +294,10 @@ module.exports = {
   generateNumericPassword,
   getAppSecret,
   hashSecret,
+  isProductionRuntime,
+  isValidAppSecret,
   isValidCustomPassword,
+  isValidScryptHash,
   parseCustomPassword,
   timingSafeEqualString,
   verifyCsrfToken,

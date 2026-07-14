@@ -9,7 +9,7 @@ NODE_ENV=production
 AUTH_ENABLED=true
 ADMIN_PASSWORD_HASH=<generated-password-hash>
 ADMIN_DASHBOARD_PASSWORD_HASH=<generated-dashboard-password-hash>
-SESSION_SECRET=<long-random-secret>
+SESSION_SECRET=<at-least-32-byte-random-secret>
 DATABASE_URL=<postgres-connection-string>
 ```
 
@@ -21,10 +21,10 @@ npm run hash-password -- "your-admin-password"
 
 说明：
 - 系统有两层独立认证：**前端登录**（`/login`，控制首页创建分享）和**管理后台**（`/admin/login`，控制 pages/stats/audit）。
-- `ADMIN_PASSWORD_HASH` / `AUTH_PASSWORD` 控制前端登录；`ADMIN_DASHBOARD_PASSWORD_HASH` / `ADMIN_DASHBOARD_PASSWORD` 控制管理后台。
+- `ADMIN_PASSWORD_HASH` 控制前端登录，`ADMIN_DASHBOARD_PASSWORD_HASH` 控制管理后台；生产只接受 `npm run hash-password` 生成的 scrypt hash，明文变量仅限本地开发。
 - `DATABASE_URL` 使用运行时 pooled URL。应用运行时不需要 schema owner 权限。
 - direct owner URL 只允许在可信迁移主机或 CI job 中临时注入 `npm run db:migrate`，不要保存到 Vercel、应用容器或其他长期运行环境。迁移命令优先读取 `DATABASE_MIGRATION_URL`，也识别 `DATABASE_URL_UNPOOLED` 或 `POSTGRES_URL_NON_POOLING`；连接统一使用 `sslmode=verify-full`。
-- `SESSION_SECRET` 用于签名所有认证 cookie 和 CSRF token，由 `utils/security.js` 读取。
+- `SESSION_SECRET` 用于签名所有认证 cookie 和 CSRF token，必须是至少 32 bytes 的随机值，且不能使用示例占位符。
 - 未设置 `DATABASE_URL` 时，本地开发会使用内存仓库；生产环境会立即启动失败，绝不把内存仓库当持久数据源。
 - 应用运行时不执行 `CREATE` / `ALTER`；schema 只能通过 `npm run db:migrate` 变更。
 
@@ -148,7 +148,7 @@ direct owner URL 不进入以上容器运行时环境；在启动或升级容器
 | `ADMIN_PASSWORD_HASH` | 生产环境 | 前端密码 hash，优先于 `AUTH_PASSWORD` |
 | `ADMIN_DASHBOARD_PASSWORD` | 否 | 明文管理后台密码，仅开发环境（默认 `dashboard123`） |
 | `ADMIN_DASHBOARD_PASSWORD_HASH` | 生产环境 | 管理后台密码 hash，优先于 `ADMIN_DASHBOARD_PASSWORD` |
-| `SESSION_SECRET` | 生产环境 | 签名 cookie 和 CSRF token（security.js 读取） |
+| `SESSION_SECRET` | 生产环境 | 至少 32 bytes 的随机值，用于签名 cookie 和 CSRF token；示例占位符会被拒绝 |
 | `DATABASE_URL` | 生产环境 | 运行时 pooled Postgres URL；生产缺失时启动失败 |
 | `DATABASE_MIGRATION_URL` | 迁移时 | direct owner URL；只在可信迁移主机/CI 临时注入，禁止存入应用运行时环境 |
 | `DATABASE_URL_UNPOOLED` / `POSTGRES_URL_NON_POOLING` | 迁移时 | direct URL 别名；仅可信迁移 runner 使用，不由应用请求路径读取 |

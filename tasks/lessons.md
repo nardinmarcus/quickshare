@@ -54,3 +54,13 @@
 
 - Moving a test from `test/` to `test/integration/` changes every repository-relative import depth; update and syntax-check those imports before running an external integration dependency.
 - A module-resolution failure means the database test never reached the database, so fix the harness and rerun the same assertions before recording migration evidence.
+
+## 2026-07-15 — Keep worktree-only dependencies available until the final test run
+
+- If a linked worktree uses an untracked `node_modules` symlink, remove it only immediately before staging or committing, then recreate it before starting the next test cycle.
+- A dependency-resolution failure after removing that symlink is a harness failure, not a product regression; restore the same dependency tree and rerun the unchanged command.
+
+## 2026-07-15 — Derive security mode from the loaded deployment environment
+
+- Load environment files before deriving the runtime mode, and treat the platform production marker as authoritative alongside `NODE_ENV`; otherwise production-only validation can be bypassed by launch context.
+- Validate structured credentials by the generator's decoded invariants, not a prefix-shaped regex, and use generator-compatible values in positive tests.

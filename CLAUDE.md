@@ -11,7 +11,7 @@ Express 4 + EJS + PostgreSQL (生产) / 内存 (开发)。部署在 Vercel。
 - 认证分两层：
   - **前端登录**（`/login`）：签名 cookie `admin_session`，用于首页创建分享。中间件 `requireAdmin`。
   - **管理后台**（`/admin/login`）：签名 cookie `dashboard_admin_session`，用于 pages/stats/audit 管理。中间件 `requireDashboardAdmin`。
-- 两层密码独立配置（`AUTH_PASSWORD` / `ADMIN_PASSWORD_HASH` vs `ADMIN_DASHBOARD_PASSWORD` / `ADMIN_DASHBOARD_PASSWORD_HASH`），各自有 hash 和明文两种形式。
+- 两层密码独立配置（`AUTH_PASSWORD` / `ADMIN_PASSWORD_HASH` vs `ADMIN_DASHBOARD_PASSWORD` / `ADMIN_DASHBOARD_PASSWORD_HASH`）；明文形式只允许本地开发，生产只接受 scrypt hash。
 - 写操作必须带 CSRF token（`requireCsrf` 中间件，auth 关闭时跳过）。
 - API 端点（`POST /api/v1/share`）使用 `X-API-Key` header 鉴权（`requireApiKey` 中间件），不走 cookie/CSRF，供 CLI 和 Skill 调用。
 - `trust proxy` 已启用（Vercel 边缘终止 TLS，需读 `x-forwarded-proto`）。
@@ -85,8 +85,8 @@ npm test
 
 ## 安全边界
 
-- 生产环境必须设置 `ADMIN_PASSWORD_HASH`（或 `AUTH_PASSWORD`）和 `ADMIN_DASHBOARD_PASSWORD_HASH`（或 `ADMIN_DASHBOARD_PASSWORD`）。两者在生产环境均拒绝明文形式。
-- `SESSION_SECRET` 用于签名所有认证 cookie 和 CSRF token，生产环境必须设置。
+- 生产环境必须设置 `ADMIN_PASSWORD_HASH` 和 `ADMIN_DASHBOARD_PASSWORD_HASH`。两者必须由 `npm run hash-password` 生成，生产拒绝明文形式。
+- `SESSION_SECRET` 用于签名所有认证 cookie 和 CSRF token，生产环境必须设置至少 32 bytes 的非占位随机值。
 - `AUTH_PASSWORD`（明文）仅限开发环境，生产环境会被 `config.js` 拒绝。
 - `SHARE_API_KEY` 用于 `POST /api/v1/share` 的 API Key 鉴权，未设置时该端点返回 503。
 - sandbox iframe 只允许脚本执行，不允许同源访问父页面 DOM/cookie。
