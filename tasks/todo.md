@@ -396,3 +396,26 @@ Review:
 - Lifecycle: editing after preview hid the section, removed the outer `srcdoc`, removed the action `href`, and hid the action again.
 - Responsive result: at 375px, document width remained 375px, both header controls were 44px high, and the 174px action group stayed within the 309px preview header.
 - Verification: focused publishing UX tests passed 5/5, the full Node suite passed 107/107, JavaScript syntax and `git diff --check` passed, and the browser reported no console errors. The in-app browser policy did not permit automating the final Blob navigation, so that standard browser action is covered by the rendered `target`/`rel` contract plus live Blob-href generation rather than a scripted click.
+
+# Homepage expiry date picker (2026-07-15)
+
+- [x] Replace the homepage manual date-time field with a native date picker.
+- [x] Treat the selected local date as expiring at the end of that day and keep server timestamps unchanged.
+- [x] Expose the date-picker semantics and expiry rule accessibly in the form.
+- [x] Add a focused regression guard and run the relevant/full test suites.
+- [x] Verify selection, validation, and responsive light/dark rendering in a real browser.
+
+Verify:
+
+1. Open the homepage -> the expiry field exposes a calendar date picker rather than a date-time text workflow.
+2. Select today or a future date -> the publish payload contains the selected local day at `23:59:59.999`.
+3. Clear the selection -> publishing remains allowed with no expiry.
+4. Light, dark, and 375px layouts -> the calendar affordance stays visible and the form remains overflow-free.
+
+Review:
+
+- Form behavior: the homepage now renders a native `date` input with an accessible hint and a visible calendar affordance in both light and dark themes.
+- Expiry semantics: `2026-07-16` produced `1784217599999`, exactly the browser-local `2026-07-16 23:59:59.999`; the server continues receiving the existing millisecond timestamp contract.
+- Validation: the picker minimum tracks the browser's current local date, past or malformed values retain client/server rejection, and an empty value still publishes without expiry.
+- Responsive result: the 375px browser viewport kept `scrollWidth === innerWidth === 375`; the date control and explanatory hint remained fully usable.
+- Verification: focused regression passed 1/1, the full Node suite passed 108/108, JavaScript syntax and `git diff --check` passed, and browser console/page errors were empty.

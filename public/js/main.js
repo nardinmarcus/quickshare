@@ -102,6 +102,27 @@ document.addEventListener('DOMContentLoaded', () => {
   const shareDescriptionInput = document.getElementById('share-description');
   const shareExpiresInput = document.getElementById('share-expires');
   const shareExpiresHint = document.getElementById('share-expires-hint');
+  const expiryDefaultHint = '将在所选日期结束后到期';
+
+  function localDateValue(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  function expiryAtEndOfLocalDay(value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return NaN;
+
+    const [year, month, day] = value.split('-').map(Number);
+    const selectedDate = new Date(year, month - 1, day);
+    const isValidDate = selectedDate.getFullYear() === year
+      && selectedDate.getMonth() === month - 1
+      && selectedDate.getDate() === day;
+
+    if (!isValidDate) return NaN;
+    return new Date(year, month - 1, day + 1).getTime() - 1;
+  }
 
   // 用户自定义密码（空字符串表示使用默认密码）
   let userCustomPassword = '';
@@ -432,7 +453,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (shareDescriptionInput) shareDescriptionInput.value = '';
     if (shareExpiresInput) shareExpiresInput.value = '';
     if (shareExpiresHint) {
-      shareExpiresHint.textContent = '';
+      shareExpiresHint.textContent = expiryDefaultHint;
       shareExpiresHint.className = 'field-hint';
     }
     if (linkAccessRadio) linkAccessRadio.checked = true;
@@ -594,10 +615,16 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   if (shareExpiresInput && shareExpiresHint) {
+    shareExpiresInput.min = localDateValue(new Date());
+
+    shareExpiresInput.addEventListener('focus', () => {
+      shareExpiresInput.min = localDateValue(new Date());
+    });
+
     shareExpiresInput.addEventListener('change', () => {
-      const expiresAt = shareExpiresInput.value ? new Date(shareExpiresInput.value).getTime() : null;
+      const expiresAt = shareExpiresInput.value ? expiryAtEndOfLocalDay(shareExpiresInput.value) : null;
       const invalid = expiresAt !== null && (!Number.isFinite(expiresAt) || expiresAt <= Date.now());
-      shareExpiresHint.textContent = invalid ? '到期时间必须晚于当前时间' : '';
+      shareExpiresHint.textContent = invalid ? '请选择今天或之后的到期日期' : expiryDefaultHint;
       shareExpiresHint.className = invalid ? 'field-hint error' : 'field-hint';
     });
   }
@@ -941,11 +968,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let expiresAt = null;
     if (shareExpiresInput && shareExpiresInput.value) {
-      expiresAt = new Date(shareExpiresInput.value).getTime();
+      expiresAt = expiryAtEndOfLocalDay(shareExpiresInput.value);
 
       if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
         if (shareExpiresHint) {
-          shareExpiresHint.textContent = '到期时间必须晚于当前时间';
+          shareExpiresHint.textContent = '请选择今天或之后的到期日期';
           shareExpiresHint.className = 'field-hint error';
         }
         const error = userFacingError('到期时间必须晚于当前时间');

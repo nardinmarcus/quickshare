@@ -3955,6 +3955,20 @@ body:hover::-webkit-scrollbar,
   font: inherit;
 }
 
+.publish-field input[type="date"] {
+  color-scheme: dark;
+  cursor: pointer;
+}
+
+[data-theme="light"] .publish-field input[type="date"],
+[data-theme="popart"] .publish-field input[type="date"] {
+  color-scheme: light;
+}
+
+.publish-field input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+}
+
 .publish-field textarea {
   resize: vertical;
 }

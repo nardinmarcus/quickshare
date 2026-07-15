@@ -64,9 +64,9 @@
               <textarea id="share-description" rows="2" maxlength="500" placeholder="用于分享摘要"></textarea>
             </div>
             <div class="publish-field">
-              <label for="share-expires">到期时间（可选）</label>
-              <input type="datetime-local" id="share-expires">
-              <span id="share-expires-hint" class="field-hint"></span>
+              <label for="share-expires">到期日期（可选）</label>
+              <input type="date" id="share-expires" aria-describedby="share-expires-hint">
+              <span id="share-expires-hint" class="field-hint">将在所选日期结束后到期</span>
             </div>
           </div>
 

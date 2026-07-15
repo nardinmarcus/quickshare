@@ -102,6 +102,19 @@ test('homepage exposes atomic publish settings before the publish action', async
   assert.doesNotMatch(script.text, /\/api\/pages\/\$\{urlId\}\/protect/);
 });
 
+test('homepage expiry uses a date picker with local end-of-day semantics', async () => {
+  const homepage = await request('/');
+  const script = await request('/js/main.js');
+
+  assert.equal(homepage.status, 200);
+  assert.match(homepage.text, /<label for="share-expires">到期日期（可选）<\/label>/);
+  assert.match(homepage.text, /<input type="date" id="share-expires" aria-describedby="share-expires-hint">/);
+  assert.match(homepage.text, /id="share-expires-hint"[^>]*>将在所选日期结束后到期<\/span>/);
+  assert.match(script.text, /function expiryAtEndOfLocalDay\(value\)/);
+  assert.match(script.text, /new Date\(year, month - 1, day \+ 1\)\.getTime\(\) - 1/);
+  assert.match(script.text, /shareExpiresInput\.min = localDateValue\(new Date\(\)\)/);
+});
+
 test('browser create stores all publish settings atomically', async () => {
   const expiresAt = Date.now() + 3_600_000;
   const response = await jsonRequest('/api/pages/create', 'POST', {
