@@ -143,3 +143,36 @@ test('Postgres public lookup reports expiry in one query', async () => {
   assert.deepEqual(queries[0].params, ['expired-page', 5000]);
   assert.match(queries[0].sql, /expires_at IS NOT NULL AND expires_at <= \$2/);
 });
+
+test('view events update eligible rows without selecting page content', async () => {
+  const repository = Object.create(PostgresPageRepository.prototype);
+  const queries = [];
+  const states = {
+    expired: { is_protected: 0, expires_at: 5000 },
+    protected: { is_protected: 1, expires_at: null }
+  };
+
+  repository.pool = {
+    async query(sql, params) {
+      queries.push({ sql, params });
+
+      if (/^\s*UPDATE pages/i.test(sql)) {
+        return { rowCount: params[0] === 'active' ? 1 : 0, rows: [] };
+      }
+
+      return { rows: states[params[0]] ? [states[params[0]]] : [] };
+    }
+  };
+
+  assert.equal(await repository.recordViewEvent('active', 4999, false), 'counted');
+  assert.equal(await repository.recordViewEvent('expired', 5000, false), 'expired');
+  assert.equal(await repository.recordViewEvent('protected', 5000, false), 'protected');
+  assert.equal(await repository.recordViewEvent('missing', 5000, false), 'not_found');
+
+  assert.equal(queries.length, 7);
+  assert.doesNotMatch(queries.map(query => query.sql).join('\n'), /SELECT\s+\*|html_content|password_hash/i);
+  assert.match(queries[0].sql, /expires_at IS NULL OR expires_at > \$2/);
+  assert.match(queries[0].sql, /is_protected, 0\) <> 1 OR \$3/);
+  assert.deepEqual(queries[0].params, ['active', 4999, false]);
+  assert.match(queries[2].sql, /SELECT is_protected, expires_at/);
+});

@@ -64,3 +64,15 @@
 
 - Load environment files before deriving the runtime mode, and treat the platform production marker as authoritative alongside `NODE_ENV`; otherwise production-only validation can be bypassed by launch context.
 - Validate structured credentials by the generator's decoded invariants, not a prefix-shaped regex, and use generator-compatible values in positive tests.
+
+## 2026-07-15 — Keep production schema probes unambiguous and read-only
+
+- Qualify shared catalog fields such as `table_name` when joining `information_schema` views; an ambiguous introspection query proves nothing about the schema it intended to verify.
+- Run preflight and postflight snapshots inside explicit read-only transactions, and compare only metadata plus aggregate row counts so verification cannot expose content or mutate production.
+- Check TLS from the client socket as well as database catalog views; a managed proxy can terminate TLS before the backend and make `pg_stat_ssl` alone misleading.
+
+## 2026-07-15 — Keep analytics events lightweight and authenticate preview bypasses
+
+- Moving a write out of the HTML response is not enough if the event endpoint reloads the full page body; use a conditional update and project only the state needed for rejected events.
+- Treat preview or monitoring query parameters as user-controlled input. Any analytics bypass must also verify the corresponding authenticated session.
+- Verify browser event paths through the real API boundary: confirm Origin, protected-page cookies, the local reporter asset, and the final `204`, not only mocked JavaScript calls.

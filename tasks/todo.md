@@ -6,13 +6,13 @@ Baseline reviewed: GitHub `main` commit `b3c15be67c93fc76e8ae047e82017f726d9cee1
 
 ## Agreed operating rules
 
-- [ ] Keep PostgreSQL durable data as the source of truth. Browser, CDN, rendered output, and runtime caches are disposable derived layers only.
-- [ ] One work package per focused commit/PR; do not mix security, UI, performance, and product-schema refactors.
-- [ ] Add a failing regression test before each correctness/security fix.
-- [ ] Verify each package locally, in CI, on a preview deployment, and on production before continuing.
-- [ ] Preserve backward compatibility for existing share URLs and `/api/v1/share` unless explicitly approved otherwise.
-- [ ] Use additive/compatible database migrations; deploy schema before code that requires it.
-- [ ] Do not rewrite Express/EJS, introduce an ORM, add Redis/KV as truth, or split services.
+- [x] Keep PostgreSQL durable data as the source of truth. Browser, CDN, rendered output, and runtime caches are disposable derived layers only.
+- [x] One work package per focused commit/PR; do not mix security, UI, performance, and product-schema refactors.
+- [x] Add a failing regression test before each correctness/security fix.
+- [x] Verify each package locally, in CI, on a preview deployment, and on production before continuing.
+- [x] Preserve backward compatibility for existing share URLs and `/api/v1/share` unless explicitly approved otherwise.
+- [x] Use additive/compatible database migrations; deploy schema before code that requires it.
+- [x] Do not rewrite Express/EJS, introduce an ORM, add Redis/KV as truth, or split services.
 
 ## Approved decisions
 
@@ -189,12 +189,12 @@ Estimated engineering effort: 2–4 focused days.
 
 ### WP7: Explicit migrations and connection-pool protection
 
-- [ ] Add a small numbered SQL migration runner and `npm run db:migrate`; do not add an ORM.
-- [ ] Move `pages`, `audit_logs`, `api_keys`, columns, and indexes out of request-time initialization.
-- [ ] Make the baseline migration safe on both empty and existing databases.
-- [ ] Add connection, idle, and statement/query timeouts plus `pool.on('error')`.
-- [ ] Resolve the pg SSL warning explicitly and document use of the pooled database URL.
-- [ ] Document first deploy, migration, verification, rollback, and recovery.
+- [x] Add a small numbered SQL migration runner and `npm run db:migrate`; do not add an ORM.
+- [x] Move `pages`, `audit_logs`, `api_keys`, columns, and indexes out of request-time initialization.
+- [x] Make the baseline migration safe on both empty and existing databases.
+- [x] Add connection, idle, and statement/query timeouts plus `pool.on('error')`.
+- [x] Resolve the pg SSL warning explicitly and document use of the pooled database URL.
+- [x] Document first deploy, migration, verification, rollback, and recovery.
 
 Verify:
 
@@ -205,10 +205,12 @@ Verify:
 
 Rollback: migrations are additive; deploy schema first so the old application remains compatible.
 
+WP7 verification (2026-07-15): empty/legacy/idempotent/rollback and timeout integration checks passed against disposable PostgreSQL (`5/5` in the latest suite). Production migration applied once and then skipped on the second run; pre/post business row counts remained `174 / 136 / 1`.
+
 ### WP8: Establish `/view` performance baseline
 
-- [ ] Add structured timing for request, DB, processing/render, response bytes, content type, protection state, and cold start.
-- [ ] Log route templates, not full IDs or sensitive query strings; never log content, password, API key, or `_vercel_share` tokens.
+- [x] Add structured timing for request, DB, processing/render, response bytes, content type, protection state, and cold start.
+- [x] Log route templates, not full IDs or sensitive query strings; never log content, password, API key, or `_vercel_share` tokens.
 - [ ] Record HTML/Markdown/SVG/Mermaid p50/p95 and content-size distribution for a representative traffic window.
 
 Verify:
@@ -217,14 +219,16 @@ Verify:
 2. Logs contain no sensitive values.
 3. A baseline report can distinguish DB, render, cold-start, and large-response cost.
 
+WP8 status (2026-07-15): instrumentation is live in production. The first 24-hour query contained only four synthetic `not_found` probes, so it is explicitly not a representative content-type baseline; continue passive collection before making render/cache decisions.
+
 ### WP9: Remove view-count writes from the HTML critical path
 
-- [ ] Treat view count as approximate analytics and move it to a lightweight beacon/event request.
-- [ ] Await persistence in the event request, not in the HTML response; beacon failure never blocks viewing.
-- [ ] Do not add a queue/event table until measured traffic proves direct writes are a bottleneck.
-- [ ] Keep public dynamic pages non-shared-cacheable initially so expiry/edit/revoke semantics remain exact.
-- [ ] Consider short CDN caching only after an invalidation strategy is available, or after explicitly accepting a maximum stale window bounded by expiry.
-- [ ] Add pre-rendered `rendered_html` only if WP8 shows render time is a material share of origin p95.
+- [x] Treat view count as approximate analytics and move it to a lightweight beacon/event request.
+- [x] Await persistence in the event request, not in the HTML response; beacon failure never blocks viewing.
+- [x] Do not add a queue/event table until measured traffic proves direct writes are a bottleneck.
+- [x] Keep public dynamic pages non-shared-cacheable initially so expiry/edit/revoke semantics remain exact.
+- [x] Defer short CDN caching until an invalidation strategy exists or a bounded stale window is explicitly accepted.
+- [x] Do not add `rendered_html` without a representative WP8 baseline showing render time materially affects origin p95.
 
 Verify:
 
@@ -235,15 +239,17 @@ Verify:
 
 Rollback: remove beacon and restore the previous counter path; no schema required for the initial version.
 
+WP9 verification (2026-07-15): red/green route and repository tests cover same-origin, missing, expired, protected, authenticated admin preview, no-store, exactly-once browser reporting, and awaited persistence. Full Node suite passed `105/105`; disposable PostgreSQL passed `5/5`. Chromium verified both public and protected pages through the real `GET -> local reporter -> POST 204` path, including Origin and access cookie.
+
 ### WP10: Route-specific assets, browser caching, and CSP readiness
 
-- [ ] Stop loading Highlight.js and home scripts on login, password, error, stats, and audit pages.
-- [ ] Stop loading homepage `main.js` on admin pages.
-- [ ] Remove unnecessary third-party JavaScript from admin-origin pages; self-host the few assets still required.
-- [ ] Split CSS/JS only by real route ownership; do not add Vite/Webpack solely for this change.
-- [ ] Start static assets with a short browser cache; use one-year `immutable` only after content-hashed filenames exist.
-- [ ] Add the missing root favicon mapping.
-- [ ] Extract remaining inline parent-page scripts, then add a route-appropriate CSP without weakening the existing sandboxed viewer.
+- [x] Stop loading Highlight.js and home scripts on login, password, error, stats, and audit pages.
+- [x] Stop loading homepage `main.js` on admin pages.
+- [x] Remove unnecessary third-party JavaScript from admin-origin pages; keep content-only CDN assets inside the sandbox boundary.
+- [x] Split CSS/JS only by real route ownership; do not add Vite/Webpack solely for this change.
+- [x] Start static assets with a short browser cache; use one-year `immutable` only after content-hashed filenames exist.
+- [x] Add the missing root favicon mapping.
+- [x] Extract remaining inline parent-page scripts, then add a route-appropriate CSP without weakening the existing sandboxed viewer.
 
 Verify:
 
@@ -252,6 +258,8 @@ Verify:
 3. Static assets no longer return `max-age=0`, and a new deploy does not mix old/new HTML and CSS.
 4. Browser console, upload, render, admin, light/dark, and mobile smoke tests pass.
 5. CSP reports no required resource violations.
+
+WP10 verification (2026-07-15): trusted routes load only their owned scripts, static resources revalidate with a five-minute browser cache, and login/admin CSP is enforced without constraining shared `srcdoc` content. Node and Chromium smoke checks passed, including parent-frame isolation for executable shared HTML.
 
 Estimated engineering effort: 3–5 focused days plus a representative 3–7 day measurement window.
 

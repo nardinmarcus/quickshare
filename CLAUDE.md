@@ -48,6 +48,7 @@ Express 4 + EJS + PostgreSQL (生产) / 内存 (开发)。部署在 Vercel。
 | POST | `/api/v1/share` | requireApiKey | API 创建分享 |
 | GET | `/view/:id` | — | 查看分享页（密码页检查） |
 | POST | `/view/:id/password` | — | 验证页面密码 |
+| POST | `/view/:id/view-event` | 同源 Origin；受保护页面需访问 cookie | 近似浏览量上报 |
 
 ## 目录结构速查
 
@@ -65,7 +66,7 @@ routes/          路由模块（pages.js 已废弃，返回 410）
 session/         会话存储（vercel-kv-store.js 未使用的死代码）
 public/          静态资源（css/ js/ icon/）
   css/           styles.css + login.css + markdown-*.css（bytedance / github / apple / notion / claude）
-  js/            main.js + login.js + password.js + admin*.js + paste-fix.js + theme.js
+  js/            main.js + login.js + password.js + view-event.js + admin*.js + paste-fix.js + theme.js
 utils/           security.js（token/CSRF/hash/encrypt）、contentRenderer.js、codeDetector.js、pageTitle.js
 scripts/         hash-password.js
 test/            Node test runner（5 个测试文件）
@@ -92,3 +93,4 @@ npm test
 - sandbox iframe 只允许脚本执行，不允许同源访问父页面 DOM/cookie。
 - 页面密码支持自定义（4-12 个允许的 ASCII 字符）或自动生成（6 位数字），密码以 hash 存储、以 encrypt 存储（供管理后台回显）。
 - 页面访问通过 `page_access_{id}` 签名 cookie 控制，有效期 24 小时。
+- `GET /view/:id` 必须保持只读；浏览量由同源 `POST /view/:id/view-event` 近似记录，数据库正常路径不得再次读取正文。

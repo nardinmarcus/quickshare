@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const { createPostgresPool } = require('../../models/postgres-config');
 const { runMigrations } = require('../../models/postgres-migrations');
+const { PostgresPageRepository } = require('../../models/postgres-pages');
 
 const connectionString = process.env.POSTGRES_TEST_URL;
 
@@ -196,6 +197,41 @@ test('statement timeout fails well below the Vercel function budget', async () =
   try {
     await assert.rejects(pool.query('SELECT pg_sleep(2)'), /statement timeout|canceling statement/i);
     assert.equal(Date.now() - startedAt < 1000, true);
+  } finally {
+    await pool.end();
+  }
+});
+
+test('view events atomically enforce page availability without loading content', async () => {
+  const pool = createPostgresPool(connectionString, { env, max: 1 });
+  const repository = Object.create(PostgresPageRepository.prototype);
+  repository.pool = pool;
+
+  try {
+    await resetPublicSchema(pool);
+    await runMigrations(pool, { logger: { info() {} } });
+    await pool.query(
+      `
+        INSERT INTO pages (id, html_content, created_at, is_protected, expires_at)
+        VALUES
+          ('active', '<h1>Active</h1>', 1, 0, NULL),
+          ('protected', '<h1>Protected</h1>', 1, 1, NULL),
+          ('expired', '<h1>Expired</h1>', 1, 0, 5000)
+      `
+    );
+
+    assert.equal(await repository.recordViewEvent('active', 5000, false), 'counted');
+    assert.equal(await repository.recordViewEvent('protected', 5000, false), 'protected');
+    assert.equal(await repository.recordViewEvent('protected', 5000, true), 'counted');
+    assert.equal(await repository.recordViewEvent('expired', 5000, false), 'expired');
+    assert.equal(await repository.recordViewEvent('missing', 5000, false), 'not_found');
+
+    const counts = await pool.query('SELECT id, view_count FROM pages ORDER BY id');
+    assert.deepEqual(counts.rows, [
+      { id: 'active', view_count: '1' },
+      { id: 'expired', view_count: '0' },
+      { id: 'protected', view_count: '1' }
+    ]);
   } finally {
     await pool.end();
   }

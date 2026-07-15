@@ -82,6 +82,14 @@ npm run hash-password -- "your-admin-password"
 - `cold_start` 只表示当前函数实例收到的第一条 `/view` 请求；p50 / p95 必须在日志平台按时间窗口聚合，应用进程不保存统计结果。
 - 日志不包含分享 ID、query、cookie、标题、正文、密码或完整错误对象。动态密码路由在普通访问日志中固定显示为 `/view/:id/password`，Referer 中的动态分享路径也会改写为固定模板。
 
+### 浏览量事件
+
+- `GET /view/:id` 只读取并返回页面，不更新 `view_count`；所有公开分享响应均为 `Cache-Control: private, no-store`，以保持编辑、删除和过期语义即时生效。
+- 成功渲染的分享页会在 DOM 就绪后通过本地脚本向 `POST /view/:id/view-event` 上报一次。脚本优先使用 `sendBeacon`，不可用时回退到 `fetch(..., { keepalive: true })`；上报失败不会影响内容展示。
+- 事件端点只接受同源 Origin。受保护页面还必须携带有效的页面访问 cookie；缺失、过期和未解锁页面不会计数。启用认证时，只有带有效后台会话的 `adminPreview` 才免计数，公开访问者不能通过 query 绕过；关闭认证意味着后台本身公开，只应用于本地或受控环境。
+- PostgreSQL 正常路径使用一条带过期和保护条件的 `UPDATE`，不会再次读取 `html_content` 或密码字段；失败路径仅查询 `is_protected` 和 `expires_at` 来确定状态。
+- 浏览量属于近似产品分析：禁用 JavaScript、页面在上报前关闭或网络失败时可能漏记。不要把它用于计费或安全审计，也不要把运行时缓存当作计数真相。
+
 ### 本地预检
 
 ```bash

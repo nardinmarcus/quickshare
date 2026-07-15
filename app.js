@@ -503,6 +503,20 @@ function hasPageAccess(req, id) {
   return payload?.id === id;
 }
 
+function isSameOriginRequest(req) {
+  const origin = req.get('origin');
+
+  if (!origin) {
+    return false;
+  }
+
+  try {
+    return new URL(origin).origin === new URL(`${req.protocol}://${req.get('host')}`).origin;
+  } catch (error) {
+    return false;
+  }
+}
+
 function normalizeCodeType(content, requestedCodeType) {
   if (VALID_CODE_TYPES.has(requestedCodeType)) {
     return requestedCodeType;
@@ -631,7 +645,12 @@ function injectCodeTypeMeta(renderedContent, contentType) {
   );
 }
 
-function renderSandboxedDocument(renderedContent, contentType, { title, description, pageUrl } = {}) {
+function renderSandboxedDocument(renderedContent, contentType, {
+  title,
+  description,
+  pageUrl,
+  viewEventUrl
+} = {}) {
   const escapedContent = escapeHtml(renderedContent);
   const pageTitle = title ? `${escapeHtml(title)} - QuickShare` : 'QuickShare';
   const ogDescription = description ? escapeHtml(description) : '通过 QuickShare 分享的内容';
@@ -675,6 +694,7 @@ function renderSandboxedDocument(renderedContent, contentType, { title, descript
         referrerpolicy="no-referrer"
         srcdoc="${escapedContent}">
       </iframe>
+      ${viewEventUrl ? `<script src="/js/view-event.js" data-view-event-url="${escapeHtml(viewEventUrl)}"></script>` : ''}
     </body>
     </html>
   `;
@@ -1591,7 +1611,42 @@ app.post('/view/:id/password', privateNoStore, parseSmallJson, async (req, res) 
   }
 });
 
+app.post('/view/:id/view-event', privateNoStore, async (req, res) => {
+  if (!isSameOriginRequest(req)) {
+    return res.sendStatus(403);
+  }
+
+  try {
+    const outcome = await pageRepository.recordViewEvent(
+      req.params.id,
+      Date.now(),
+      hasPageAccess(req, req.params.id)
+    );
+
+    if (outcome === 'not_found') {
+      return res.sendStatus(404);
+    }
+
+    if (outcome === 'expired') {
+      return res.sendStatus(410);
+    }
+
+    if (outcome === 'protected') {
+      return res.sendStatus(403);
+    }
+
+    return outcome === 'counted' ? res.sendStatus(204) : res.sendStatus(500);
+  } catch (error) {
+    console.error('Track page view failed:', {
+      name: error?.name || 'Error',
+      code: safeErrorCode(error)
+    });
+    return res.sendStatus(500);
+  }
+});
+
 app.get('/view/:id', async (req, res) => {
+  setPrivateNoStore(res);
   const metrics = beginViewPerformance(req, res);
 
   try {
@@ -1631,10 +1686,6 @@ app.get('/view/:id', async (req, res) => {
       });
     }
 
-    if (page.is_protected === 1) {
-      setPrivateNoStore(res);
-    }
-
     if (page.is_protected === 1 && !hasPageAccess(req, req.params.id)) {
       metrics.outcome = 'password_required';
       setTrustedUiCsp(res, { allowFraming: true });
@@ -1664,14 +1715,18 @@ app.get('/view/:id', async (req, res) => {
     metrics.contentType = safeContentType(prepared.contentType);
     metrics.outcome = 'served';
 
-    // Track view count (fire-and-forget; don't block response)
-    pageRepository.incrementViewCount(req.params.id).catch(() => {});
-
     const pageUrl = `${req.protocol}://${req.get('host')}/view/${req.params.id}`;
+    const isDashboardPreview = req.query.adminPreview !== undefined && (
+      !config.authEnabled || Boolean(getDashboardAdminSession(req))
+    );
+    const viewEventUrl = isDashboardPreview
+      ? null
+      : `/view/${encodeURIComponent(req.params.id)}/view-event`;
     return res.send(renderSandboxedDocument(prepared.renderedContent, prepared.contentType, {
       title: page.title,
       description: page.description,
-      pageUrl
+      pageUrl,
+      viewEventUrl
     }));
   } catch (error) {
     metrics.outcome = metrics.phase === 'database'

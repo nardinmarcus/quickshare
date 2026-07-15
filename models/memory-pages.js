@@ -347,11 +347,23 @@ class MemoryPageRepository {
     return count;
   }
 
-  async incrementViewCount(id) {
+  async recordViewEvent(id, now = Date.now(), hasAccess = false) {
     const page = this.pages.get(id);
-    if (page) {
-      page.view_count = (page.view_count || 0) + 1;
+
+    if (!page) {
+      return 'not_found';
     }
+
+    if (page.expires_at !== null && Number(page.expires_at) <= now) {
+      return 'expired';
+    }
+
+    if (page.is_protected === 1 && !hasAccess) {
+      return 'protected';
+    }
+
+    page.view_count = (page.view_count || 0) + 1;
+    return 'counted';
   }
 
   async createAuditLog({ action, pageId, details, ip }) {

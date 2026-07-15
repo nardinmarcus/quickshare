@@ -237,11 +237,38 @@ class PostgresPageRepository {
     return Number.parseInt(result.rows[0]?.count || '0', 10);
   }
 
-  async incrementViewCount(id) {
-    await this.pool.query(
-      'UPDATE pages SET view_count = COALESCE(view_count, 0) + 1 WHERE id = $1',
+  async recordViewEvent(id, now = Date.now(), hasAccess = false) {
+    const updateResult = await this.pool.query(
+      `
+        UPDATE pages
+        SET view_count = COALESCE(view_count, 0) + 1
+        WHERE id = $1
+          AND (expires_at IS NULL OR expires_at > $2)
+          AND (COALESCE(is_protected, 0) <> 1 OR $3)
+        RETURNING id
+      `,
+      [id, now, hasAccess]
+    );
+
+    if (updateResult.rowCount > 0) {
+      return 'counted';
+    }
+
+    const stateResult = await this.pool.query(
+      'SELECT is_protected, expires_at FROM pages WHERE id = $1 LIMIT 1',
       [id]
     );
+    const page = stateResult.rows[0];
+
+    if (!page) {
+      return 'not_found';
+    }
+
+    if (page.expires_at !== null && Number(page.expires_at) <= now) {
+      return 'expired';
+    }
+
+    return page.is_protected === 1 ? 'protected' : 'not_found';
   }
 
   async getAdminStats() {
