@@ -86,3 +86,9 @@
 
 - `gh pr merge` can complete the remote merge and then exit non-zero when local branch cleanup tries to check out a base branch already owned by another worktree.
 - In a multi-worktree repository, pass `--repo` to keep the operation remote-only. After any non-zero merge result, inspect the PR and remote main before retrying or changing branches.
+
+## 2026-07-15 — Reserve solid brand color for one primary action
+
+- A high-frequency helper action does not automatically deserve the same visual weight as the final CTA; two solid brand buttons create competing focal points.
+- Prefer placement, icon color, a subtle tinted surface, and a quiet badge for discoverability when the final publish action must remain dominant.
+- Judge hierarchy in the rendered page, including adjacent actions, instead of evaluating a button as an isolated component.

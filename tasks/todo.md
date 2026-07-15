@@ -314,3 +314,62 @@ Complete after implementation:
 - Performance before/after: deferred to the measured WP8 baseline; Phase 1 made no unmeasured performance claim.
 - Rollback performed or available: previous Vercel deployment remains promotable; application limits/headers and the Firewall rule can be rolled back independently.
 - Follow-up items intentionally deferred: production 2 MB valid-key probe was not forced because Vercel returned the sensitive `SHARE_API_KEY` as blank; the same commit passed this boundary in isolated Preview and local regression.
+
+# Homepage viewport layout optimization (2026-07-15)
+
+- [x] Widen the desktop homepage container without changing login, password, or admin surfaces.
+- [x] Use the additional width to keep the three publish metadata fields on one desktop row.
+- [x] Reduce homepage-only top spacing and vertical gaps so the complete idle publishing flow fits at 1440x900 and 1280x800.
+- [x] Preserve the existing single-column flow below 720px, with no page-level horizontal overflow at 375px.
+- [x] Add a focused regression guard, run the full Node suite, and verify rendered screenshots at representative viewports.
+
+Verify:
+
+1. 1440x900 and 1280x800 -> editor, settings, access policy, actions, status, and footer are all visible without vertical scrolling.
+2. 2048x1244 -> the card uses materially more horizontal space while remaining centered and readable.
+3. 375x812 -> single-column form remains usable, controls stay at least 44px high, and document width stays exactly 375px.
+
+Review:
+
+- Root cause: the homepage inherited a 720px maximum width, used uncapped 8vh top padding, and placed three metadata fields across three rows at desktop widths.
+- Desktop result: the card is 1080px wide; 1024x768, 1280x800, 1440x900, and 2048x1244 all render with document height equal to viewport height.
+- Expanded states: generated-password settings, custom-password settings, and Markdown theme selection remain fully visible at 1440x900.
+- Mobile result: 375px stays single-column with no horizontal overflow and 44px minimum action height; vertical scrolling remains intentional.
+- Tests: focused regression failed before the CSS change and passed after it; full Node suite passed 107/107; browser console/page errors were empty in light and dark modes.
+
+# Homepage upload entry hierarchy (2026-07-15)
+
+- [x] Move the existing upload trigger from the final action row to the content-input header.
+- [x] Give upload a visible accent treatment without competing spatially with the final publish CTA.
+- [x] Preserve the existing file input and JavaScript upload behavior.
+- [x] Keep the desktop idle flow within the tested viewport and mobile free of horizontal overflow.
+- [x] Add a focused regression guard and verify file selection in a real browser.
+
+Verify:
+
+1. Upload is visible beside “分享内容” before the editor, while the bottom row contains only clear, preview, and publish actions.
+2. Clicking upload opens the native file chooser and loading an accepted file populates the editor.
+3. 1440x900 and 1024x768 remain one-screen layouts; 375px remains overflow-free with 44px controls.
+
+Review:
+
+- Placement: upload now sits beside “分享内容” and uses a solid primary treatment plus a compact “常用” badge; the final action row contains only clear, preview, and publish.
+- Behavior: clicking the visible trigger opened Chrome's native file chooser; selecting `sample.md` populated the editor, displayed the filename, and changed the detected type to Markdown.
+- Viewports: 1440x900 and 1024x768 both kept document height equal to viewport height; 375x812 stayed exactly 375px wide and retained a 44px upload target.
+- Themes: light and dark screenshots kept the upload action legible and visually prominent.
+- Tests: focused publishing UX tests passed 5/5, the full Node suite passed 107/107, and `git diff --check` passed.
+
+# Homepage upload visual-weight correction (2026-07-15)
+
+- [x] Replace the solid purple upload fill with a soft accent surface.
+- [x] Keep upload discoverable through position, icon color, border, and the desktop badge.
+- [x] Preserve the solid purple treatment exclusively for the final publish CTA.
+- [x] Verify light, dark, and 375px rendered states without changing upload behavior.
+
+Review:
+
+- Visual weight: upload now uses a 7% primary tint, a 22% primary border, primary-colored icon, and normal foreground text; its shadow is removed.
+- Hierarchy: the final publish action remains the only solid primary button on the page.
+- Themes: light and dark screenshots retain readable text and a quiet but discoverable upload entry.
+- Mobile: 375px remains exactly 375px wide, the upload target stays 44px high, and the compact view continues to hide the optional badge.
+- Verification: focused publishing UX tests passed 5/5, the full Node suite passed 107/107, and `git diff --check` passed.

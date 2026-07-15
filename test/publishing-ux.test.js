@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const http = require('http');
+const path = require('node:path');
 
 process.env.NODE_ENV = 'test';
 process.env.AUTH_ENABLED = 'false';
@@ -60,11 +62,18 @@ function jsonRequest(path, body) {
 
 test('homepage exposes preview, explicit publish states, and a complete handoff result', async () => {
   const homepage = await request('/');
+  const uploadPosition = homepage.text.indexOf('id="upload-file-trigger"');
+  const editorPosition = homepage.text.indexOf('id="html-input"');
   const previewPosition = homepage.text.indexOf('id="prepublish-preview-button"');
   const publishPosition = homepage.text.indexOf('id="generate-button"');
+  const actionRowPosition = homepage.text.indexOf('class="button-row"');
+  const actionRowMarkup = homepage.text.slice(actionRowPosition, homepage.text.indexOf('id="publish-status"'));
 
   assert.equal(homepage.status, 200);
   assert.match(homepage.text, /<label[^>]+for="html-input"/);
+  assert.ok(uploadPosition >= 0);
+  assert.ok(uploadPosition < editorPosition);
+  assert.doesNotMatch(actionRowMarkup, /for="html-file"/);
   assert.ok(previewPosition >= 0);
   assert.ok(previewPosition < publishPosition);
   assert.match(homepage.text, /id="publish-status"[^>]+role="status"[^>]+aria-live="polite"/);
@@ -80,6 +89,20 @@ test('homepage exposes preview, explicit publish states, and a complete handoff 
   assert.match(homepage.text, /复制链接/);
   assert.match(homepage.text, /id="continue-button"[^>]*>[^<]*<i[^>]*><\/i>继续创建/s);
   assert.match(homepage.text, /id="manual-copy-output"[^>]+readonly[^>]+hidden/);
+});
+
+test('homepage layout uses desktop width to keep the idle publishing flow compact', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../public/css/styles.css'), 'utf8');
+
+  assert.match(css, /--home-content-width:\s*1120px/);
+  assert.match(css, /\[data-page="home-page"\] \.main-container\s*\{[^}]*max-width:\s*var\(--home-content-width\)/s);
+  assert.match(css, /@media \(min-width:\s*960px\)[\s\S]*?\[data-page="home-page"\] \.publish-settings-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1\.05fr\) minmax\(0, 1\.7fr\) minmax\(0, 1\.15fr\)/s);
+  assert.match(css, /\[data-page="home-page"\] \.publish-field:nth-child\(2\)\s*\{[^}]*grid-column:\s*auto/s);
+  assert.match(css, /@media \(max-width:\s*720px\)[\s\S]*?\[data-page="home-page"\] \.card\s*\{[^}]*padding-inline:\s*1rem/s);
+  assert.match(css, /\.main-container\s*\{[^}]*max-width:\s*720px/s);
+  assert.match(css, /\[data-page="home-page"\] \.upload-file-trigger\s*\{[^}]*min-height:\s*44px[^}]*background:\s*rgba\(var\(--primary-rgb\),\s*0\.07\)[^}]*color:\s*var\(--text-primary\)/s);
+  assert.doesNotMatch(css, /\[data-page="home-page"\] \.upload-file-trigger\s*\{[^}]*background:\s*var\(--primary\)/s);
+  assert.match(css, /\[data-page="home-page"\] \.button-row\s*\{[^}]*justify-content:\s*flex-end/s);
 });
 
 test('browser script uses one clipboard path and manages preview and busy state', async () => {

@@ -15,10 +15,19 @@
         </div>
 
         <div id="code-input-container" role="tabpanel">
-          <label for="html-input" class="content-label">分享内容</label>
-          <div id="code-type-indicator" class="code-type-indicator html-type">
-            <i class="fas fa-code" aria-hidden="true"></i>
-            <span id="code-type-text">HTML</span>
+          <div class="content-input-toolbar">
+            <label for="html-input" class="content-label">分享内容</label>
+            <div class="content-input-actions">
+              <div id="code-type-indicator" class="code-type-indicator html-type">
+                <i class="fas fa-code" aria-hidden="true"></i>
+                <span id="code-type-text">HTML</span>
+              </div>
+              <label id="upload-file-trigger" for="html-file" class="upload-file-trigger micro-interaction" aria-label="上传文件">
+                <i class="fas fa-file-upload" aria-hidden="true"></i>
+                <span>上传文件</span>
+                <span class="upload-file-badge" aria-hidden="true">常用</span>
+              </label>
+            </div>
           </div>
           <textarea id="html-input" class="cyber-input" placeholder="在这里粘贴你的 HTML / Markdown / SVG / Mermaid 代码..."></textarea>
         </div>
@@ -113,11 +122,6 @@
         </section>
 
         <div class="button-row">
-          <div>
-            <label for="html-file" class="cyber-btn cyber-btn-secondary tooltip micro-interaction" data-tooltip="上传文件" aria-label="上传文件">
-              <i class="fas fa-file-upload mr-1" aria-hidden="true"></i>上传文件
-            </label>
-          </div>
           <div class="button-group">
             <button id="clear-button" class="cyber-btn cyber-btn-secondary tooltip micro-interaction" data-tooltip="清空内容" aria-label="清空内容">
               <i class="fas fa-eraser mr-1" aria-hidden="true"></i>清除
