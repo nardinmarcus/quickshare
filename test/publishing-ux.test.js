@@ -81,6 +81,8 @@ test('homepage exposes preview, explicit publish states, and a complete handoff 
   assert.match(homepage.text, /id="generate-button"[^>]+aria-busy="false"/);
   assert.match(homepage.text, /id="publish-preview"/);
   assert.match(homepage.text, /id="publish-preview-frame"[^>]+sandbox="allow-scripts"/);
+  assert.match(homepage.text, /id="open-publish-preview"[^>]+target="_blank"[^>]+rel="noopener noreferrer"[^>]+hidden/);
+  assert.match(homepage.text, /新标签打开/);
   assert.match(homepage.text, /id="result-eyebrow"/);
   assert.match(homepage.text, /id="result-access"/);
   assert.match(homepage.text, /id="result-type"/);
@@ -116,6 +118,10 @@ test('browser script uses one clipboard path and manages preview and busy state'
   assert.match(script.text, /setAttribute\(['"]aria-busy['"]/);
   assert.match(script.text, /new AbortController\(\)/);
   assert.match(script.text, /signal: previewAbortController\.signal/);
+  assert.match(script.text, /function setOpenPreviewDocument\(safeDocument\)/);
+  assert.match(script.text, /URL\.createObjectURL\(new Blob\(\[safeDocument\], \{ type: 'text\/html' \}\)\)/);
+  assert.match(script.text, /URL\.revokeObjectURL\(previewObjectUrl\)/);
+  assert.match(script.text, /setOpenPreviewDocument\(data\.document\)/);
   assert.match(script.text, /function markDraftDirty\(\)/);
   assert.match(script.text, /上次发布结果/);
   assert.match(script.text, /function resetPasswordVisibility\(\)/);

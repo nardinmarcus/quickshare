@@ -146,9 +146,20 @@
           <p class="result-eyebrow">发布前检查</p>
           <h2 id="publish-preview-title" class="section-title" tabindex="-1">安全预览</h2>
         </div>
-        <button id="close-publish-preview" type="button" class="action-btn action-btn-neutral" aria-label="关闭预览">
-          <i class="fas fa-times" aria-hidden="true"></i>
-        </button>
+        <div class="publish-preview-actions">
+          <a
+            id="open-publish-preview"
+            class="cyber-btn cyber-btn-secondary publish-preview-open"
+            target="_blank"
+            rel="noopener noreferrer"
+            hidden
+          >
+            <i class="fas fa-external-link-alt mr-1" aria-hidden="true"></i>新标签打开
+          </a>
+          <button id="close-publish-preview" type="button" class="action-btn action-btn-neutral" aria-label="关闭预览">
+            <i class="fas fa-times" aria-hidden="true"></i>
+          </button>
+        </div>
       </div>
       <iframe
         id="publish-preview-frame"

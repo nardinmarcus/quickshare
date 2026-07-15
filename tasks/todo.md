@@ -373,3 +373,26 @@ Review:
 - Themes: light and dark screenshots retain readable text and a quiet but discoverable upload entry.
 - Mobile: 375px remains exactly 375px wide, the upload target stays 44px high, and the compact view continues to hide the optional badge.
 - Verification: focused publishing UX tests passed 5/5, the full Node suite passed 107/107, and `git diff --check` passed.
+
+# Open generated safe preview in a new tab (2026-07-15)
+
+- [x] Add a focused regression guard for a new-tab preview action and temporary URL cleanup.
+- [x] Show the action only after a safe preview document has been generated.
+- [x] Open the existing sandbox wrapper in a new tab without exposing raw user content to the QuickShare origin.
+- [x] Invalidate the temporary preview when the draft changes, the preview closes, or a newer preview replaces it.
+- [x] Verify the focused test, full Node suite, desktop browser flow, and 375px layout.
+
+Verify:
+
+1. Generate a safe preview -> “新标签打开” appears and opens the same rendered content in a separate tab.
+2. Inspect the opened document -> submitted content remains inside an iframe without `allow-same-origin`.
+3. Edit or close the preview -> the stale temporary URL is revoked and the action disappears.
+4. 375px -> preview header actions remain usable without horizontal overflow.
+
+Review:
+
+- Behavior: a successful preview creates a temporary Blob URL from the exact server-rendered sandbox wrapper and reveals a semantic `target="_blank"` link; replacing, closing, editing, continuing, or publishing revokes and clears that URL.
+- Security: a browser smoke test ran an inline script inside the nested preview while its attempted `window.top` access was blocked; the trusted page stayed unmodified, and the wrapper's inner iframe continues to omit `allow-same-origin`.
+- Lifecycle: editing after preview hid the section, removed the outer `srcdoc`, removed the action `href`, and hid the action again.
+- Responsive result: at 375px, document width remained 375px, both header controls were 44px high, and the 174px action group stayed within the 309px preview header.
+- Verification: focused publishing UX tests passed 5/5, the full Node suite passed 107/107, JavaScript syntax and `git diff --check` passed, and the browser reported no console errors. The in-app browser policy did not permit automating the final Blob navigation, so that standard browser action is covered by the rendered `target`/`rel` contract plus live Blob-href generation rather than a scripted click.

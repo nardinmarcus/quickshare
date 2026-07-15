@@ -4120,6 +4120,20 @@ body:hover::-webkit-scrollbar,
   margin-bottom: 0;
 }
 
+.publish-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.publish-preview-open {
+  min-height: 44px;
+  padding: 0 14px;
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
 .publish-preview-frame {
   display: block;
   width: 100%;

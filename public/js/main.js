@@ -80,6 +80,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const publishPreview = document.getElementById('publish-preview');
   const publishPreviewTitle = document.getElementById('publish-preview-title');
   const publishPreviewFrame = document.getElementById('publish-preview-frame');
+  const openPublishPreviewLink = document.getElementById('open-publish-preview');
   const closePublishPreviewButton = document.getElementById('close-publish-preview');
   const loadingIndicator = document.getElementById('loading-indicator');
   const linkAccessRadio = document.getElementById('access-link');
@@ -108,6 +109,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let isPreviewing = false;
   let previewRequestVersion = 0;
   let previewAbortController = null;
+  let previewObjectUrl = null;
   let hasPublishedResult = false;
   let draftVersion = 0;
   
@@ -347,10 +349,32 @@ document.addEventListener('DOMContentLoaded', () => {
     if (generateButton && !isSubmitting) generateButton.disabled = false;
   }
 
+  function clearOpenPreviewDocument() {
+    if (previewObjectUrl) {
+      URL.revokeObjectURL(previewObjectUrl);
+      previewObjectUrl = null;
+    }
+
+    if (openPublishPreviewLink) {
+      openPublishPreviewLink.removeAttribute('href');
+      openPublishPreviewLink.hidden = true;
+    }
+  }
+
+  function setOpenPreviewDocument(safeDocument) {
+    clearOpenPreviewDocument();
+    if (!openPublishPreviewLink) return;
+
+    previewObjectUrl = URL.createObjectURL(new Blob([safeDocument], { type: 'text/html' }));
+    openPublishPreviewLink.href = previewObjectUrl;
+    openPublishPreviewLink.hidden = false;
+  }
+
   function closePublishPreview(restoreFocus = true, cancelRequest = true) {
     if (cancelRequest) cancelPendingPreview();
     if (publishPreview) publishPreview.hidden = true;
     if (publishPreviewFrame) publishPreviewFrame.removeAttribute('srcdoc');
+    clearOpenPreviewDocument();
     if (restoreFocus && prepublishPreviewButton) prepublishPreviewButton.focus();
   }
 
@@ -1017,6 +1041,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (publishPreviewFrame) publishPreviewFrame.srcdoc = data.document;
+        setOpenPreviewDocument(data.document);
         if (publishPreview) publishPreview.hidden = false;
         setPublishState('success', '预览已更新，确认无误后即可发布');
         if (publishPreviewTitle) publishPreviewTitle.focus();
