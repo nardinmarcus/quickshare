@@ -490,7 +490,7 @@ Review:
 
 # Homepage password toggle implementation (2026-07-15)
 
-Status: local implementation and verification complete; production release in progress.
+Status: complete; production is live in public mode.
 
 Specification: `docs/superpowers/specs/2026-07-15-homepage-password-toggle-design.md`
 
@@ -551,9 +551,9 @@ Verify:
 - [x] Run focused tests, full `npm test`, JavaScript syntax checks, and `git diff --check`.
 - [x] Run `npm run test:postgres` against a disposable local `_test` database.
 - [x] Verify toggle, confirmation, public publish, relock, retained session, mobile layout, and console state in a real browser.
-- [ ] Commit and push the implementation only after all local gates pass.
-- [ ] Apply migration to production, repeat it to prove idempotency, then deploy the committed revision.
-- [ ] Verify live routes, persisted setting, audit log, Vercel Firewall, and rollback path.
+- [x] Commit and push the implementation only after all local gates pass.
+- [x] Apply migration to production, repeat it to prove idempotency, then deploy the committed revision.
+- [x] Verify live routes, persisted setting, audit log, Vercel Firewall, and rollback path.
 
 Verify:
 
@@ -565,8 +565,8 @@ Verify:
 
 ## Review
 
-- Changed files/commits: implementation spans the additive migration, Repository methods, route middleware, admin UI/script, docs, and focused tests; release commit pending.
+- Changed files/commits: design `9c42a94`; implementation `b42bda7`. The implementation spans the additive migration, Repository methods, route middleware, admin UI/script, docs, and focused tests.
 - Test evidence: 132/132 Node tests and 8/8 disposable-Postgres integration tests passed; JavaScript syntax and diff checks passed.
 - Browser evidence: locked/cancel/public preview/public publish/relock/retained-session flows passed in Chromium; 375px layout had no page overflow, focus returned correctly after Esc, and console/page errors were empty.
-- Migration evidence: pending.
-- Production deployment and rollback evidence: pending.
+- Migration evidence: production preflight contained migration `001` and 181 pages; the first migration run applied only `002_site_settings.sql`, the second applied zero and skipped both versions. Postflight preserved the original table counts and created singleton `id=1` in locked mode over an encrypted client connection.
+- Production deployment and rollback evidence: Vercel deployment `dpl_EHWtTQZTbCQ4DmMcYJz7LHULxtKp` reached `READY` and was aliased to `quickshare.namooca.com`. The authenticated admin UI switched public, a clean anonymous browser previewed and published share `SK8pjKzfUtOR`, missing/cross-origin requests returned `403`, and admin/recent/Share API boundaries stayed locked. A live relock redirected a clean session while retaining an existing homepage session, then the admin UI restored public mode. Database readback ended at `homepage_password_required=false` with exactly three ordered setting-transition audits; Vercel error/fatal/5xx scans were empty and the enabled 20-per-60-second sensitive-write firewall rule had no draft changes.
