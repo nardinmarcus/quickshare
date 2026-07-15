@@ -1,6 +1,6 @@
 # QuickShare Optimization Implementation Plan
 
-Status: approved on 2026-07-14. Implementation in progress.
+Status: Phases 0–3 deployed on 2026-07-15; the representative WP8 traffic baseline remains in passive collection.
 
 Baseline reviewed: GitHub `main` commit `b3c15be67c93fc76e8ae047e82017f726d9cee12` and its current Vercel production deployment.
 
@@ -239,7 +239,7 @@ Verify:
 
 Rollback: remove beacon and restore the previous counter path; no schema required for the initial version.
 
-WP9 verification (2026-07-15): red/green route and repository tests cover same-origin, missing, expired, protected, authenticated admin preview, no-store, exactly-once browser reporting, and awaited persistence. Full Node suite passed `105/105`; disposable PostgreSQL passed `5/5`. Chromium verified both public and protected pages through the real `GET -> local reporter -> POST 204` path, including Origin and access cookie.
+WP9 verification (2026-07-15): red/green route and repository tests cover same-origin, missing, expired, protected, authenticated admin preview, no-store, exactly-once browser reporting, and awaited persistence. Full Node suite passed `106/106`; disposable PostgreSQL passed `5/5`. Chromium verified both public and protected pages through the real `GET -> local reporter -> POST 204` path, including Origin and access cookie.
 
 ### WP10: Route-specific assets, browser caching, and CSP readiness
 
@@ -260,6 +260,8 @@ Verify:
 5. CSP reports no required resource violations.
 
 WP10 verification (2026-07-15): trusted routes load only their owned scripts, static resources revalidate with a five-minute browser cache in both Express and Vercel edge configuration, and login/admin CSP is enforced without constraining shared `srcdoc` content. Node and Chromium smoke checks passed, including parent-frame isolation for executable shared HTML; exact deployed headers are checked before promotion.
+
+Phase 3 production rollout (2026-07-15): deployment `dpl_BaG3esUoYGpf4ADem2q1nTtExteB` reached `READY` and was promoted to `quickshare.namooca.com`. Vercel inspection resolves the custom domain to that deployment. Live checks confirmed login `200` with private no-store/CSP, cached `view-event.js` with `max-age=300`, missing share/event `404`, two sanitized structured view events, and zero error-level rows in the initial window. The pre-WP9/WP10 production rollback candidate is `dpl_8mqsS4VEWmcjQEVxeuSnZwQwEdg6`.
 
 Estimated engineering effort: 3–5 focused days plus a representative 3–7 day measurement window.
 
