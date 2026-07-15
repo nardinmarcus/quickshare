@@ -1,4 +1,5 @@
 const DAY_MS = 24 * 60 * 60 * 1000;
+const { createPostgresPool } = require('./postgres-config');
 
 function buildDailyStats(createdAtRows, days = 14) {
   const todayStart = new Date();
@@ -30,83 +31,16 @@ function buildDailyStats(createdAtRows, days = 14) {
 }
 
 class PostgresPageRepository {
-  constructor(connectionString) {
+  constructor(connectionString, env = process.env) {
     if (!connectionString) {
       throw new Error('DATABASE_URL is required for PostgresPageRepository');
     }
 
-    const { Pool } = require('pg');
-
-    this.pool = new Pool({
-      connectionString,
-      ssl: process.env.POSTGRES_SSL === 'false' ? false : { rejectUnauthorized: false },
-      max: Number.parseInt(process.env.POSTGRES_POOL_MAX || '3', 10)
-    });
-    this.apiKeysInitPromise = null;
+    this.pool = createPostgresPool(connectionString, { env });
   }
 
   async init() {
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS pages (
-        id TEXT PRIMARY KEY,
-        html_content TEXT NOT NULL,
-        created_at BIGINT NOT NULL,
-        password_hash TEXT,
-        encrypted_password TEXT,
-        is_protected INTEGER DEFAULT 0,
-        code_type TEXT DEFAULT 'html',
-        title TEXT,
-        description TEXT,
-        expires_at BIGINT,
-        markdown_theme TEXT
-      )
-    `);
-
-    await this.pool.query('CREATE INDEX IF NOT EXISTS idx_pages_created_at ON pages (created_at DESC)');
-    await this.pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS encrypted_password TEXT');
-    await this.pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS markdown_theme TEXT');
-    await this.pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS view_count BIGINT DEFAULT 0');
-    await this.pool.query('CREATE INDEX IF NOT EXISTS idx_pages_view_count ON pages (view_count DESC)');
-
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS audit_logs (
-        id SERIAL PRIMARY KEY,
-        action TEXT NOT NULL,
-        page_id TEXT,
-        details TEXT,
-        ip TEXT,
-        created_at BIGINT NOT NULL
-      )
-    `);
-    await this.pool.query('CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC)');
-    await this.pool.query('CREATE INDEX IF NOT EXISTS idx_audit_logs_page_id ON audit_logs (page_id)');
-
-    await this.ensureApiKeyTable();
-  }
-
-  async ensureApiKeyTable() {
-    if (!this.apiKeysInitPromise) {
-      this.apiKeysInitPromise = (async () => {
-        await this.pool.query(`
-          CREATE TABLE IF NOT EXISTS api_keys (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            key_hash TEXT NOT NULL,
-            key_prefix TEXT NOT NULL,
-            created_at BIGINT NOT NULL,
-            last_used_at BIGINT
-          )
-        `);
-        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_api_keys_created_at ON api_keys (created_at DESC)');
-      })();
-    }
-
-    try {
-      await this.apiKeysInitPromise;
-    } catch (error) {
-      this.apiKeysInitPromise = null;
-      throw error;
-    }
+    // Schema changes are applied only through `npm run db:migrate`.
   }
 
   async create(page) {
@@ -139,6 +73,29 @@ class PostgresPageRepository {
   async getById(id) {
     const result = await this.pool.query('SELECT * FROM pages WHERE id = $1 LIMIT 1', [id]);
     return result.rows[0] || null;
+  }
+
+  async getPublicById(id, now = Date.now()) {
+    const result = await this.pool.query(
+      `
+        SELECT *, (expires_at IS NOT NULL AND expires_at <= $2) AS is_expired
+        FROM pages
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [id, now]
+    );
+    const row = result.rows[0];
+
+    if (!row) {
+      return null;
+    }
+
+    const { is_expired: isExpired, ...page } = row;
+    return {
+      page,
+      expired: Boolean(isExpired)
+    };
   }
 
   async listRecent(limit = 10) {
@@ -280,11 +237,38 @@ class PostgresPageRepository {
     return Number.parseInt(result.rows[0]?.count || '0', 10);
   }
 
-  async incrementViewCount(id) {
-    await this.pool.query(
-      'UPDATE pages SET view_count = COALESCE(view_count, 0) + 1 WHERE id = $1',
+  async recordViewEvent(id, now = Date.now(), hasAccess = false) {
+    const updateResult = await this.pool.query(
+      `
+        UPDATE pages
+        SET view_count = COALESCE(view_count, 0) + 1
+        WHERE id = $1
+          AND (expires_at IS NULL OR expires_at > $2)
+          AND (COALESCE(is_protected, 0) <> 1 OR $3)
+        RETURNING id
+      `,
+      [id, now, hasAccess]
+    );
+
+    if (updateResult.rowCount > 0) {
+      return 'counted';
+    }
+
+    const stateResult = await this.pool.query(
+      'SELECT is_protected, expires_at FROM pages WHERE id = $1 LIMIT 1',
       [id]
     );
+    const page = stateResult.rows[0];
+
+    if (!page) {
+      return 'not_found';
+    }
+
+    if (page.expires_at !== null && Number(page.expires_at) <= now) {
+      return 'expired';
+    }
+
+    return page.is_protected === 1 ? 'protected' : 'not_found';
   }
 
   async getAdminStats() {
@@ -413,7 +397,6 @@ class PostgresPageRepository {
   }
 
   async createApiKey(apiKey) {
-    await this.ensureApiKeyTable();
     const result = await this.pool.query(
       `
         INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at)
@@ -427,7 +410,6 @@ class PostgresPageRepository {
   }
 
   async listApiKeys() {
-    await this.ensureApiKeyTable();
     const result = await this.pool.query(
       `
         SELECT id, name, key_prefix, created_at, last_used_at
@@ -440,7 +422,6 @@ class PostgresPageRepository {
   }
 
   async getApiKeyById(id) {
-    await this.ensureApiKeyTable();
     const result = await this.pool.query(
       'SELECT id, name, key_hash, key_prefix, created_at, last_used_at FROM api_keys WHERE id = $1 LIMIT 1',
       [id]
@@ -450,13 +431,11 @@ class PostgresPageRepository {
   }
 
   async deleteApiKey(id) {
-    await this.ensureApiKeyTable();
     const result = await this.pool.query('DELETE FROM api_keys WHERE id = $1', [id]);
     return result.rowCount > 0;
   }
 
   async touchApiKey(id, usedAt = Date.now()) {
-    await this.ensureApiKeyTable();
     await this.pool.query('UPDATE api_keys SET last_used_at = $2 WHERE id = $1', [id, usedAt]);
   }
 

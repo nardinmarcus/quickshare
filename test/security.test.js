@@ -7,16 +7,56 @@ const {
   decryptSecret,
   encryptSecret,
   hashSecret,
+  isValidAppSecret,
+  isValidCustomPassword,
+  isValidScryptHash,
   verifyCsrfToken,
   verifyScopedToken,
   verifySecret
 } = require('../utils/security');
 
+test('custom passwords accept only the approved 4-12 character ASCII allowlist', () => {
+  assert.equal(isValidCustomPassword('Abc1'), true);
+  assert.equal(isValidCustomPassword('Abcdef123!~?'), true);
+
+  for (const symbol of '!@#$%^&*()_+-=.,?~') {
+    assert.equal(isValidCustomPassword(`Ab1${symbol}`), true, `expected ${symbol} to be allowed`);
+  }
+
+  for (const password of [
+    'Ab1',
+    'Abcdef1234567',
+    ' Abc1',
+    'Abc1 ',
+    'Ab c1',
+    '密码Ab1',
+    'Ａbc1',
+    'Ab1🙂',
+    'Ab1/',
+    'Ab1:',
+    'Ab1\\',
+    'Ab1"',
+    "Ab1'",
+    'Ab1\n'
+  ]) {
+    assert.equal(isValidCustomPassword(password), false, `expected ${JSON.stringify(password)} to be rejected`);
+  }
+});
+
 test('hashSecret verifies only the original secret', async () => {
   const hash = await hashSecret('correct-password');
 
+  assert.equal(isValidScryptHash(hash), true);
+  assert.equal(isValidScryptHash('scrypt$c2FsdA$a2V5'), false);
   assert.equal(await verifySecret('correct-password', hash), true);
   assert.equal(await verifySecret('wrong-password', hash), false);
+});
+
+test('production app secrets require 32 bytes and reject known placeholders', () => {
+  assert.equal(isValidAppSecret('s'.repeat(32)), true);
+  assert.equal(isValidAppSecret('s'.repeat(31)), false);
+  assert.equal(isValidAppSecret('change-this-to-a-long-random-secret'), false);
+  assert.equal(isValidAppSecret(` ${'s'.repeat(32)}`), false);
 });
 
 test('encryptSecret stores recoverable secrets without plaintext', () => {

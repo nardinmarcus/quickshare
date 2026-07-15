@@ -117,6 +117,19 @@ class MemoryPageRepository {
     return this.pages.get(id) || null;
   }
 
+  async getPublicById(id, now = Date.now()) {
+    const page = this.pages.get(id);
+
+    if (!page) {
+      return null;
+    }
+
+    return {
+      page,
+      expired: page.expires_at !== null && Number(page.expires_at) <= now
+    };
+  }
+
   async listRecent(limit = 10) {
     return Array.from(this.pages.values())
       .sort((left, right) => right.created_at - left.created_at)
@@ -334,11 +347,23 @@ class MemoryPageRepository {
     return count;
   }
 
-  async incrementViewCount(id) {
+  async recordViewEvent(id, now = Date.now(), hasAccess = false) {
     const page = this.pages.get(id);
-    if (page) {
-      page.view_count = (page.view_count || 0) + 1;
+
+    if (!page) {
+      return 'not_found';
     }
+
+    if (page.expires_at !== null && Number(page.expires_at) <= now) {
+      return 'expired';
+    }
+
+    if (page.is_protected === 1 && !hasAccess) {
+      return 'protected';
+    }
+
+    page.view_count = (page.view_count || 0) + 1;
+    return 'counted';
   }
 
   async createAuditLog({ action, pageId, details, ip }) {

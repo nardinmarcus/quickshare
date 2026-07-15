@@ -129,12 +129,31 @@ function normalizeCodeRendererArgs(args) {
  * @returns {string} - u5904u7406u540eu7684HTML
  */
 function renderHtml(content) {
+  const trimmedContent = content.trimStart();
+
   // u5982u679cu662fu5b8cu6574u7684HTMLu6587u6863uff0cu76f4u63a5u8fd4u56de
-  if (content.trim().startsWith('<!DOCTYPE html>') || 
-      content.trim().startsWith('<html')) {
+  if (/^<!doctype\s+html\b/i.test(trimmedContent) || /^<html\b/i.test(trimmedContent)) {
     return content;
   }
   
+  const usesCodeHighlight = /<pre\b[^>]*>[\s\S]*?<code\b[^>]*>/i.test(content);
+  const highlightStylesheet = usesCodeHighlight
+    ? `<link rel="stylesheet" href="${HIGHLIGHT_CSS_CDN}">`
+    : '';
+  const highlightScript = usesCodeHighlight
+    ? `
+      <script src="${HIGHLIGHT_JS_CDN}"></script>
+      <script>
+        document.addEventListener('DOMContentLoaded', () => {
+          if (window.hljs) {
+            document.querySelectorAll('pre code').forEach((block) => {
+              hljs.highlightElement(block);
+            });
+          }
+        });
+      </script>`
+    : '';
+
   // u5982u679cu4e0du662fu5b8cu6574u7684HTMLu6587u6863uff0cu6dfbu52a0u57fau672cu7684HTMLu7ed3u6784
   return `
     <!DOCTYPE html>
@@ -157,7 +176,7 @@ function renderHtml(content) {
       <meta name="apple-mobile-web-app-title" content="QuickShare">
       
       <link rel="stylesheet" href="/css/styles.css">
-      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-dark.min.css">
+      ${highlightStylesheet}
       <style>
         body {
           font-family: 'Roboto', sans-serif;
@@ -190,14 +209,7 @@ function renderHtml(content) {
       <div class="container">
         ${content}
       </div>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
-      <script>
-        document.addEventListener('DOMContentLoaded', () => {
-          document.querySelectorAll('pre code').forEach((block) => {
-            hljs.highlightElement(block);
-          });
-        });
-      </script>
+      ${highlightScript}
     </body>
     </html>
   `;
@@ -397,9 +409,11 @@ async function renderMarkdown(content, theme) {
       <script src="${HIGHLIGHT_JS_CDN}"></script>
       <script>
         document.addEventListener('DOMContentLoaded', () => {
-          document.querySelectorAll('pre code').forEach((block) => {
-            hljs.highlightElement(block);
-          });
+          if (window.hljs) {
+            document.querySelectorAll('pre code').forEach((block) => {
+              hljs.highlightElement(block);
+            });
+          }
         });
       </script>`
     : '';

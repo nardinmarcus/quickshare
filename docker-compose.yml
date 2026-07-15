@@ -12,6 +12,7 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=8888
+      - DATABASE_URL=${DATABASE_URL}
     networks:
       - quickshare-network
 

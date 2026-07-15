@@ -4,44 +4,28 @@
   <header class="admin-header">
     <div>
       <p class="admin-kicker">QuickShare</p>
-      <h1 class="admin-title">Audit Log</h1>
-      <p class="admin-subtitle"><%= pagination.total %> events recorded</p>
+      <h1 class="admin-title">审计日志</h1>
+      <p class="admin-subtitle">已记录 <%= pagination.total %> 条操作事件</p>
     </div>
-    <div class="admin-actions">
-      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/stats">
-        <i class="fas fa-chart-bar" aria-hidden="true"></i>
-        <span>Stats</span>
-      </a>
-      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/apis">
-        <i class="fas fa-key" aria-hidden="true"></i>
-        <span>API</span>
-      </a>
-      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/pages">
-        <i class="fas fa-table" aria-hidden="true"></i>
-        <span>Pages</span>
-      </a>
-      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/">
-        <i class="fas fa-plus" aria-hidden="true"></i>
-        <span>Create</span>
-      </a>
-    </div>
+    <%- include('partials/admin-nav', { current: 'audit' }) %>
   </header>
 
   <section class="card admin-card">
     <% if (logs.length === 0) { %>
-      <div class="admin-empty" style="padding: 2rem;">
-        <p>No audit events yet.</p>
+      <div class="admin-empty">
+        <p>暂无审计事件。</p>
       </div>
     <% } else { %>
-      <div class="admin-table-wrap">
+      <div class="admin-table-wrap" tabindex="0" aria-label="审计日志，可横向滚动">
         <table class="admin-table admin-audit-table">
+          <caption class="sr-only">审计日志</caption>
           <thead>
             <tr>
-              <th>Time</th>
-              <th>Action</th>
-              <th>Page ID</th>
-              <th>Details</th>
-              <th>IP</th>
+              <th scope="col">时间</th>
+              <th scope="col">操作</th>
+              <th scope="col">分享 ID</th>
+              <th scope="col">详情</th>
+              <th scope="col">IP 地址</th>
             </tr>
           </thead>
           <tbody>
@@ -58,7 +42,7 @@
                 </td>
                 <td>
                   <% if (log.details) { %>
-                    <code class="admin-password-value" style="font-size: 0.75rem;"><%= log.details %></code>
+                    <code class="admin-password-value admin-audit-details"><%= log.details %></code>
                   <% } else { %>
                     <span class="admin-muted">—</span>
                   <% } %>
@@ -70,17 +54,17 @@
         </table>
       </div>
 
-      <nav class="admin-pagination" aria-label="Audit log pagination">
+      <nav class="admin-pagination" aria-label="审计日志分页">
         <% if (pagination.hasPrevious) { %>
-          <a class="cyber-btn cyber-btn-secondary" href="/admin/audit?page=<%= pagination.page - 1 %>">Previous</a>
+          <a class="cyber-btn cyber-btn-secondary" href="/admin/audit?page=<%= pagination.page - 1 %>">上一页</a>
         <% } else { %>
-          <span class="cyber-btn cyber-btn-secondary disabled">Previous</span>
+          <span class="cyber-btn cyber-btn-secondary disabled" aria-disabled="true">上一页</span>
         <% } %>
-        <span class="admin-page-count">Page <%= pagination.page %> of <%= pagination.totalPages %></span>
+        <span class="admin-page-count">第 <%= pagination.page %> / <%= pagination.totalPages %> 页</span>
         <% if (pagination.hasNext) { %>
-          <a class="cyber-btn cyber-btn-secondary" href="/admin/audit?page=<%= pagination.page + 1 %>">Next</a>
+          <a class="cyber-btn cyber-btn-secondary" href="/admin/audit?page=<%= pagination.page + 1 %>">下一页</a>
         <% } else { %>
-          <span class="cyber-btn cyber-btn-secondary disabled">Next</span>
+          <span class="cyber-btn cyber-btn-secondary disabled" aria-disabled="true">下一页</span>
         <% } %>
       </nav>
     <% } %>

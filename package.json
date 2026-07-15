@@ -6,8 +6,10 @@
   "scripts": {
     "start": "NODE_ENV=production node --max-old-space-size=1024 server.js",
     "dev": "NODE_ENV=development nodemon server.js",
-    "test": "NODE_ENV=test node --test test/*.test.js",
+    "test": "NODE_ENV=test VERCEL_ENV= DATABASE_URL= POSTGRES_URL= node --test test/*.test.js",
+    "test:postgres": "NODE_ENV=test node --test test/integration/postgres-migrations.test.js",
     "prod": "NODE_ENV=production node --max-old-space-size=1024 server.js",
+    "db:migrate": "node scripts/migrate.js",
     "hash-password": "node scripts/hash-password.js",
     "backfill-titles": "node scripts/backfill-page-titles.js"
   },

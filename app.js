@@ -6,6 +6,7 @@ const bodyParser = require('body-parser');
 const morgan = require('morgan');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const { performance } = require('node:perf_hooks');
 
 const config = require('./config');
 const { createPageRepository } = require('./models/pageRepository');
@@ -13,6 +14,7 @@ const { detectCodeType, extractCodeBlocks } = require('./utils/codeDetector');
 const { renderContent, escapeHtml, resolveTheme } = require('./utils/contentRenderer');
 const { derivePageTitle } = require('./utils/pageTitle');
 const {
+  CUSTOM_PASSWORD_ERROR,
   DEFAULT_PASSWORD_LENGTH,
   createCsrfToken,
   createScopedToken,
@@ -21,6 +23,7 @@ const {
   generateId,
   generateNumericPassword,
   hashSecret,
+  parseCustomPassword,
   verifyCsrfToken,
   verifyScopedToken,
   verifySecret
@@ -31,42 +34,219 @@ const DASHBOARD_ADMIN_COOKIE = 'dashboard_admin_session';
 const ADMIN_TTL_MS = 24 * 60 * 60 * 1000;
 const PAGE_ACCESS_TTL_MS = 24 * 60 * 60 * 1000;
 const VALID_CODE_TYPES = new Set(['html', 'markdown', 'svg', 'mermaid']);
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const FAVICON_PATH = path.join(PUBLIC_DIR, 'icon/web/favicon.ico');
+const STATIC_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
+const STATIC_CACHE_CONTROL = 'public, max-age=300, must-revalidate';
+const EMBEDDABLE_UI_CSP = [
+  "default-src 'self'",
+  "base-uri 'none'",
+  "object-src 'none'",
+  "script-src 'self'",
+  "script-src-attr 'none'",
+  "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com",
+  "font-src 'self' data: https://cdnjs.cloudflare.com https://fonts.gstatic.com",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "form-action 'self'",
+  "frame-src 'self'"
+].join('; ');
+const TRUSTED_UI_CSP = `${EMBEDDABLE_UI_CSP}; frame-ancestors 'none'`;
 const { randomBytes, timingSafeEqual } = require('crypto');
+let nextViewRequestIsColdStart = true;
 
 const app = express();
 const pageRepository = createPageRepository();
-
-let initPromise = null;
+const parseSmallJson = bodyParser.json({ limit: config.smallBodyLimit });
+const parseSmallForm = bodyParser.urlencoded({ extended: true, limit: config.smallBodyLimit });
+const parseShareJson = bodyParser.json({ limit: config.shareBodyLimit });
 
 app.locals.config = config;
 app.locals.pageRepository = pageRepository;
+app.locals.requestLogStream = process.stdout;
+app.locals.viewPerformanceLogger = config.env === 'test' ? { info() {} } : console;
 
 app.set('views', path.join(__dirname, 'views'));
 app.set('view engine', 'ejs');
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
 
-app.use(morgan(config.logLevel));
+morgan.token('url', safeRequestLogUrl);
+morgan.token('referrer', safeRequestLogReferrer);
+app.use(morgan(config.logLevel, {
+  skip: shouldSkipGenericRequestLog,
+  stream: {
+    write(line) {
+      const stream = app.locals.requestLogStream || process.stdout;
+      stream.write(line);
+    }
+  }
+}));
 app.use(cors({ origin: false }));
-app.use(bodyParser.json({ limit: '15mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '15mb' }));
-app.use(cookieParser());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
 
-function shouldRunDatabaseInit() {
-  const isProductionRuntime = config.env === 'production' || process.env.VERCEL_ENV === 'production';
-  return !isProductionRuntime || process.env.RUN_SCHEMA_INIT === 'true';
+  if (isTrustedUiPath(req.path)) {
+    setTrustedUiCsp(res);
+  }
+
+  return next();
+});
+app.use('/login', privateNoStore);
+app.use('/admin', privateNoStore);
+app.use(cookieParser());
+app.get('/favicon.ico', (req, res) => res.sendFile(FAVICON_PATH, {
+  maxAge: STATIC_CACHE_MAX_AGE_MS,
+  immutable: false,
+  headers: { 'Cache-Control': STATIC_CACHE_CONTROL }
+}));
+app.use(express.static(PUBLIC_DIR, {
+  maxAge: STATIC_CACHE_MAX_AGE_MS,
+  immutable: false,
+  etag: true,
+  setHeaders: setStaticCacheHeaders
+}));
+
+function setPrivateNoStore(res) {
+  res.set('Cache-Control', 'private, no-store');
 }
 
-function ensureDatabase() {
-  if (!shouldRunDatabaseInit()) {
-    return Promise.resolve();
+function privateNoStore(req, res, next) {
+  setPrivateNoStore(res);
+  return next();
+}
+
+function isTrustedUiPath(pathname) {
+  return /^\/login\/?$/i.test(pathname) || /^\/admin(?:\/|$)/i.test(pathname);
+}
+
+function setTrustedUiCsp(res, { allowFraming = false } = {}) {
+  res.set('Content-Security-Policy', allowFraming ? EMBEDDABLE_UI_CSP : TRUSTED_UI_CSP);
+}
+
+function setStaticCacheHeaders(res) {
+  res.setHeader('Cache-Control', STATIC_CACHE_CONTROL);
+}
+
+function exactViewRoute(pathname) {
+  const match = /^\/view\/[^/]+(?:\/(password|view-event))?\/?$/i.exec(pathname);
+
+  if (!match) {
+    return null;
   }
 
-  if (!initPromise) {
-    initPromise = pageRepository.init();
+  return match[1] ? `/view/:id/${match[1]}` : '/view/:id';
+}
+
+function safeViewLogPath(pathname) {
+  return exactViewRoute(pathname)
+    || (/^\/view\/[^/]+(?:\/.*)?$/i.test(pathname) ? '/view/:id/*' : null);
+}
+
+function safeRequestLogUrl(req) {
+  return safeViewLogPath(req.path) || req.originalUrl || req.url;
+}
+
+function safeRequestLogReferrer(req) {
+  const value = req.get('referer') || req.get('referrer');
+
+  if (!value) {
+    return '-';
   }
 
-  return initPromise;
+  try {
+    const referrer = new URL(value, 'http://localhost');
+    const safeRoute = safeViewLogPath(referrer.pathname);
+
+    if (safeRoute) {
+      return safeRoute;
+    }
+
+    referrer.search = '';
+    referrer.hash = '';
+    return referrer.toString();
+  } catch (error) {
+    return '-';
+  }
+}
+
+function shouldSkipGenericRequestLog(req) {
+  return ['GET', 'HEAD'].includes(req.method) && exactViewRoute(req.path) === '/view/:id';
+}
+
+function roundDuration(value) {
+  return Math.max(0, Number(value.toFixed(3)));
+}
+
+function responseByteLength(res) {
+  const header = res.getHeader('content-length');
+  const value = Array.isArray(header) ? header[0] : header;
+  const parsed = Number.parseInt(String(value || '0'), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function beginViewPerformance(req, res) {
+  const metrics = {
+    startedAt: performance.now(),
+    dbMs: 0,
+    renderMs: 0,
+    contentType: null,
+    protected: null,
+    outcome: 'unknown',
+    phase: 'routing',
+    coldStart: nextViewRequestIsColdStart
+  };
+  let finalized = false;
+
+  nextViewRequestIsColdStart = false;
+
+  function finalize(closedEarly = false) {
+    if (finalized) {
+      return;
+    }
+
+    finalized = true;
+
+    if (closedEarly) {
+      metrics.outcome = 'client_closed';
+    }
+
+    const event = {
+      event: 'quickshare.view',
+      route: '/view/:id',
+      method: req.method,
+      outcome: metrics.outcome,
+      status: res.statusCode,
+      total_ms: roundDuration(performance.now() - metrics.startedAt),
+      db_ms: roundDuration(metrics.dbMs),
+      render_ms: roundDuration(metrics.renderMs),
+      response_bytes: responseByteLength(res),
+      content_type: metrics.contentType,
+      protected: metrics.protected,
+      cold_start: metrics.coldStart
+    };
+
+    try {
+      (app.locals.viewPerformanceLogger || console).info(JSON.stringify(event));
+    } catch (error) {
+      // Observability must never change the response path.
+    }
+  }
+
+  res.once('finish', () => finalize(false));
+  res.once('close', () => finalize(!res.writableFinished));
+  return metrics;
+}
+
+function safeContentType(value) {
+  return VALID_CODE_TYPES.has(value) ? value : 'unknown';
+}
+
+function safeErrorCode(error) {
+  return typeof error?.code === 'string' && /^[A-Z0-9_]{1,32}$/.test(error.code)
+    ? error.code
+    : 'UNKNOWN';
 }
 
 function getAdminSession(req) {
@@ -204,8 +384,6 @@ async function requireApiKey(req, res, next) {
   }
 
   try {
-    await ensureDatabase();
-
     const apiKey = await pageRepository.getApiKeyById(match[1]);
     const isValid = apiKey && await verifySecret(match[2], apiKey.key_hash);
 
@@ -325,6 +503,20 @@ function hasPageAccess(req, id) {
   return payload?.id === id;
 }
 
+function isSameOriginRequest(req) {
+  const origin = req.get('origin');
+
+  if (!origin) {
+    return false;
+  }
+
+  try {
+    return new URL(origin).origin === new URL(`${req.protocol}://${req.get('host')}`).origin;
+  } catch (error) {
+    return false;
+  }
+}
+
 function normalizeCodeType(content, requestedCodeType) {
   if (VALID_CODE_TYPES.has(requestedCodeType)) {
     return requestedCodeType;
@@ -360,6 +552,88 @@ async function createPageWithRetry(data) {
   throw lastError || new Error('Failed to create a unique page id');
 }
 
+function parseFutureExpiry(expiresAt, now) {
+  if (expiresAt === undefined || expiresAt === null || expiresAt === '') {
+    return { value: null, error: null };
+  }
+
+  const value = Number(expiresAt);
+
+  if (!Number.isSafeInteger(value) || value <= now) {
+    return { value: null, error: '到期时间必须晚于当前时间' };
+  }
+
+  return { value, error: null };
+}
+
+async function createPageFromInput(input) {
+  const {
+    htmlContent,
+    codeType,
+    title,
+    description,
+    expiresAt,
+    isProtected,
+    password: requestedPassword,
+    markdownTheme
+  } = input || {};
+
+  if (!htmlContent || typeof htmlContent !== 'string') {
+    return { error: '请提供内容' };
+  }
+
+  const customPassword = parseCustomPassword(requestedPassword);
+
+  if (customPassword.error) {
+    return { error: customPassword.error };
+  }
+
+  const createdAt = Date.now();
+  const expiry = parseFutureExpiry(expiresAt, createdAt);
+
+  if (expiry.error) {
+    return { error: expiry.error };
+  }
+
+  const normalizedCodeType = normalizeCodeType(htmlContent, codeType);
+  const pageTitle = derivePageTitle(htmlContent, normalizedCodeType, title, createdAt);
+  const pageDescription = description === undefined || description === null
+    ? null
+    : String(description).trim() || null;
+  const password = Boolean(isProtected)
+    ? (customPassword.provided ? customPassword.value : generateNumericPassword(DEFAULT_PASSWORD_LENGTH))
+    : null;
+  const passwordHash = password ? await hashSecret(password) : null;
+  const encryptedPassword = password ? encryptSecret(password) : null;
+  const resolvedTheme = normalizedCodeType === 'markdown'
+    ? resolveTheme(markdownTheme || 'random')
+    : null;
+  const id = await createPageWithRetry({
+    htmlContent,
+    passwordHash,
+    encryptedPassword,
+    isProtected: Boolean(password),
+    codeType: normalizedCodeType,
+    title: pageTitle,
+    description: pageDescription,
+    createdAt,
+    expiresAt: expiry.value,
+    markdownTheme: resolvedTheme
+  });
+
+  return {
+    error: null,
+    id,
+    password,
+    isProtected: Boolean(password),
+    codeType: normalizedCodeType,
+    title: pageTitle,
+    description: pageDescription,
+    expiresAt: expiry.value,
+    markdownTheme: resolvedTheme
+  };
+}
+
 function injectCodeTypeMeta(renderedContent, contentType) {
   if (!renderedContent.includes('</head>')) {
     return renderedContent;
@@ -371,7 +645,12 @@ function injectCodeTypeMeta(renderedContent, contentType) {
   );
 }
 
-function renderSandboxedDocument(renderedContent, contentType, { title, description, pageUrl } = {}) {
+function renderSandboxedDocument(renderedContent, contentType, {
+  title,
+  description,
+  pageUrl,
+  viewEventUrl
+} = {}) {
   const escapedContent = escapeHtml(renderedContent);
   const pageTitle = title ? `${escapeHtml(title)} - QuickShare` : 'QuickShare';
   const ogDescription = description ? escapeHtml(description) : '通过 QuickShare 分享的内容';
@@ -415,9 +694,28 @@ function renderSandboxedDocument(renderedContent, contentType, { title, descript
         referrerpolicy="no-referrer"
         srcdoc="${escapedContent}">
       </iframe>
+      ${viewEventUrl ? `<script src="/js/view-event.js" data-view-event-url="${escapeHtml(viewEventUrl)}"></script>` : ''}
     </body>
     </html>
   `;
+}
+
+async function prepareSandboxContent(rawContent, requestedCodeType, markdownTheme) {
+  let processedContent = rawContent;
+  let contentType = normalizeCodeType(rawContent, requestedCodeType);
+  const codeBlocks = extractCodeBlocks(rawContent);
+
+  if (codeBlocks.length === 1 && codeBlocks[0].content.length > rawContent.length * 0.7) {
+    processedContent = codeBlocks[0].content;
+    contentType = VALID_CODE_TYPES.has(codeBlocks[0].type) ? codeBlocks[0].type : 'html';
+  }
+
+  const renderedContent = await renderContent(processedContent, contentType, markdownTheme);
+
+  return {
+    contentType,
+    renderedContent: injectCodeTypeMeta(renderedContent, contentType)
+  };
 }
 
 function parsePagination(query) {
@@ -464,6 +762,15 @@ function visiblePagePassword(page) {
   return decryptSecret(page.encrypted_password);
 }
 
+function serializeJsonForHtml(value) {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
 app.get('/login', (req, res) => {
   if (!config.authEnabled || getAdminSession(req)) {
     return res.redirect('/');
@@ -479,7 +786,7 @@ app.get('/login', (req, res) => {
   });
 });
 
-app.post('/login', async (req, res) => {
+app.post('/login', parseSmallForm, async (req, res) => {
   if (!config.authEnabled) {
     return res.redirect('/');
   }
@@ -521,7 +828,7 @@ app.get('/admin/login', (req, res) => {
   });
 });
 
-app.post('/admin/login', async (req, res) => {
+app.post('/admin/login', parseSmallForm, async (req, res) => {
   if (!config.authEnabled) {
     return res.redirect('/admin/stats');
   }
@@ -576,13 +883,11 @@ app.get('/admin', (req, res) => {
 
 app.get('/admin/apis', requireDashboardAdmin, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const apiKeys = await pageRepository.listApiKeys();
     const sessionToken = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE] || '';
 
     return res.render('admin-apis', {
-      title: 'QuickShare | API Management',
+      title: 'QuickShare | API 管理',
       page: 'admin-apis',
       apiKeys,
       legacyApiKeyConfigured: Boolean(config.shareApiKey),
@@ -598,10 +903,8 @@ app.get('/admin/apis', requireDashboardAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/apis/keys', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
+app.post('/admin/apis/keys', requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const name = String(req.body?.name || '').trim();
 
     if (!name || name.length > 80) {
@@ -650,8 +953,6 @@ app.post('/admin/apis/keys', requireDashboardAdmin, requireDashboardCsrf, async 
 
 app.delete('/admin/apis/keys/:id', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const deleted = await pageRepository.deleteApiKey(req.params.id);
 
     if (!deleted) {
@@ -680,8 +981,6 @@ app.delete('/admin/apis/keys/:id', requireDashboardAdmin, requireDashboardCsrf, 
 
 app.get('/admin/pages/export', requireDashboardAdmin, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const pages = await pageRepository.listAdminPages({ limit: 10000, offset: 0 });
     const exportData = pages.map((page) => ({
       id: page.id,
@@ -704,8 +1003,6 @@ app.get('/admin/pages/export', requireDashboardAdmin, async (req, res) => {
 
 app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const requestedPagination = parsePagination(req.query);
     const filterOptions = {
       search: req.query.search || '',
@@ -735,10 +1032,12 @@ app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
       ...sharedPage,
       visiblePassword: visiblePagePassword(sharedPage)
     }));
+    const sessionToken = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE] || '';
 
     return res.render('admin-pages', {
-      title: 'QuickShare | Admin Pages',
+      title: 'QuickShare | 分享管理',
       page: 'admin-pages',
+      csrfToken: config.authEnabled ? createCsrfToken(sessionToken) : '',
       pages: visiblePages,
       pagination: {
         ...pagination,
@@ -770,12 +1069,10 @@ app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
 
 app.get('/admin/stats', requireDashboardAdmin, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const stats = enrichAdminStats(await pageRepository.getAdminStats());
 
     return res.render('admin-stats', {
-      title: 'QuickShare | Admin Stats',
+      title: 'QuickShare | 数据统计',
       page: 'admin-stats',
       stats
     });
@@ -791,8 +1088,6 @@ app.get('/admin/stats', requireDashboardAdmin, async (req, res) => {
 
 app.get('/admin/audit', requireDashboardAdmin, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const limit = 50;
     const currentPage = Math.max(1, parseInt(req.query.page, 10) || 1);
     const offset = (currentPage - 1) * limit;
@@ -801,7 +1096,7 @@ app.get('/admin/audit', requireDashboardAdmin, async (req, res) => {
     const logs = await pageRepository.listAuditLogs({ limit, offset });
 
     return res.render('admin-audit', {
-      title: 'QuickShare | Audit Log',
+      title: 'QuickShare | 审计日志',
       page: 'admin-audit',
       logs,
       pagination: {
@@ -825,8 +1120,6 @@ app.get('/admin/audit', requireDashboardAdmin, async (req, res) => {
 
 app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const sharedPage = await pageRepository.getById(req.params.id);
 
     if (!sharedPage) {
@@ -837,21 +1130,26 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       });
     }
 
+    const pageData = {
+      id: sharedPage.id,
+      htmlContent: sharedPage.html_content,
+      createdAt: sharedPage.created_at,
+      codeType: sharedPage.code_type,
+      title: sharedPage.title,
+      description: sharedPage.description,
+      isProtected: sharedPage.is_protected === 1,
+      password: visiblePagePassword(sharedPage),
+      expiresAt: sharedPage.expires_at,
+      markdownTheme: sharedPage.markdown_theme
+    };
+    const sessionToken = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE] || '';
+
     return res.render('admin-page-detail', {
       title: `QuickShare | ${sharedPage.id}`,
       page: 'admin-page-detail',
-      sharedPage: {
-        id: sharedPage.id,
-        htmlContent: sharedPage.html_content,
-        createdAt: sharedPage.created_at,
-        codeType: sharedPage.code_type,
-        title: sharedPage.title,
-        description: sharedPage.description,
-        isProtected: sharedPage.is_protected === 1,
-        password: visiblePagePassword(sharedPage),
-        expiresAt: sharedPage.expires_at,
-        markdownTheme: sharedPage.markdown_theme
-      },
+      csrfToken: config.authEnabled ? createCsrfToken(sessionToken) : '',
+      sharedPage: pageData,
+      pageDataJson: serializeJsonForHtml(pageData),
       publicUrl: publicPageUrl(req, sharedPage.id)
     });
   } catch (error) {
@@ -864,10 +1162,8 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
   }
 });
 
-app.put('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
+app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashboardCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const page = await pageRepository.getById(req.params.id);
 
     if (!page) {
@@ -878,6 +1174,15 @@ app.put('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
     }
 
     const { title, description, htmlContent, expiresAt, isProtected, password, markdownTheme } = req.body;
+    const customPassword = parseCustomPassword(password);
+
+    if (customPassword.error) {
+      return res.status(400).json({
+        success: false,
+        error: CUSTOM_PASSWORD_ERROR
+      });
+    }
+
     const updateOptions = {};
 
     if (title !== undefined) {
@@ -905,22 +1210,20 @@ app.put('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
         updateOptions.isProtected = newProtected;
 
         if (newProtected) {
-          const customPassword = password && String(password).trim();
-          const finalPassword = customPassword || generateNumericPassword(DEFAULT_PASSWORD_LENGTH);
+          const finalPassword = customPassword.provided
+            ? customPassword.value
+            : generateNumericPassword(DEFAULT_PASSWORD_LENGTH);
           updateOptions.passwordHash = await hashSecret(finalPassword);
           updateOptions.encryptedPassword = encryptSecret(finalPassword);
         } else {
           updateOptions.passwordHash = null;
           updateOptions.encryptedPassword = null;
         }
-      } else if (newProtected && password && String(password).trim()) {
+      } else if (newProtected && customPassword.provided) {
         // Protection status unchanged but password explicitly provided - update password
-        const customPassword = String(password).trim();
-        if (customPassword.length >= 4 && customPassword.length <= 50) {
-          updateOptions.isProtected = true;
-          updateOptions.passwordHash = await hashSecret(customPassword);
-          updateOptions.encryptedPassword = encryptSecret(customPassword);
-        }
+        updateOptions.isProtected = true;
+        updateOptions.passwordHash = await hashSecret(customPassword.value);
+        updateOptions.encryptedPassword = encryptSecret(customPassword.value);
       }
     }
 
@@ -959,10 +1262,8 @@ app.put('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
   }
 });
 
-app.delete('/admin/pages/batch', requireDashboardAdmin, async (req, res) => {
+app.delete('/admin/pages/batch', requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const { ids } = req.body;
 
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -989,10 +1290,8 @@ app.delete('/admin/pages/batch', requireDashboardAdmin, async (req, res) => {
   }
 });
 
-app.delete('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
+app.delete('/admin/pages/:id', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const page = await pageRepository.getById(req.params.id);
 
     if (!page) {
@@ -1023,10 +1322,8 @@ app.delete('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/pages/:id/clone', requireDashboardAdmin, async (req, res) => {
+app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requireDashboardCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const page = await pageRepository.getById(req.params.id);
 
     if (!page) {
@@ -1053,51 +1350,34 @@ app.post('/admin/pages/:id/clone', requireDashboardAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/pages/create', requireApiAdmin, requireCsrf, async (req, res) => {
+app.post('/api/pages/create', privateNoStore, requireApiAdmin, parseShareJson, requireCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
+    const result = await createPageFromInput(req.body);
 
-    const { htmlContent, isProtected, codeType, title, description, password: customPassword, markdownTheme } = req.body;
-
-    if (!htmlContent || typeof htmlContent !== 'string') {
+    if (result.error) {
       return res.status(400).json({
         success: false,
-        error: '请提供内容'
+        error: result.error
       });
     }
 
-    const normalizedCodeType = normalizeCodeType(htmlContent, codeType);
-    const createdAt = Date.now();
-    const pageTitle = derivePageTitle(htmlContent, normalizedCodeType, title, createdAt);
-    const password = isProtected ? (customPassword && String(customPassword).trim() ? String(customPassword).trim() : generateNumericPassword(DEFAULT_PASSWORD_LENGTH)) : null;
-    const passwordHash = password ? await hashSecret(password) : null;
-    const encryptedPassword = password ? encryptSecret(password) : null;
-    const id = await createPageWithRetry({
-      htmlContent,
-      passwordHash,
-      encryptedPassword,
-      isProtected: Boolean(isProtected),
-      codeType: normalizedCodeType,
-      title: pageTitle,
-      description,
-      createdAt,
-      expiresAt: null,
-      markdownTheme: normalizedCodeType === 'markdown' ? resolveTheme(markdownTheme || 'random') : null
-    });
-
     pageRepository.createAuditLog({
       action: 'page.create',
-      pageId: id,
-      details: JSON.stringify({ codeType: normalizedCodeType, isProtected: Boolean(password) }),
+      pageId: result.id,
+      details: JSON.stringify({ codeType: result.codeType, isProtected: result.isProtected }),
       ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
     }).catch((err) => { console.error('Audit log failed:', err); });
 
     return res.json({
       success: true,
-      urlId: id,
-      password,
-      isProtected: Boolean(password),
-      codeType: normalizedCodeType
+      urlId: result.id,
+      password: result.password,
+      isProtected: result.isProtected,
+      codeType: result.codeType,
+      title: result.title,
+      description: result.description,
+      expiresAt: result.expiresAt,
+      markdownTheme: result.markdownTheme
     });
   } catch (error) {
     console.error('Create page failed:', error);
@@ -1108,52 +1388,65 @@ app.post('/api/pages/create', requireApiAdmin, requireCsrf, async (req, res) => 
   }
 });
 
-app.post('/api/v1/share', requireApiKey, async (req, res) => {
+app.post('/api/pages/preview', privateNoStore, requireApiAdmin, parseShareJson, requireCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
+    const { htmlContent, codeType, markdownTheme, title, description } = req.body || {};
 
-    const { htmlContent, codeType, title, description, isProtected, password: customPassword, markdownTheme } = req.body;
-
-    if (!htmlContent || typeof htmlContent !== 'string') {
-      return res.status(400).json({ success: false, error: '请提供内容' });
+    if (typeof htmlContent !== 'string' || !htmlContent.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: '请提供内容'
+      });
     }
 
-    const normalizedCodeType = normalizeCodeType(htmlContent, codeType);
-    const createdAt = Date.now();
-    const pageTitle = derivePageTitle(htmlContent, normalizedCodeType, title, createdAt);
-    const password = isProtected ? (customPassword && String(customPassword).trim() ? String(customPassword).trim() : generateNumericPassword(DEFAULT_PASSWORD_LENGTH)) : null;
-    const passwordHash = password ? await hashSecret(password) : null;
-    const encryptedPassword = password ? encryptSecret(password) : null;
-    const id = await createPageWithRetry({
-      htmlContent,
-      passwordHash,
-      encryptedPassword,
-      isProtected: Boolean(isProtected),
-      codeType: normalizedCodeType,
-      title: pageTitle,
-      description,
-      createdAt,
-      expiresAt: null,
-      markdownTheme: normalizedCodeType === 'markdown' ? resolveTheme(markdownTheme || 'random') : null
+    const prepared = await prepareSandboxContent(htmlContent, codeType, markdownTheme);
+
+    return res.json({
+      success: true,
+      codeType: prepared.contentType,
+      document: renderSandboxedDocument(prepared.renderedContent, prepared.contentType, {
+        title: title ? String(title).trim() : null,
+        description: description ? String(description).trim() : null
+      })
     });
+  } catch (error) {
+    console.error('Preview page failed:', error);
+    return res.status(500).json({
+      success: false,
+      error: '预览生成失败，请稍后重试'
+    });
+  }
+});
+
+app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (req, res) => {
+  try {
+    const result = await createPageFromInput(req.body);
+
+    if (result.error) {
+      return res.status(400).json({ success: false, error: result.error });
+    }
 
     const base = config.shareBaseUrl || `${req.protocol}://${req.get('host')}`;
-    const url = `${base.replace(/\/+$/, '')}/view/${id}`;
+    const url = `${base.replace(/\/+$/, '')}/view/${result.id}`;
 
     pageRepository.createAuditLog({
       action: 'page.create',
-      pageId: id,
-      details: JSON.stringify({ codeType: normalizedCodeType, isProtected: Boolean(password), source: 'api' }),
+      pageId: result.id,
+      details: JSON.stringify({ codeType: result.codeType, isProtected: result.isProtected, source: 'api' }),
       ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
     }).catch((err) => { console.error('Audit log failed:', err); });
 
     return res.json({
       success: true,
       url,
-      urlId: id,
-      password,
-      isProtected: Boolean(password),
-      codeType: normalizedCodeType
+      urlId: result.id,
+      password: result.password,
+      isProtected: result.isProtected,
+      codeType: result.codeType,
+      title: result.title,
+      description: result.description,
+      expiresAt: result.expiresAt,
+      markdownTheme: result.markdownTheme
     });
   } catch (error) {
     console.error('Share API failed:', error);
@@ -1163,8 +1456,6 @@ app.post('/api/v1/share', requireApiKey, async (req, res) => {
 
 app.get('/api/pages/list/recent', requireApiAdmin, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const limit = Math.min(Number.parseInt(req.query.limit || '10', 10), 50);
     const pages = await pageRepository.listRecent(Number.isFinite(limit) ? limit : 10);
 
@@ -1183,15 +1474,26 @@ app.get('/api/pages/list/recent', requireApiAdmin, async (req, res) => {
 
 app.get('/api/pages/:id', async (req, res) => {
   try {
-    await ensureDatabase();
+    const publicPage = await pageRepository.getPublicById(req.params.id, Date.now());
 
-    const page = await pageRepository.getById(req.params.id);
-
-    if (!page) {
+    if (!publicPage) {
       return res.status(404).json({
         success: false,
         error: '页面不存在'
       });
+    }
+
+    if (publicPage.expired) {
+      return res.status(410).json({
+        success: false,
+        error: '此分享已失效'
+      });
+    }
+
+    const { page } = publicPage;
+
+    if (page.is_protected === 1) {
+      setPrivateNoStore(res);
     }
 
     return res.json({
@@ -1202,7 +1504,9 @@ app.get('/api/pages/:id', async (req, res) => {
         codeType: page.code_type,
         title: page.title,
         description: page.description,
-        isProtected: page.is_protected === 1
+        isProtected: page.is_protected === 1,
+        expiresAt: page.expires_at,
+        markdownTheme: page.markdown_theme
       }
     });
   } catch (error) {
@@ -1214,10 +1518,8 @@ app.get('/api/pages/:id', async (req, res) => {
   }
 });
 
-app.post('/api/pages/:id/protect', requireApiAdmin, requireCsrf, async (req, res) => {
+app.post('/api/pages/:id/protect', privateNoStore, requireApiAdmin, parseSmallJson, requireCsrf, async (req, res) => {
   try {
-    await ensureDatabase();
-
     const page = await pageRepository.getById(req.params.id);
 
     if (!page) {
@@ -1228,8 +1530,18 @@ app.post('/api/pages/:id/protect', requireApiAdmin, requireCsrf, async (req, res
     }
 
     const isProtected = Boolean(req.body.isProtected);
-    const customPassword = req.body.password && String(req.body.password).trim();
-    const password = isProtected ? (customPassword || generateNumericPassword(DEFAULT_PASSWORD_LENGTH)) : null;
+    const customPassword = parseCustomPassword(req.body.password);
+
+    if (customPassword.error) {
+      return res.status(400).json({
+        success: false,
+        error: CUSTOM_PASSWORD_ERROR
+      });
+    }
+
+    const password = isProtected
+      ? (customPassword.provided ? customPassword.value : generateNumericPassword(DEFAULT_PASSWORD_LENGTH))
+      : null;
     const passwordHash = password ? await hashSecret(password) : null;
     const encryptedPassword = password ? encryptSecret(password) : null;
 
@@ -1253,13 +1565,26 @@ app.post('/api/pages/:id/protect', requireApiAdmin, requireCsrf, async (req, res
   }
 });
 
-app.post('/view/:id/password', async (req, res) => {
+app.post('/view/:id/password', privateNoStore, parseSmallJson, async (req, res) => {
   try {
-    await ensureDatabase();
+    const publicPage = await pageRepository.getPublicById(req.params.id, Date.now());
 
-    const page = await pageRepository.getById(req.params.id);
+    if (!publicPage) {
+      return res.status(404).json({
+        valid: false
+      });
+    }
 
-    if (!page || page.is_protected !== 1) {
+    if (publicPage.expired) {
+      return res.status(410).json({
+        valid: false,
+        error: '此分享已失效'
+      });
+    }
+
+    const { page } = publicPage;
+
+    if (page.is_protected !== 1) {
       return res.status(404).json({
         valid: false
       });
@@ -1286,13 +1611,60 @@ app.post('/view/:id/password', async (req, res) => {
   }
 });
 
-app.get('/view/:id', async (req, res) => {
+app.post('/view/:id/view-event', privateNoStore, async (req, res) => {
+  if (!isSameOriginRequest(req)) {
+    return res.sendStatus(403);
+  }
+
   try {
-    await ensureDatabase();
+    const outcome = await pageRepository.recordViewEvent(
+      req.params.id,
+      Date.now(),
+      hasPageAccess(req, req.params.id)
+    );
 
-    const page = await pageRepository.getById(req.params.id);
+    if (outcome === 'not_found') {
+      return res.sendStatus(404);
+    }
 
-    if (!page) {
+    if (outcome === 'expired') {
+      return res.sendStatus(410);
+    }
+
+    if (outcome === 'protected') {
+      return res.sendStatus(403);
+    }
+
+    return outcome === 'counted' ? res.sendStatus(204) : res.sendStatus(500);
+  } catch (error) {
+    console.error('Track page view failed:', {
+      name: error?.name || 'Error',
+      code: safeErrorCode(error)
+    });
+    return res.sendStatus(500);
+  }
+});
+
+app.get('/view/:id', async (req, res) => {
+  setPrivateNoStore(res);
+  const metrics = beginViewPerformance(req, res);
+
+  try {
+    metrics.phase = 'database';
+    const databaseStartedAt = performance.now();
+    let publicPage;
+
+    try {
+      publicPage = await pageRepository.getPublicById(req.params.id, Date.now());
+    } finally {
+      metrics.dbMs = performance.now() - databaseStartedAt;
+    }
+
+    metrics.phase = 'routing';
+
+    if (!publicPage) {
+      metrics.outcome = 'not_found';
+      setTrustedUiCsp(res, { allowFraming: true });
       return res.status(404).render('error', {
         title: '页面未找到',
         page: 'error-page',
@@ -1300,50 +1672,73 @@ app.get('/view/:id', async (req, res) => {
       });
     }
 
-    if (page.is_protected === 1 && !hasPageAccess(req, req.params.id)) {
-      const decryptedPassword = page.encrypted_password ? decryptSecret(page.encrypted_password) : null;
-      const passwordLength = decryptedPassword ? decryptedPassword.length : DEFAULT_PASSWORD_LENGTH;
+    const { page } = publicPage;
+    metrics.contentType = safeContentType(page.code_type);
+    metrics.protected = page.is_protected === 1;
 
+    if (publicPage.expired) {
+      metrics.outcome = 'expired';
+      setTrustedUiCsp(res, { allowFraming: true });
+      return res.status(410).render('error', {
+        title: '分享已失效',
+        page: 'error-page',
+        message: '此分享已失效，无法继续访问'
+      });
+    }
+
+    if (page.is_protected === 1 && !hasPageAccess(req, req.params.id)) {
+      metrics.outcome = 'password_required';
+      setTrustedUiCsp(res, { allowFraming: true });
       return res.render('password', {
         title: 'QuickShare | 密码保护',
         page: 'password-page',
         id: req.params.id,
-        passwordLength,
         error: null
       });
     }
 
-    let processedContent = page.html_content;
-    let contentType = page.code_type;
-    const codeBlocks = extractCodeBlocks(page.html_content);
+    metrics.phase = 'render';
+    const renderStartedAt = performance.now();
+    let prepared;
 
-    if (!VALID_CODE_TYPES.has(contentType)) {
-      contentType = normalizeCodeType(page.html_content, contentType);
+    try {
+      prepared = await prepareSandboxContent(
+        page.html_content,
+        page.code_type,
+        page.markdown_theme
+      );
+    } finally {
+      metrics.renderMs = performance.now() - renderStartedAt;
     }
 
-    if (codeBlocks.length === 1 && codeBlocks[0].content.length > page.html_content.length * 0.7) {
-      processedContent = codeBlocks[0].content;
-      contentType = codeBlocks[0].type;
-    }
-
-    if (!VALID_CODE_TYPES.has(contentType)) {
-      contentType = 'html';
-    }
-
-    const renderedContent = await renderContent(processedContent, contentType, page.markdown_theme);
-    const contentWithTypeInfo = injectCodeTypeMeta(renderedContent, contentType);
-
-    // Track view count (fire-and-forget; don't block response)
-    pageRepository.incrementViewCount(req.params.id).catch(() => {});
+    metrics.phase = 'response';
+    metrics.contentType = safeContentType(prepared.contentType);
+    metrics.outcome = 'served';
 
     const pageUrl = `${req.protocol}://${req.get('host')}/view/${req.params.id}`;
-    return res.send(renderSandboxedDocument(contentWithTypeInfo, contentType, {
+    const isDashboardPreview = req.query.adminPreview !== undefined && (
+      !config.authEnabled || Boolean(getDashboardAdminSession(req))
+    );
+    const viewEventUrl = isDashboardPreview
+      ? null
+      : `/view/${encodeURIComponent(req.params.id)}/view-event`;
+    return res.send(renderSandboxedDocument(prepared.renderedContent, prepared.contentType, {
       title: page.title,
       description: page.description,
-      pageUrl
+      pageUrl,
+      viewEventUrl
     }));
   } catch (error) {
-    console.error('View page failed:', error);
+    metrics.outcome = metrics.phase === 'database'
+      ? 'database_error'
+      : metrics.phase === 'render'
+        ? 'render_error'
+        : 'server_error';
+    console.error('View page failed:', {
+      name: error?.name || 'Error',
+      code: safeErrorCode(error)
+    });
+    setTrustedUiCsp(res, { allowFraming: true });
     return res.status(500).render('error', {
       title: '服务器错误',
       page: 'error-page',
@@ -1352,7 +1747,19 @@ app.get('/view/:id', async (req, res) => {
   }
 });
 
+app.use((error, req, res, next) => {
+  if (error?.type === 'entity.too.large') {
+    return res.status(413).json({
+      success: false,
+      error: '请求内容过大'
+    });
+  }
+
+  return next(error);
+});
+
 app.use((req, res) => {
+  setTrustedUiCsp(res);
   res.status(404).render('error', {
     title: '页面未找到',
     page: 'error-page',

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 require('dotenv').config();
 
-const { Pool } = require('pg');
+const { createPostgresPool } = require('../models/postgres-config');
 const { derivePageTitle } = require('../utils/pageTitle');
 
 function parseArgs(argv) {
@@ -36,11 +36,7 @@ async function main() {
     throw new Error('DATABASE_URL or POSTGRES_URL is required');
   }
 
-  const pool = new Pool({
-    connectionString,
-    ssl: process.env.POSTGRES_SSL === 'false' ? false : { rejectUnauthorized: false },
-    max: 1
-  });
+  const pool = createPostgresPool(connectionString, { max: 1 });
 
   try {
     const result = await pool.query(

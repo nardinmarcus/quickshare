@@ -1,28 +1,23 @@
     </div>
 
-    <div id="error-toast" class="toast error-toast">
+    <div id="error-toast" class="toast error-toast" role="alert" aria-atomic="true">
       <div class="toast-content">
-        <i class="fas fa-exclamation-circle toast-icon"></i>
+        <i class="fas fa-exclamation-circle toast-icon" aria-hidden="true"></i>
         <span id="error-message" class="toast-message"></span>
       </div>
     </div>
 
-    <div id="success-toast" class="toast success-toast">
+    <div id="success-toast" class="toast success-toast" role="status" aria-live="polite" aria-atomic="true">
       <div class="toast-content">
-        <i class="fas fa-check-circle toast-icon"></i>
+        <i class="fas fa-check-circle toast-icon" aria-hidden="true"></i>
         <span id="success-message" class="toast-message"></span>
       </div>
     </div>
   </div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/languages/javascript.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/languages/css.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/languages/html.min.js"></script>
   <script src="/js/theme.js"></script>
-  <% if (typeof page === 'undefined' || page !== 'login-page') { %>
+  <% if (typeof page !== 'undefined' && page === 'home-page') { %>
     <script src="/js/main.js"></script>
-    <script src="/js/syntax-highlight.js"></script>
   <% } %>
 </body>
 </html>

@@ -1,136 +1,141 @@
-<%- include('partials/header', { title, page }) %>
+<%- include('partials/header', { title, page, csrfToken }) %>
 
 <div class="admin-container">
   <header class="admin-header">
     <div>
-      <p class="admin-kicker">Shared Page</p>
+      <p class="admin-kicker">分享详情</p>
       <h1 class="admin-title" id="page-title-display"><%= sharedPage.title || sharedPage.id %></h1>
       <p class="admin-subtitle"><%= sharedPage.id %></p>
     </div>
-    <div class="admin-actions">
-      <button type="button" class="cyber-btn cyber-btn-secondary" id="edit-toggle-btn">
-        <i class="fas fa-pen" aria-hidden="true"></i>
-        <span>Edit</span>
-      </button>
-      <form method="post" action="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>/clone" style="display:inline">
-        <button type="submit" class="cyber-btn cyber-btn-secondary">
-          <i class="fas fa-copy" aria-hidden="true"></i>
-          <span>Clone</span>
-        </button>
-      </form>
-      <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/pages">
-        <i class="fas fa-arrow-left" aria-hidden="true"></i>
-        <span>Back</span>
-      </a>
-    </div>
+    <%- include('partials/admin-nav', { current: 'pages' }) %>
   </header>
+
+  <div class="admin-detail-actions">
+    <button type="button" class="cyber-btn cyber-btn-secondary" id="edit-toggle-btn">
+      <i class="fas fa-pen" aria-hidden="true"></i>
+      <span>编辑</span>
+    </button>
+    <form method="post" action="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>/clone" class="admin-inline-form">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+      <button type="submit" class="cyber-btn cyber-btn-secondary">
+        <i class="fas fa-copy" aria-hidden="true"></i>
+        <span>克隆</span>
+      </button>
+    </form>
+    <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/pages">
+      <i class="fas fa-arrow-left" aria-hidden="true"></i>
+      <span>返回列表</span>
+    </a>
+  </div>
 
   <section class="card admin-card">
     <dl class="admin-detail-grid">
       <div>
-        <dt>Public URL</dt>
+        <dt>公开链接</dt>
         <dd><a href="<%= publicUrl %>" target="_blank" rel="noopener noreferrer"><%= publicUrl %></a></dd>
       </div>
       <div>
-        <dt>Type</dt>
+        <dt>类型</dt>
         <dd><span class="admin-pill"><%= sharedPage.codeType || 'html' %></span></dd>
       </div>
       <div>
-        <dt>Created</dt>
+        <dt>创建时间</dt>
         <dd><time datetime="<%= new Date(Number(sharedPage.createdAt)).toISOString() %>"><%= new Date(Number(sharedPage.createdAt)).toLocaleString('zh-CN', { hour12: false }) %></time></dd>
       </div>
       <div>
-        <dt>Status</dt>
+        <dt>状态</dt>
         <dd id="status-display">
           <% if (sharedPage.isProtected) { %>
-            <span class="admin-status protected">Protected</span>
+            <span class="admin-status protected">密码保护</span>
           <% } else { %>
-            <span class="admin-status public">Public</span>
+            <span class="admin-status public">公开</span>
           <% } %>
         </dd>
       </div>
       <div id="password-display-row" <%= !sharedPage.isProtected ? 'hidden' : '' %>>
-        <dt>Password</dt>
+        <dt>密码</dt>
         <dd id="password-display">
           <% if (sharedPage.password) { %>
             <code class="admin-password-value"><%= sharedPage.password %></code>
           <% } else { %>
-            <span class="admin-muted">Unavailable for legacy share</span>
+            <span class="admin-muted">旧版分享无法查看密码</span>
           <% } %>
         </dd>
       </div>
       <div id="expires-display-row" <%= !sharedPage.expiresAt ? 'hidden' : '' %>>
-        <dt>Expires</dt>
+        <dt>过期时间</dt>
         <dd id="expires-display">
           <% if (sharedPage.expiresAt) { %>
             <time datetime="<%= new Date(Number(sharedPage.expiresAt)).toISOString() %>"><%= new Date(Number(sharedPage.expiresAt)).toLocaleString('zh-CN', { hour12: false }) %></time>
           <% } else { %>
-            <span class="admin-muted">Never</span>
+            <span class="admin-muted">永不过期</span>
           <% } %>
         </dd>
       </div>
       <div class="admin-detail-wide" id="description-display-row" <%= !sharedPage.description ? 'hidden' : '' %>>
-        <dt>Description</dt>
+        <dt>描述</dt>
         <dd id="description-display"><%= sharedPage.description || '' %></dd>
       </div>
     </dl>
 
-    <!-- Edit Form (hidden by default) -->
-    <form id="edit-form" class="admin-edit-form" hidden>
+    <form id="edit-form" class="admin-edit-form" aria-busy="false" hidden>
       <div class="admin-edit-grid">
         <div class="admin-edit-field">
-          <label for="edit-title">Title</label>
+          <label for="edit-title">标题</label>
           <input type="text" id="edit-title" name="title" value="<%= sharedPage.title || '' %>" maxlength="200">
         </div>
         <div class="admin-edit-field">
-          <label for="edit-description">Description</label>
+          <label for="edit-description">描述</label>
           <textarea id="edit-description" name="description" rows="2" maxlength="500"><%= sharedPage.description || '' %></textarea>
         </div>
         <div class="admin-edit-field">
-          <label for="edit-expires">Expires</label>
+          <label for="edit-expires">过期时间</label>
           <input
             type="datetime-local"
             id="edit-expires"
             name="expiresAt"
             value="<%= sharedPage.expiresAt ? new Date(Number(sharedPage.expiresAt)).toISOString().slice(0, 16) : '' %>"
           >
-          <button type="button" class="admin-clear-btn" id="clear-expires">Clear</button>
-          <span id="edit-expires-hint" class="field-hint"></span>
+          <button type="button" class="admin-clear-btn" id="clear-expires">清除</button>
+          <span id="edit-expires-hint" class="field-hint" aria-live="polite"></span>
         </div>
         <div class="admin-edit-field">
           <label class="admin-toggle-label">
             <input type="checkbox" id="edit-protected" name="isProtected" <%= sharedPage.isProtected ? 'checked' : '' %>>
             <span class="admin-toggle-slider"></span>
-            <span class="admin-toggle-text">Password Protected</span>
+            <span class="admin-toggle-text">密码保护</span>
           </label>
           <div class="admin-password-input-wrap" id="password-input-wrap" <%= !sharedPage.isProtected ? 'hidden' : '' %>>
-            <label for="edit-password">Password</label>
+            <label for="edit-password">自定义密码</label>
             <div class="admin-password-input-group">
               <input
                 type="password"
                 id="edit-password"
                 name="password"
-                placeholder="Leave empty to auto-generate"
-                maxlength="50"
+                placeholder="留空则保持当前密码或自动生成"
+                minlength="4"
+                maxlength="12"
                 autocomplete="new-password"
+                aria-describedby="edit-password-hint password-input-description"
+                aria-invalid="false"
               >
-              <span id="edit-password-hint" class="field-hint"></span>
-              <button type="button" class="admin-toggle-password-btn" id="toggle-password-visibility" aria-label="Toggle password visibility">
+              <button type="button" class="admin-toggle-password-btn" id="toggle-password-visibility" aria-label="显示密码">
                 <i class="fas fa-eye" aria-hidden="true"></i>
               </button>
             </div>
-            <p class="admin-edit-hint">Leave empty to keep current password or auto-generate a new one.</p>
+            <span id="edit-password-hint" class="field-hint" aria-live="polite"></span>
+            <p class="admin-edit-hint" id="password-input-description">留空时：已有保护保持当前密码，新开启保护自动生成 6 位数字密码。</p>
           </div>
-          <p class="admin-edit-hint" id="protection-hint">
+          <p class="admin-edit-hint" id="protection-hint" aria-live="polite">
             <% if (sharedPage.isProtected) { %>
-              Unchecking will remove password protection.
+              取消勾选将移除密码保护。
             <% } else { %>
-              Checking will enable password protection.
+              勾选后将启用密码保护。
             <% } %>
           </p>
         </div>
         <div class="admin-edit-field" id="theme-field" <%= sharedPage.codeType !== 'markdown' ? 'hidden' : '' %>>
-          <label for="edit-theme">Markdown Theme</label>
+          <label for="edit-theme">Markdown 主题</label>
           <select id="edit-theme" name="markdownTheme">
             <option value="bytedance" <%= !sharedPage.markdownTheme || sharedPage.markdownTheme === 'bytedance' ? 'selected' : '' %>>ByteDance</option>
             <option value="github" <%= sharedPage.markdownTheme === 'github' ? 'selected' : '' %>>GitHub</option>
@@ -141,51 +146,41 @@
         </div>
       </div>
       <div class="admin-edit-actions">
-        <button type="button" class="cyber-btn cyber-btn-secondary" id="edit-cancel">Cancel</button>
-        <button type="submit" class="cyber-btn" id="edit-save">Save Changes</button>
+        <button type="button" class="cyber-btn cyber-btn-secondary" id="edit-cancel">取消</button>
+        <button type="submit" class="cyber-btn" id="edit-save">保存修改</button>
       </div>
     </form>
   </section>
 
   <section class="card admin-card" id="content-section">
     <div class="admin-content-header">
-      <div class="admin-content-tabs">
-        <button type="button" class="admin-tab active" data-tab="raw" aria-selected="true" role="tab">
+      <div class="admin-content-tabs" role="tablist" aria-label="内容视图">
+        <button type="button" class="admin-tab active" id="tab-raw" role="tab" aria-controls="panel-raw" aria-selected="true" tabindex="0" data-tab="raw">
           <i class="fas fa-code" aria-hidden="true"></i>
-          <span>Raw</span>
+          <span>原始内容</span>
         </button>
-        <button type="button" class="admin-tab" data-tab="rendered" aria-selected="false" role="tab">
+        <button type="button" class="admin-tab" id="tab-rendered" role="tab" aria-controls="panel-rendered" aria-selected="false" tabindex="-1" data-tab="rendered">
           <i class="fas fa-eye" aria-hidden="true"></i>
-          <span>Preview</span>
+          <span>预览</span>
         </button>
       </div>
-      <a class="admin-icon-link" href="<%= publicUrl %>" target="_blank" rel="noopener noreferrer" aria-label="Open public page">
+      <a class="admin-icon-link" href="<%= publicUrl %>" target="_blank" rel="noopener noreferrer" aria-label="打开公开页面">
         <i class="fas fa-external-link-alt" aria-hidden="true"></i>
       </a>
     </div>
 
     <div class="admin-tab-content">
-      <div class="admin-tab-panel active" data-panel="raw" role="tabpanel">
-        <textarea class="admin-content-viewer" id="content-textarea" readonly aria-label="Raw content"><%= sharedPage.htmlContent %></textarea>
+      <div class="admin-tab-panel active" id="panel-raw" role="tabpanel" aria-labelledby="tab-raw" data-panel="raw">
+        <textarea class="admin-content-viewer" id="content-textarea" readonly aria-label="原始内容"><%= sharedPage.htmlContent %></textarea>
       </div>
-      <div class="admin-tab-panel" data-panel="rendered" role="tabpanel" hidden>
-        <iframe id="rendered-preview" class="admin-rendered-preview" sandbox="allow-downloads allow-forms allow-modals allow-popups allow-scripts" title="Rendered content preview"></iframe>
+      <div class="admin-tab-panel" id="panel-rendered" role="tabpanel" aria-labelledby="tab-rendered" data-panel="rendered" hidden>
+        <iframe id="rendered-preview" class="admin-rendered-preview" sandbox="allow-downloads allow-forms allow-modals allow-popups allow-scripts" title="内容预览"></iframe>
       </div>
     </div>
   </section>
 </div>
 
-<script>
-  window.pageData = <%- JSON.stringify({
-    id: sharedPage.id,
-    title: sharedPage.title || '',
-    description: sharedPage.description || '',
-    isProtected: sharedPage.isProtected,
-    expiresAt: sharedPage.expiresAt ? Number(sharedPage.expiresAt) : null,
-    htmlContent: sharedPage.htmlContent,
-    codeType: sharedPage.codeType,
-    markdownTheme: sharedPage.markdownTheme || ''
-  }) %>;
-</script>
+<script type="application/json" id="page-data"><%- pageDataJson %></script>
+<script src="/js/admin.js"></script>
 <script src="/js/admin-detail.js"></script>
 <%- include('partials/footer', { page }) %>
