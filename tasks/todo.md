@@ -419,3 +419,71 @@ Review:
 - Validation: the picker minimum tracks the browser's current local date, past or malformed values retain client/server rejection, and an empty value still publishes without expiry.
 - Responsive result: the 375px browser viewport kept `scrollWidth === innerWidth === 375`; the date control and explanatory hint remained fully usable.
 - Verification: focused regression passed 1/1, the full Node suite passed 108/108, JavaScript syntax and `git diff --check` passed, and browser console/page errors were empty.
+
+# Quiet workbench UI polish (2026-07-15)
+
+- [x] Add explicit raised, subtle, divider, and control surface tokens for the default light/dark shell.
+- [x] Remove decorative card outlines, glow, and motion while retaining semantic input, focus, error, selected, and iframe boundaries.
+- [x] Turn homepage access choices and secondary actions into tonal controls with one solid publish CTA.
+- [x] Group admin metrics and navigation into calmer shared surfaces while retaining table row separators.
+- [x] Modernize login/password surfaces without changing authentication behavior or accessibility contracts.
+- [x] Update the active visual direction in `DESIGN.md` and capture the correction in `tasks/lessons.md`.
+- [x] Run the full test suite, JavaScript syntax checks, `git diff --check`, and desktop/375px light-dark browser screenshots.
+
+Visual direction:
+
+- Visual thesis: quiet tonal workbench, neutral system surfaces, and one restrained cyan action.
+- Content plan: preserve the existing utility flow and semantic HTML; change visual hierarchy only.
+- Interaction thesis: short background and opacity transitions, no ambient glow, no card lift, and clear focus rings.
+
+Verify:
+
+1. `/` at 1440px and 375px -> fewer nested outlines, one dominant CTA, no overflow, and all controls remain at least 44px.
+2. `/admin/stats` and `/admin/pages` -> navigation and metrics read as grouped surfaces; table rows remain scannable.
+3. `/login` and protected password entry -> no glow animation, focus remains obvious, and keyboard behavior is unchanged.
+4. Light and dark modes -> adjacent surfaces remain distinguishable without relying on card borders.
+
+Review:
+
+- Root cause: cards used both a solid border and an outline-style shadow, while missing secondary surface tokens left nested groups transparent and border-dependent.
+- Homepage: visible outlined elements dropped from 12 to 1 in the light rendered audit; fields, access choices, upload, and secondary actions now use tonal surfaces while publish remains the only solid primary action.
+- Admin: statistics changed from 28 individually bordered elements to grouped metric and chart surfaces; the 375px empty-state page shortened from 1962px to 1561px without changing content.
+- Responsive: homepage light and dark renders both kept `innerWidth === scrollWidth === 375`; the smallest visible action target remained 44px.
+- Authentication: login and protected-content cards render without borders or glow; the focused password input keeps a 3px focus ring.
+- Verification: full Node suite passed 108/108, all public JavaScript files passed `node --check`, `git diff --check` passed, and browser checks reported no page or console errors.
+- Known unchanged behavior: the 14-day admin timeline remains an intentionally contained horizontal scroller on narrow screens.
+
+# Cyan accent correction (2026-07-15)
+
+- [x] Replace the default light/dark purple tokens with an accessible cyan palette.
+- [x] Keep named theme palettes isolated and update the active direction in `DESIGN.md`.
+- [x] Verify contrast, desktop/375px rendering, tests, and source checks.
+
+Review:
+
+- Palette: dark mode uses `#5eead4` with `#083344`; light mode uses `#0f766e` with white. Secondary accent states use the neighboring cyan family.
+- Rendered proof: the homepage and statistics page had zero computed hits for the previous purple tokens in light and dark modes.
+- Contrast: the primary CTA measured 9.06:1 in dark mode and 5.47:1 in light mode.
+- Responsive: desktop and 375px homepage renders kept `scrollWidth === innerWidth`; browser console and request failures were empty.
+- Verification: all 108 Node tests passed, every `public/js/*.js` file passed `node --check`, and `git diff --check` passed.
+- Environment note: local production startup correctly rejected missing production password hashes, so visual smoke testing used development mode with authentication explicitly disabled.
+
+# Quiet workbench production release (2026-07-15)
+
+- [x] Audit the complete UI diff and confirm the release contains no unrelated changes.
+- [x] Commit the coherent UI release on `main` and push it to `origin/main`.
+- [x] Deploy the committed revision to the linked Vercel production project.
+- [x] Inspect the deployment and verify production routes, cyan assets, desktop rendering, and 375px rendering.
+
+Verify:
+
+1. Git release -> `origin/main` resolves to the new UI commit and the local worktree is clean.
+2. Vercel deployment -> status is `READY` and the production alias points at the committed deployment.
+3. `https://quickshare.namooca.com/` -> the served stylesheet contains the quiet workbench and cyan tokens.
+4. Live browser -> homepage and admin surfaces render without old purple tokens, console errors, or page-level mobile overflow.
+
+Review:
+
+- Scope: the release contains only the UI stylesheet, active visual specification, task record, and correction lessons.
+- Local gate: all 108 tests, JavaScript syntax checks, `git diff --check`, light/dark screenshots, and 375px overflow checks passed before release.
+- Production gate: require the committed revision on `origin/main`, a Vercel `READY` deployment, exact stylesheet assertions, and live desktop/mobile browser proof before handoff.

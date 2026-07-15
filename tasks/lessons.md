@@ -92,3 +92,21 @@
 - A high-frequency helper action does not automatically deserve the same visual weight as the final CTA; two solid brand buttons create competing focal points.
 - Prefer placement, icon color, a subtle tinted surface, and a quiet badge for discoverability when the final publish action must remain dominant.
 - Judge hierarchy in the rendered page, including adjacent actions, instead of evaluating a button as an isolated component.
+
+## 2026-07-15 — Do not make every visual group a box
+
+- Count persistent outlines across the rendered screen before calling a UI polished; a card border plus an outline-style shadow is already a double frame.
+- Establish raised, subtle, and divider surfaces first, then reserve visible boundaries for inputs, focus, selection, errors, tables, and sandboxed content.
+- Review both the full page and compact mobile flow after removing borders, because a desktop surface can feel calmer while a stacked form still reads like an outlined checklist.
+
+## 2026-07-15: Treat accent color feedback as a token-system correction
+
+- When a user rejects the product accent, replace the primary, hover, focus, selection, and secondary accent tokens together so the old hue cannot survive in interaction states.
+- A pale cyan fill needs a dark foreground, while a darker cyan fill can use white; encode that pairing explicitly instead of assuming every primary button should contain white text.
+- Keep optional expressive themes isolated from the default shell, because changing the product default should not silently erase intentionally themed variants.
+
+## 2026-07-15: Continue explicitly unfinished delivery after terse approval
+
+- If a handoff names concrete unfinished steps such as commit and deploy, then `OK`, `move on`, or `开始干活` means continue those steps unless the user redirects the task.
+- Do not turn a terse continuation into a conversational close and force the user to repeat the remaining work.
+- State the inferred next action briefly, then execute through the same verification boundary already established for the repository.
