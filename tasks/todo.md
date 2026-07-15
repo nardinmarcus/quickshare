@@ -487,3 +487,86 @@ Review:
 - Scope: the release contains only the UI stylesheet, active visual specification, task record, and correction lessons.
 - Local gate: all 108 tests, JavaScript syntax checks, `git diff --check`, light/dark screenshots, and 375px overflow checks passed before release.
 - Production gate: require the committed revision on `origin/main`, a Vercel `READY` deployment, exact stylesheet assertions, and live desktop/mobile browser proof before handoff.
+
+# Homepage password toggle implementation (2026-07-15)
+
+Status: local implementation and verification complete; production release in progress.
+
+Specification: `docs/superpowers/specs/2026-07-15-homepage-password-toggle-design.md`
+
+Confirmed TDD seams:
+
+- Migration and Repository public methods.
+- HTTP behavior at homepage, browser publish, preview, admin settings, and unchanged protected routes.
+- Admin stats UI behavior through rendered HTML and a real browser.
+- Preview and production deployment routes plus persisted Postgres state.
+
+## Slice 1 — Persisted setting and transactional audit
+
+- [x] Add failing migration/Repository behavior tests for the singleton default, idempotent update, and audit record.
+- [x] Add additive migration `002_site_settings.sql` with a fail-closed default of `true`.
+- [x] Add matching Postgres and Memory Repository setting methods.
+- [x] Verify focused tests, migration idempotency, and rollback behavior.
+
+Verify:
+
+1. Empty and legacy databases migrate -> `site_settings.id=1` exists with `homepage_password_required=true`.
+2. Update to public and back -> Repository reads the persisted value and records each real transition once.
+3. Submit the current value -> `changed=false` and no audit row is added.
+4. Force the audit insert to fail -> the setting change is rolled back.
+
+## Slice 2 — Dynamic homepage and browser-publish access
+
+- [x] Add failing HTTP tests for locked, public, same-origin, cross-origin, relocked, and retained-session behavior.
+- [x] Add narrowly scoped dynamic access middleware for `/`, create, and preview only.
+- [x] Keep recent-list, protection mutation, dashboard, Share API, and per-share password boundaries unchanged.
+- [x] Make homepage responses `private, no-store` and fail closed with `503` when the setting is unavailable.
+
+Verify:
+
+1. Default locked mode -> anonymous homepage redirects and browser create/preview return `401`.
+2. Public mode -> anonymous homepage returns `200`; same-origin create/preview work.
+3. Missing or cross-origin `Origin` -> public create/preview return `403`.
+4. Relock -> new anonymous access is blocked while an existing valid `admin_session` still works.
+5. Protected adjacent routes -> existing authentication results do not change.
+
+## Slice 3 — Admin toggle and accessible interaction
+
+- [x] Add failing admin route tests for settings render, authentication, CSRF, validation, update, idempotency, and audit.
+- [x] Add the authenticated JSON settings endpoint with explicit `400/401/403/503` responses.
+- [x] Add the `/admin/stats` access-control card, confirmation dialog, live status, and dedicated local script.
+- [x] Keep controls disabled through the request lifecycle and restore the persisted state after failure.
+- [x] Add focused accessibility/resource-policy coverage for the new UI and script ownership.
+
+Verify:
+
+1. Dashboard login -> stats shows the persisted state and a dashboard CSRF token.
+2. Switch to public -> confirmation appears; cancel does not write; confirm changes state and audit atomically.
+3. Switch to locked -> request submits immediately and new anonymous requests are blocked.
+4. Expired session, bad CSRF, invalid payload, and database failure -> UI and API expose the specified safe state.
+
+## Slice 4 — Full verification and release
+
+- [x] Update deployment and security-boundary documentation.
+- [x] Run focused tests, full `npm test`, JavaScript syntax checks, and `git diff --check`.
+- [x] Run `npm run test:postgres` against a disposable local `_test` database.
+- [x] Verify toggle, confirmation, public publish, relock, retained session, mobile layout, and console state in a real browser.
+- [ ] Commit and push the implementation only after all local gates pass.
+- [ ] Apply migration to production, repeat it to prove idempotency, then deploy the committed revision.
+- [ ] Verify live routes, persisted setting, audit log, Vercel Firewall, and rollback path.
+
+Verify:
+
+1. Before toggle -> production remains password-required after schema and code deploy.
+2. Admin toggle off -> anonymous homepage and same-origin browser publishing work live.
+3. Admin toggle on -> anonymous homepage immediately redirects while existing session remains valid.
+4. `/admin`, `/api/v1/share`, legacy management routes, and protected shares preserve their authentication contracts.
+5. Deployment inspection -> committed revision is `READY`, aliased to `quickshare.namooca.com`, and emits no new error-level logs.
+
+## Review
+
+- Changed files/commits: implementation spans the additive migration, Repository methods, route middleware, admin UI/script, docs, and focused tests; release commit pending.
+- Test evidence: 132/132 Node tests and 8/8 disposable-Postgres integration tests passed; JavaScript syntax and diff checks passed.
+- Browser evidence: locked/cancel/public preview/public publish/relock/retained-session flows passed in Chromium; 375px layout had no page overflow, focus returned correctly after Esc, and console/page errors were empty.
+- Migration evidence: pending.
+- Production deployment and rollback evidence: pending.

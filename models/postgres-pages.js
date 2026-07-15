@@ -43,6 +43,72 @@ class PostgresPageRepository {
     // Schema changes are applied only through `npm run db:migrate`.
   }
 
+  async getHomepagePasswordRequired() {
+    const result = await this.pool.query(
+      'SELECT homepage_password_required FROM site_settings WHERE id = 1 LIMIT 1'
+    );
+    const passwordRequired = result.rows[0]?.homepage_password_required;
+
+    if (typeof passwordRequired !== 'boolean') {
+      throw new Error('Homepage access setting is unavailable');
+    }
+
+    return passwordRequired;
+  }
+
+  async setHomepagePasswordRequired({ passwordRequired, ip }) {
+    if (typeof passwordRequired !== 'boolean') {
+      throw new TypeError('passwordRequired must be a boolean');
+    }
+
+    const client = await this.pool.connect();
+
+    try {
+      await client.query('BEGIN');
+      const result = await client.query(
+        'SELECT homepage_password_required FROM site_settings WHERE id = 1 FOR UPDATE'
+      );
+      const previousValue = result.rows[0]?.homepage_password_required;
+
+      if (typeof previousValue !== 'boolean') {
+        throw new Error('Homepage access setting is unavailable');
+      }
+
+      if (previousValue === passwordRequired) {
+        await client.query('COMMIT');
+        return { passwordRequired, changed: false };
+      }
+
+      const updatedAt = Date.now();
+      await client.query(
+        'UPDATE site_settings SET homepage_password_required = $1, updated_at = $2 WHERE id = 1',
+        [passwordRequired, updatedAt]
+      );
+      await client.query(
+        'INSERT INTO audit_logs (action, page_id, details, ip, created_at) VALUES ($1, $2, $3, $4, $5)',
+        [
+          'settings.homepage_password_required.update',
+          null,
+          JSON.stringify({ from: previousValue, to: passwordRequired }),
+          ip || null,
+          updatedAt
+        ]
+      );
+      await client.query('COMMIT');
+
+      return { passwordRequired, changed: true };
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // Preserve the original transaction error.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async create(page) {
     await this.pool.query(
       `

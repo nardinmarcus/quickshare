@@ -10,6 +10,38 @@
     <%- include('partials/admin-nav', { current: 'stats' }) %>
   </header>
 
+  <section class="card admin-access-card" aria-labelledby="homepage-access-title">
+    <div class="admin-access-copy">
+      <p class="admin-access-kicker">Access policy</p>
+      <h2 id="homepage-access-title">首页访问控制</h2>
+      <p id="homepage-access-description">公开模式允许任何访客进入首页并创建分享；管理后台仍受独立密码保护。</p>
+    </div>
+    <div class="admin-access-control">
+      <span
+        id="homepage-access-state"
+        class="admin-access-state"
+        data-state="<%= homepagePasswordRequired ? 'locked' : 'public' %>"
+      >
+        <i class="fas <%= homepagePasswordRequired ? 'fa-lock' : 'fa-globe' %>" aria-hidden="true"></i>
+        <span><%= homepagePasswordRequired ? '需要密码' : '公开发布' %></span>
+      </span>
+      <label class="admin-toggle-label" for="homepage-access-toggle">
+        <input
+          type="checkbox"
+          id="homepage-access-toggle"
+          role="switch"
+          aria-describedby="homepage-access-description homepage-access-status"
+          <%= homepagePasswordRequired ? 'checked' : '' %>
+        >
+        <span class="admin-toggle-slider" aria-hidden="true"></span>
+        <span class="admin-toggle-text">进入首页需要密码</span>
+      </label>
+      <p id="homepage-access-status" class="admin-access-status" role="status" aria-live="polite" aria-atomic="true">
+        当前：<%= homepagePasswordRequired ? '需要密码' : '公开发布' %>
+      </p>
+    </div>
+  </section>
+
   <section class="admin-metric-grid" aria-label="汇总指标">
     <article class="card admin-metric-card">
       <span>分享总数</span>
@@ -130,4 +162,28 @@
   </section>
 </div>
 
+<div
+  id="homepage-access-confirm"
+  class="admin-modal"
+  role="alertdialog"
+  aria-modal="true"
+  aria-labelledby="homepage-access-confirm-title"
+  aria-describedby="homepage-access-confirm-description homepage-access-confirm-status"
+  aria-busy="false"
+  hidden
+>
+  <div class="admin-modal-backdrop" aria-hidden="true"></div>
+  <div class="admin-modal-content" tabindex="-1">
+    <h3 id="homepage-access-confirm-title">确认公开首页</h3>
+    <p id="homepage-access-confirm-description">关闭密码后，任何访客都可以进入首页并创建分享。管理后台仍会继续要求独立密码。</p>
+    <p class="admin-modal-warning">公开模式会立即对新的匿名请求生效。</p>
+    <p id="homepage-access-confirm-status" class="admin-modal-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p>
+    <div class="admin-modal-actions">
+      <button type="button" class="cyber-btn cyber-btn-secondary" id="homepage-access-cancel">取消</button>
+      <button type="button" class="cyber-btn" id="homepage-access-confirm-button">确认公开</button>
+    </div>
+  </div>
+</div>
+
+<script src="/js/admin-settings.js"></script>
 <%- include('partials/footer', { page }) %>

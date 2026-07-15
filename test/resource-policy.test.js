@@ -142,6 +142,12 @@ test('each trusted route loads only the scripts it uses', async () => {
   assert.doesNotMatch(apiPage.text, /src="\/js\/main\.js"/);
   assertNoHighlightAssets(apiPage.text);
 
+  assert.match(statsPage.text, /src="\/js\/admin-settings\.js"/);
+  for (const response of [homepage, loginPage, passwordPage, errorPage, auditPage, apiPage]) {
+    assert.doesNotMatch(response.text, /src="\/js\/admin-settings\.js"/);
+  }
+  assertNoInlineExecutableScript(statsPage.text);
+
   for (const response of [homepage, loginPage, passwordPage, errorPage, statsPage, auditPage, apiPage]) {
     assert.match(response.text, /src="\/js\/theme\.js"/);
     assert.match(response.text, /font-awesome/);

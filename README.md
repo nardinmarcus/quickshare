@@ -79,8 +79,10 @@ DESIGN.md         后台 UI 设计稿
 
 系统有两层独立认证：
 
-- **前端登录**（`/login`）：控制首页创建分享功能。
+- **前端登录**（`/login`）：当后台开关为“需要密码”时，控制首页、浏览器创建和预览。
 - **管理后台**（`/admin/login`）：控制 pages 管理、统计面板和审计日志。
+
+管理后台的 `/admin/stats` 提供“首页访问控制”开关。公开模式只匿名开放 `GET /`、`POST /api/pages/create` 和 `POST /api/pages/preview`，两个写接口仍要求同源 `Origin`；管理后台、Share API、近期列表、保护状态修改和单个分享密码边界不变。开关以 Postgres 为唯一真值，读取失败时返回 `503`，不会降级为公开。
 
 分享页会以 sandbox iframe 呈现用户内容，默认允许脚本执行，但不允许 iframe 拥有父页面同源权限。这样能保留 HTML 预览能力，同时避免分享内容直接读取管理页面 DOM 或同源 cookie。
 

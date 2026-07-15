@@ -45,10 +45,13 @@ function createFakePool(initialApplied = []) {
   };
 }
 
-test('baseline migration contains every runtime table, column, and index', () => {
+test('migrations contain every runtime table, column, index, and site setting', () => {
   const migrations = loadMigrations();
 
-  assert.deepEqual(migrations.map(migration => migration.name), ['001_baseline.sql']);
+  assert.deepEqual(migrations.map(migration => migration.name), [
+    '001_baseline.sql',
+    '002_site_settings.sql'
+  ]);
   assert.match(migrations[0].sql, /CREATE TABLE IF NOT EXISTS public\.pages/i);
   assert.match(migrations[0].sql, /ADD COLUMN IF NOT EXISTS password_hash/i);
   assert.match(migrations[0].sql, /ADD COLUMN IF NOT EXISTS encrypted_password/i);
@@ -61,6 +64,10 @@ test('baseline migration contains every runtime table, column, and index', () =>
   assert.match(migrations[0].sql, /idx_audit_logs_created_at/i);
   assert.match(migrations[0].sql, /idx_audit_logs_page_id/i);
   assert.match(migrations[0].sql, /idx_api_keys_created_at/i);
+  assert.match(migrations[1].sql, /CREATE TABLE public\.site_settings/i);
+  assert.match(migrations[1].sql, /homepage_password_required BOOLEAN NOT NULL DEFAULT TRUE/i);
+  assert.match(migrations[1].sql, /CHECK \(id = 1\)/i);
+  assert.match(migrations[1].sql, /ON CONFLICT \(id\) DO NOTHING/i);
 });
 
 test('migration runner applies pending files once and releases its client', async () => {
@@ -75,11 +82,13 @@ test('migration runner applies pending files once and releases its client', asyn
     }
   });
   const second = await runMigrations(fake.pool, { logger: { info() {} } });
-  const migrationSql = loadMigrations()[0].sql.trim();
+  const migrationSql = loadMigrations().map(migration => migration.sql.trim());
 
-  assert.deepEqual(first, { applied: ['001'], skipped: [] });
-  assert.deepEqual(second, { applied: [], skipped: ['001'] });
-  assert.equal(fake.queries.filter(query => query.sql === migrationSql).length, 1);
+  assert.deepEqual(first, { applied: ['001', '002'], skipped: [] });
+  assert.deepEqual(second, { applied: [], skipped: ['001', '002'] });
+  for (const sql of migrationSql) {
+    assert.equal(fake.queries.filter(query => query.sql === sql).length, 1);
+  }
   assert.equal(fake.queries.some(query => query.sql === 'BEGIN'), true);
   assert.equal(fake.queries.some(query => query.sql === 'COMMIT'), true);
   assert.equal(commitWasVisibleWhenLogged, true);

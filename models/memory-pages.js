@@ -34,10 +34,45 @@ class MemoryPageRepository {
     this.auditLogs = [];
     this.auditIdCounter = 0;
     this.apiKeys = new Map();
+    this.homepagePasswordRequired = true;
   }
 
   async init() {
     return true;
+  }
+
+  async getHomepagePasswordRequired() {
+    if (typeof this.homepagePasswordRequired !== 'boolean') {
+      throw new Error('Homepage access setting is unavailable');
+    }
+
+    return this.homepagePasswordRequired;
+  }
+
+  async setHomepagePasswordRequired({ passwordRequired, ip }) {
+    if (typeof passwordRequired !== 'boolean') {
+      throw new TypeError('passwordRequired must be a boolean');
+    }
+
+    const previousValue = this.homepagePasswordRequired;
+
+    if (typeof previousValue !== 'boolean') {
+      throw new Error('Homepage access setting is unavailable');
+    }
+
+    if (previousValue === passwordRequired) {
+      return { passwordRequired, changed: false };
+    }
+
+    await this.createAuditLog({
+      action: 'settings.homepage_password_required.update',
+      pageId: null,
+      details: JSON.stringify({ from: previousValue, to: passwordRequired }),
+      ip
+    });
+    this.homepagePasswordRequired = passwordRequired;
+
+    return { passwordRequired, changed: true };
   }
 
   async create(page) {

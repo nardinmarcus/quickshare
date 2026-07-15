@@ -38,7 +38,7 @@ test('baseline migration handles empty and legacy databases idempotently', async
   try {
     await resetPublicSchema(pool);
     const emptyResult = await runMigrations(pool, { logger: { info() {} } });
-    assert.deepEqual(emptyResult, { applied: ['001'], skipped: [] });
+    assert.deepEqual(emptyResult, { applied: ['001', '002'], skipped: [] });
 
     const emptyTables = await pool.query(`
       SELECT table_name
@@ -50,8 +50,17 @@ test('baseline migration handles empty and legacy databases idempotently', async
       'api_keys',
       'audit_logs',
       'pages',
-      'quickshare_schema_migrations'
+      'quickshare_schema_migrations',
+      'site_settings'
     ]);
+
+    const defaultSettings = await pool.query(
+      'SELECT id, homepage_password_required FROM site_settings'
+    );
+    assert.deepEqual(defaultSettings.rows, [{
+      id: 1,
+      homepage_password_required: true
+    }]);
 
     await resetPublicSchema(pool);
     await pool.query(`
@@ -80,8 +89,8 @@ test('baseline migration handles empty and legacy databases idempotently', async
     );
     const migrationCount = await pool.query('SELECT COUNT(*)::int AS count FROM quickshare_schema_migrations');
 
-    assert.deepEqual(legacyResult, { applied: ['001'], skipped: [] });
-    assert.deepEqual(repeatedResult, { applied: [], skipped: ['001'] });
+    assert.deepEqual(legacyResult, { applied: ['001', '002'], skipped: [] });
+    assert.deepEqual(repeatedResult, { applied: [], skipped: ['001', '002'] });
     assert.deepEqual(sentinel.rows, [{
       id: 'sentinel',
       html_content: '<h1>Keep me</h1>',
@@ -89,7 +98,7 @@ test('baseline migration handles empty and legacy databases idempotently', async
       title: 'Sentinel',
       view_count: '0'
     }]);
-    assert.equal(migrationCount.rows[0].count, 1);
+    assert.equal(migrationCount.rows[0].count, 2);
   } finally {
     await pool.end();
   }
@@ -116,6 +125,33 @@ test('incompatible legacy schema rolls back the migration transaction', async ()
 
     assert.equal(migrationTable.rows[0].name, null);
     assert.equal(idType.rows[0].data_type, 'integer');
+  } finally {
+    await pool.end();
+  }
+});
+
+test('site settings migration rejects an unexpected existing table', async () => {
+  const pool = createPostgresPool(connectionString, { env, max: 1 });
+
+  try {
+    await resetPublicSchema(pool);
+    await pool.query(`
+      CREATE TABLE site_settings (
+        id SMALLINT PRIMARY KEY,
+        homepage_password_required BOOLEAN NOT NULL DEFAULT TRUE,
+        updated_at BIGINT NOT NULL
+      )
+    `);
+
+    await assert.rejects(
+      runMigrations(pool, { logger: { info() {} } }),
+      /relation "site_settings" already exists/i
+    );
+
+    const migrationTable = await pool.query(
+      "SELECT to_regclass('public.quickshare_schema_migrations') AS name"
+    );
+    assert.equal(migrationTable.rows[0].name, null);
   } finally {
     await pool.end();
   }
@@ -233,6 +269,76 @@ test('view events atomically enforce page availability without loading content',
       { id: 'protected', view_count: '1' }
     ]);
   } finally {
+    await pool.end();
+  }
+});
+
+test('site settings persist real transitions and audit them exactly once', async () => {
+  const pool = createPostgresPool(connectionString, { env, max: 1 });
+  const repository = Object.create(PostgresPageRepository.prototype);
+  repository.pool = pool;
+
+  try {
+    await resetPublicSchema(pool);
+    await runMigrations(pool, { logger: { info() {} } });
+
+    assert.equal(await repository.getHomepagePasswordRequired(), true);
+
+    const changed = await repository.setHomepagePasswordRequired({
+      passwordRequired: false,
+      ip: '203.0.113.21'
+    });
+    const unchanged = await repository.setHomepagePasswordRequired({
+      passwordRequired: false,
+      ip: '203.0.113.22'
+    });
+
+    assert.deepEqual(changed, { passwordRequired: false, changed: true });
+    assert.deepEqual(unchanged, { passwordRequired: false, changed: false });
+    assert.equal(await repository.getHomepagePasswordRequired(), false);
+
+    const repeatedMigration = await runMigrations(pool, { logger: { info() {} } });
+    assert.deepEqual(repeatedMigration, { applied: [], skipped: ['001', '002'] });
+    assert.equal(await repository.getHomepagePasswordRequired(), false);
+
+    const logs = await repository.listAuditLogs();
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].action, 'settings.homepage_password_required.update');
+    assert.deepEqual(JSON.parse(logs[0].details), { from: true, to: false });
+    assert.equal(logs[0].ip, '203.0.113.21');
+  } finally {
+    await pool.end();
+  }
+});
+
+test('site setting changes roll back when the audit record cannot be written', async () => {
+  const pool = createPostgresPool(connectionString, { env, max: 1 });
+  const repository = Object.create(PostgresPageRepository.prototype);
+  repository.pool = pool;
+
+  try {
+    await resetPublicSchema(pool);
+    await runMigrations(pool, { logger: { info() {} } });
+    await pool.query(`
+      ALTER TABLE audit_logs
+      ADD CONSTRAINT reject_homepage_setting_audit
+      CHECK (action <> 'settings.homepage_password_required.update')
+    `);
+
+    await assert.rejects(
+      repository.setHomepagePasswordRequired({
+        passwordRequired: false,
+        ip: '203.0.113.23'
+      }),
+      /reject_homepage_setting_audit/
+    );
+
+    assert.equal(await repository.getHomepagePasswordRequired(), true);
+    assert.equal(await repository.countAuditLogs(), 0);
+  } finally {
+    await pool.query(
+      'ALTER TABLE IF EXISTS audit_logs DROP CONSTRAINT IF EXISTS reject_homepage_setting_audit'
+    ).catch(() => {});
     await pool.end();
   }
 });

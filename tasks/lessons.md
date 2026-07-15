@@ -110,3 +110,14 @@
 - If a handoff names concrete unfinished steps such as commit and deploy, then `OK`, `move on`, or `开始干活` means continue those steps unless the user redirects the task.
 - Do not turn a terse continuation into a conversational close and force the user to repeat the remaining work.
 - State the inferred next action briefly, then execute through the same verification boundary already established for the repository.
+
+## 2026-07-15: Keep each TDD tracer bullet behaviorally minimal
+
+- Do not pre-implement a later behavior, even when its shape is obvious; first preserve a focused failing test for the current behavior.
+- Add idempotency, rollback, and validation one failing assertion at a time so each green transition proves the intended production path.
+- When an anticipated behavior slips in early, remove it, restore the red state, and then reintroduce it only after the corresponding test fails for the expected reason.
+
+## 2026-07-15: Use the integration harness contract, not the runtime contract
+
+- The disposable Postgres suite is intentionally gated by `POSTGRES_TEST_URL`; passing only `DATABASE_URL` means the harness must fail before touching a database.
+- Reuse the exact integration command established by the test file, and distinguish an environment-contract failure from a product or migration failure.

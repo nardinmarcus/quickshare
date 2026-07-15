@@ -1691,6 +1691,90 @@ body:hover::-webkit-scrollbar,
   line-height: 1.55;
 }
 
+.admin-access-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(250px, auto);
+  align-items: center;
+  gap: 1.5rem;
+  border-color: rgba(var(--primary-rgb), 0.18);
+}
+
+.admin-access-copy {
+  min-width: 0;
+}
+
+.admin-access-kicker {
+  margin-bottom: 0.35rem;
+  color: var(--primary);
+  font-family: 'Fira Code', ui-monospace, monospace;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.admin-access-copy h2 {
+  margin-bottom: 0.4rem;
+  color: var(--text-primary);
+  font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+  font-size: 1.1rem;
+}
+
+.admin-access-copy > p:last-child {
+  max-width: 680px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.admin-access-control {
+  display: grid;
+  justify-items: end;
+  gap: 0.35rem;
+}
+
+.admin-access-control .admin-toggle-label {
+  justify-content: flex-end;
+  padding: 0.15rem 0;
+}
+
+.admin-access-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 28px;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid rgba(var(--primary-rgb), 0.3);
+  border-radius: 999px;
+  background: rgba(var(--primary-rgb), 0.08);
+  color: var(--primary);
+  font-family: 'Fira Code', ui-monospace, monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.admin-access-state[data-state="public"] {
+  border-color: rgba(var(--success-color-rgb), 0.35);
+  background: rgba(var(--success-color-rgb), 0.1);
+  color: var(--success-color);
+}
+
+.admin-access-status {
+  min-height: 1.4em;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  text-align: right;
+}
+
+.admin-access-status.is-error {
+  color: var(--error-text);
+}
+
+.admin-access-control .admin-toggle-label:has(input:disabled) {
+  cursor: wait;
+  opacity: 0.68;
+}
+
 .admin-metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2461,6 +2545,23 @@ body:hover::-webkit-scrollbar,
   .admin-metric-grid,
   .admin-dashboard-grid {
     grid-template-columns: 1fr;
+  }
+
+  .admin-access-card {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .admin-access-control {
+    justify-items: start;
+  }
+
+  .admin-access-control .admin-toggle-label {
+    justify-content: flex-start;
+  }
+
+  .admin-access-status {
+    text-align: left;
   }
 
   .admin-pagination {

@@ -130,6 +130,30 @@ test('statistics include text equivalents for every visual chart', async () => {
   assert.match(stats.text, /最近 14 天/);
 });
 
+test('homepage access control exposes an accessible switch, live state, and confirmation dialog', async () => {
+  const stats = await adminRequest('/admin/stats');
+  const settingsScript = fs.readFileSync(
+    path.join(__dirname, '../public/js/admin-settings.js'),
+    'utf8'
+  );
+  const css = fs.readFileSync(path.join(__dirname, '../public/css/styles.css'), 'utf8');
+
+  assert.match(stats.text, /id="homepage-access-toggle"[^>]+role="switch"/);
+  assert.match(stats.text, /id="homepage-access-status"[^>]+role="status"[^>]+aria-live="polite"/);
+  assert.match(stats.text, /id="homepage-access-confirm"[^>]+role="alertdialog"[^>]+aria-modal="true"/);
+  assert.match(stats.text, /id="homepage-access-confirm-status"[^>]+role="status"[^>]+aria-live="polite"/);
+  assert.match(stats.text, /src="\/js\/admin-settings\.js"/);
+  assert.match(settingsScript, /fetch\('\/admin\/settings\/homepage-access'/);
+  assert.match(settingsScript, /event\.key !== 'Tab'/);
+  assert.match(settingsScript, /event\.key === 'Escape'/);
+  assert.match(settingsScript, /lastFocusedElement\.focus\(\)/);
+  assert.match(settingsScript, /modal\.getAttribute\('aria-busy'\) === 'true'/);
+  assert.match(settingsScript, /toggle\.disabled = true/);
+  assert.match(css, /\.admin-access-card\s*\{[^}]*grid-template-columns:/s);
+  assert.match(css, /\.admin-access-state\[data-state="public"\]/);
+  assert.match(css, /@media \(max-width: 768px\)[\s\S]*?\.admin-access-card\s*\{[^}]*grid-template-columns:\s*1fr/s);
+});
+
 test('detail tabs expose complete relationships and keyboard-ready state', async () => {
   const detail = await adminRequest('/admin/pages/admin-accessibility');
 

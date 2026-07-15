@@ -117,6 +117,19 @@ function privateNoStore(req, res, next) {
   return next();
 }
 
+function parseSettingsJson(req, res, next) {
+  return parseSmallJson(req, res, (error) => {
+    if (error?.type === 'entity.parse.failed') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid JSON body'
+      });
+    }
+
+    return next(error);
+  });
+}
+
 function isTrustedUiPath(pathname) {
   return /^\/login\/?$/i.test(pathname) || /^\/admin(?:\/|$)/i.test(pathname);
 }
@@ -277,19 +290,100 @@ function getDashboardAdminSession(req) {
   };
 }
 
-function requireAdmin(req, res, next) {
+async function getHomepageAccessMode() {
+  const passwordRequired = await pageRepository.getHomepagePasswordRequired();
+
+  if (typeof passwordRequired !== 'boolean') {
+    throw new Error('Homepage access setting is unavailable');
+  }
+
+  return passwordRequired ? 'locked' : 'public';
+}
+
+async function requireHomepageAccess(req, res, next) {
   if (!config.authEnabled) {
+    req.homepageAccessMode = 'auth-disabled';
     return next();
   }
 
-  const session = getAdminSession(req);
+  try {
+    req.homepageAccessMode = await getHomepageAccessMode();
 
-  if (!session) {
-    return res.redirect('/login');
+    if (req.homepageAccessMode === 'public') {
+      return next();
+    }
+
+    const session = getAdminSession(req);
+
+    if (!session) {
+      return res.redirect('/login');
+    }
+
+    req.adminSession = session;
+    return next();
+  } catch (error) {
+    console.error('Homepage access check failed:', error);
+    return res.status(503).render('error', {
+      title: 'Service Unavailable',
+      page: 'error-page',
+      message: '首页访问设置暂时不可用，请稍后重试'
+    });
+  }
+}
+
+async function requireBrowserPublishAccess(req, res, next) {
+  if (!config.authEnabled) {
+    req.homepageAccessMode = 'auth-disabled';
+    return next();
   }
 
-  req.adminSession = session;
-  return next();
+  try {
+    req.homepageAccessMode = await getHomepageAccessMode();
+
+    if (req.homepageAccessMode === 'public') {
+      if (!isSameOriginRequest(req)) {
+        return res.status(403).json({
+          success: false,
+          error: 'Invalid request origin'
+        });
+      }
+
+      return next();
+    }
+
+    const session = getAdminSession(req);
+
+    if (!session) {
+      return res.status(401).json({
+        success: false,
+        error: 'Unauthorized'
+      });
+    }
+
+    req.adminSession = session;
+    return next();
+  } catch (error) {
+    console.error('Browser publish access check failed:', error);
+    return res.status(503).json({
+      success: false,
+      error: 'Homepage access setting is unavailable'
+    });
+  }
+}
+
+function requireBrowserPublishCsrf(req, res, next) {
+  if (req.homepageAccessMode === 'locked') {
+    return requireCsrf(req, res, next);
+  }
+
+  if (req.homepageAccessMode === 'public' || req.homepageAccessMode === 'auth-disabled') {
+    return next();
+  }
+
+  return res.status(503).json({
+    success: false,
+    error: 'Homepage access setting is unavailable'
+  });
 }
 
 function requireApiAdmin(req, res, next) {
@@ -319,6 +413,24 @@ function requireDashboardAdmin(req, res, next) {
 
   if (!session) {
     return res.redirect('/admin/login');
+  }
+
+  req.dashboardAdminSession = session;
+  return next();
+}
+
+function requireDashboardApiAdmin(req, res, next) {
+  if (!config.authEnabled) {
+    return next();
+  }
+
+  const session = getDashboardAdminSession(req);
+
+  if (!session) {
+    return res.status(401).json({
+      success: false,
+      error: 'Unauthorized'
+    });
   }
 
   req.dashboardAdminSession = session;
@@ -863,13 +975,13 @@ app.get('/admin/logout', (req, res) => {
   return res.redirect('/admin/login');
 });
 
-app.get('/', requireAdmin, (req, res) => {
+app.get('/', privateNoStore, requireHomepageAccess, (req, res) => {
   const sessionToken = req.adminSession?.token || req.cookies?.[ADMIN_COOKIE] || '';
 
   return res.render('index', {
     title: 'QuickShare | 粘贴代码，一键分享',
     page: 'home-page',
-    csrfToken: config.authEnabled ? createCsrfToken(sessionToken) : ''
+    csrfToken: req.homepageAccessMode === 'locked' ? createCsrfToken(sessionToken) : ''
   });
 });
 
@@ -1067,14 +1179,65 @@ app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
   }
 });
 
+app.put('/admin/settings/homepage-access', requireDashboardApiAdmin, parseSettingsJson, requireDashboardCsrf, async (req, res) => {
+  if (typeof req.body?.passwordRequired !== 'boolean') {
+    return res.status(400).json({
+      success: false,
+      error: 'passwordRequired must be a boolean'
+    });
+  }
+
+  try {
+    const result = await pageRepository.setHomepagePasswordRequired({
+      passwordRequired: req.body.passwordRequired,
+      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+    });
+
+    return res.json({
+      success: true,
+      passwordRequired: result.passwordRequired,
+      changed: result.changed
+    });
+  } catch (error) {
+    console.error('Update homepage access setting failed:', error);
+    return res.status(503).json({
+      success: false,
+      error: 'Homepage access setting is unavailable'
+    });
+  }
+});
+
 app.get('/admin/stats', requireDashboardAdmin, async (req, res) => {
   try {
-    const stats = enrichAdminStats(await pageRepository.getAdminStats());
+    const [statsResult, settingsResult] = await Promise.allSettled([
+      pageRepository.getAdminStats(),
+      pageRepository.getHomepagePasswordRequired()
+    ]);
+    const homepagePasswordRequired = settingsResult.value;
+
+    if (settingsResult.status === 'rejected' || typeof homepagePasswordRequired !== 'boolean') {
+      console.error('Admin homepage access setting failed:', settingsResult.reason || new Error('Invalid setting value'));
+      return res.status(503).render('error', {
+        title: 'Service Unavailable',
+        page: 'error-page',
+        message: '首页访问设置暂时不可用，请稍后重试'
+      });
+    }
+
+    if (statsResult.status === 'rejected') {
+      throw statsResult.reason;
+    }
+
+    const statsData = statsResult.value;
+    const stats = enrichAdminStats(statsData);
+    const sessionToken = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE] || '';
 
     return res.render('admin-stats', {
       title: 'QuickShare | 数据统计',
       page: 'admin-stats',
-      stats
+      stats,
+      homepagePasswordRequired,
+      csrfToken: config.authEnabled ? createCsrfToken(sessionToken) : ''
     });
   } catch (error) {
     console.error('Admin stats failed:', error);
@@ -1350,7 +1513,7 @@ app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requir
   }
 });
 
-app.post('/api/pages/create', privateNoStore, requireApiAdmin, parseShareJson, requireCsrf, async (req, res) => {
+app.post('/api/pages/create', privateNoStore, requireBrowserPublishAccess, parseShareJson, requireBrowserPublishCsrf, async (req, res) => {
   try {
     const result = await createPageFromInput(req.body);
 
@@ -1388,7 +1551,7 @@ app.post('/api/pages/create', privateNoStore, requireApiAdmin, parseShareJson, r
   }
 });
 
-app.post('/api/pages/preview', privateNoStore, requireApiAdmin, parseShareJson, requireCsrf, async (req, res) => {
+app.post('/api/pages/preview', privateNoStore, requireBrowserPublishAccess, parseShareJson, requireBrowserPublishCsrf, async (req, res) => {
   try {
     const { htmlContent, codeType, markdownTheme, title, description } = req.body || {};
 

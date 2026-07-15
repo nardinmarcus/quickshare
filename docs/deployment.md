@@ -20,8 +20,9 @@ npm run hash-password -- "your-admin-password"
 ```
 
 说明：
-- 系统有两层独立认证：**前端登录**（`/login`，控制首页创建分享）和**管理后台**（`/admin/login`，控制 pages/stats/audit）。
+- 系统有两层独立认证：**前端登录**（`/login`，在首页开关为“需要密码”时控制首页创建/预览）和**管理后台**（`/admin/login`，控制 pages/stats/audit）。
 - `ADMIN_PASSWORD_HASH` 控制前端登录，`ADMIN_DASHBOARD_PASSWORD_HASH` 控制管理后台；生产只接受 `npm run hash-password` 生成的 scrypt hash，明文变量仅限本地开发。
+- 生产必须保持 `AUTH_ENABLED=true`。是否要求首页密码由 `/admin/stats` 的持久化开关控制；不要用 `AUTH_ENABLED=false` 代替该开关，因为它会关闭全部认证边界。
 - `DATABASE_URL` 使用运行时 pooled URL。应用运行时不需要 schema owner 权限。
 - direct owner URL 只允许在可信迁移主机或 CI job 中临时注入 `npm run db:migrate`，不要保存到 Vercel、应用容器或其他长期运行环境。迁移命令优先读取 `DATABASE_MIGRATION_URL`，也识别 `DATABASE_URL_UNPOOLED` 或 `POSTGRES_URL_NON_POOLING`；连接统一使用 `sslmode=verify-full`。
 - `SESSION_SECRET` 用于签名所有认证 cookie 和 CSRF token，必须是至少 32 bytes 的随机值，且不能使用示例占位符。
@@ -40,7 +41,7 @@ npm run hash-password -- "your-admin-password"
    ```
 
    首次执行应列出 applied；紧接着的第二次必须全部 skipped。命令结束后立即移除该 job 的 secret 和环境变量。
-4. 核对 `public.quickshare_schema_migrations`、三张业务表、记录数和索引。
+4. 核对 `public.quickshare_schema_migrations`、`pages`、`audit_logs`、`api_keys`、`site_settings`、记录数和索引。`site_settings.id=1` 必须存在，且新迁移后的 `homepage_password_required=true`。
 5. 部署应用并完成下方 smoke。
 
 全新空库直接按 1–5 执行，不需要备份步骤。已有数据的升级应先创建 provider branch、PITR 检查点或等价备份，保持旧应用在线完成迁移与核对，再部署新代码。
@@ -48,7 +49,7 @@ npm run hash-password -- "your-admin-password"
 ### 回滚与恢复
 
 - 迁移命令在 `COMMIT` 前失败：整批事务自动回滚，不会留下迁移记录；修正原因后重跑即可，无需数据恢复。
-- 新代码部署后需要回滚：重新部署上一稳定版本；当前迁移只做兼容性新增，保留新增列和迁移记录。
+- 新代码部署后需要回滚：先在后台把首页切回“需要密码”，再重新部署上一稳定版本；当前迁移只做兼容性新增，保留 `site_settings` 和迁移记录。
 - `COMMIT` 后确认发生数据异常：先停止写入，再从迁移前的 provider branch / PITR 检查点恢复到新分支；核对表结构和记录数后才切换运行时连接。不要在未核验的生产主库上直接覆盖恢复。
 
 ### 验证清单
@@ -61,6 +62,9 @@ npm run hash-password -- "your-admin-password"
 - 分享内容在 sandbox iframe 中渲染。
 - 未登录无法调用管理写接口。
 - `/admin/stats` 统计面板正常加载。
+- `/admin/stats` 显示真实的首页访问状态；关闭密码前出现确认框，取消不会写入。
+- 切到公开模式后，匿名 `GET /` 成功，同源创建/预览成功，缺失或跨源 `Origin` 返回 403。
+- 切回需要密码后，新匿名请求立即受限，已有有效首页会话仍可用至过期。
 - `/admin/pages` 页面列表分页/搜索/过滤正常。
 - `POST /api/v1/share` 带有效 `X-API-Key` 可创建分享并返回 URL。
 - `POST /api/v1/share` 不带或带错误 key 返回 401。
@@ -160,7 +164,7 @@ direct owner URL 不进入以上容器运行时环境；在启动或升级容器
 |---|---|---|
 | `NODE_ENV` | 是 | `production` / `development` / `test` |
 | `PORT` | 否 | 默认 5678（dev）/ 3000（prod） |
-| `AUTH_ENABLED` | 否 | 默认 `true`，设为 `false` 关闭所有认证 |
+| `AUTH_ENABLED` | 否 | 默认 `true`；设为 `false` 会关闭所有认证，仅限本地或受控环境，不能用于切换首页公开状态 |
 | `AUTH_PASSWORD` | 否 | 明文前端密码，仅开发环境 |
 | `ADMIN_PASSWORD_HASH` | 生产环境 | 前端密码 hash，优先于 `AUTH_PASSWORD` |
 | `ADMIN_DASHBOARD_PASSWORD` | 否 | 明文管理后台密码，仅开发环境（默认 `dashboard123`） |

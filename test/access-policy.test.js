@@ -253,3 +253,23 @@ test('creation rejects malformed or non-future expiry values', async () => {
     assert.equal(response.body.error, '到期时间必须晚于当前时间');
   }
 });
+
+test('AUTH_ENABLED=false bypasses the homepage setting lookup for development flows', async () => {
+  app.locals.pageRepository.homepagePasswordRequired = null;
+
+  try {
+    const homepage = await request('/');
+    const create = await jsonRequest('/api/pages/create', 'POST', {
+      htmlContent: '<h1>Auth disabled create</h1>'
+    });
+    const preview = await jsonRequest('/api/pages/preview', 'POST', {
+      htmlContent: '<h1>Auth disabled preview</h1>'
+    });
+
+    assert.equal(homepage.status, 200);
+    assert.equal(create.status, 200);
+    assert.equal(preview.status, 200);
+  } finally {
+    app.locals.pageRepository.homepagePasswordRequired = true;
+  }
+});
