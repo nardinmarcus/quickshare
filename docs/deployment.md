@@ -90,6 +90,8 @@ npm run hash-password -- "your-admin-password"
 - PostgreSQL 正常路径使用一条带过期和保护条件的 `UPDATE`，不会再次读取 `html_content` 或密码字段；失败路径仅查询 `is_protected` 和 `expires_at` 来确定状态。
 - 浏览量属于近似产品分析：禁用 JavaScript、页面在上报前关闭或网络失败时可能漏记。不要把它用于计费或安全审计，也不要把运行时缓存当作计数真相。
 
+静态文件的五分钟浏览器缓存策略同时配置在 Express 和 `vercel.json`。Vercel 会直接托管 `public/` 文件并绕过 Express 静态中间件，因此每次改动该策略后都要检查部署 URL 的真实响应头。
+
 ### 本地预检
 
 ```bash

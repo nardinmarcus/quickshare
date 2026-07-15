@@ -259,7 +259,7 @@ Verify:
 4. Browser console, upload, render, admin, light/dark, and mobile smoke tests pass.
 5. CSP reports no required resource violations.
 
-WP10 verification (2026-07-15): trusted routes load only their owned scripts, static resources revalidate with a five-minute browser cache, and login/admin CSP is enforced without constraining shared `srcdoc` content. Node and Chromium smoke checks passed, including parent-frame isolation for executable shared HTML.
+WP10 verification (2026-07-15): trusted routes load only their owned scripts, static resources revalidate with a five-minute browser cache in both Express and Vercel edge configuration, and login/admin CSP is enforced without constraining shared `srcdoc` content. Node and Chromium smoke checks passed, including parent-frame isolation for executable shared HTML; exact deployed headers are checked before promotion.
 
 Estimated engineering effort: 3–5 focused days plus a representative 3–7 day measurement window.
 

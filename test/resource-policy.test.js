@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const http = require('node:http');
+const path = require('node:path');
 
 process.env.NODE_ENV = 'test';
 process.env.AUTH_ENABLED = 'true';
@@ -190,6 +192,22 @@ test('static assets and the conventional favicon use bounded revalidation cachin
   assert.equal(head.status, 200);
   assert.equal(head.body.length, 0);
   assert.equal(head.headers.etag, favicon.headers.etag);
+});
+
+test('Vercel applies the same bounded cache policy to platform-served assets', () => {
+  const vercelConfig = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '../vercel.json'), 'utf8')
+  );
+  const expectedSources = ['/css/(.*)', '/js/(.*)', '/icon/(.*)', '/favicon.ico'];
+
+  for (const source of expectedSources) {
+    const rule = vercelConfig.headers?.find((candidate) => candidate.source === source);
+    const cacheControl = rule?.headers?.find((header) => (
+      header.key.toLowerCase() === 'cache-control'
+    ));
+
+    assert.equal(cacheControl?.value, 'public, max-age=300, must-revalidate', source);
+  }
 });
 
 test('enforced CSP protects trusted UI without constraining share content or preview', async () => {

@@ -76,3 +76,8 @@
 - Moving a write out of the HTML response is not enough if the event endpoint reloads the full page body; use a conditional update and project only the state needed for rejected events.
 - Treat preview or monitoring query parameters as user-controlled input. Any analytics bypass must also verify the corresponding authenticated session.
 - Verify browser event paths through the real API boundary: confirm Origin, protected-page cookies, the local reporter asset, and the final `204`, not only mocked JavaScript calls.
+
+## 2026-07-15 — Verify static headers at the platform edge
+
+- Vercel can serve files from `public/` before a request reaches Express, so middleware cache headers are not proof of the deployed response.
+- Mirror platform-served static policies in `vercel.json`, lock them with a config test, and inspect the exact canary deployment before promotion.
