@@ -81,3 +81,8 @@
 
 - Vercel can serve files from `public/` before a request reaches Express, so middleware cache headers are not proof of the deployed response.
 - Mirror platform-served static policies in `vercel.json`, lock them with a config test, and inspect the exact canary deployment before promotion.
+
+## 2026-07-15 — Treat multi-worktree merge exits as ambiguous
+
+- `gh pr merge` can complete the remote merge and then exit non-zero when local branch cleanup tries to check out a base branch already owned by another worktree.
+- In a multi-worktree repository, pass `--repo` to keep the operation remote-only. After any non-zero merge result, inspect the PR and remote main before retrying or changing branches.
