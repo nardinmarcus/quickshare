@@ -121,3 +121,8 @@
 
 - The disposable Postgres suite is intentionally gated by `POSTGRES_TEST_URL`; passing only `DATABASE_URL` means the harness must fail before touching a database.
 - Reuse the exact integration command established by the test file, and distinguish an environment-contract failure from a product or migration failure.
+
+## 2026-07-16: Exercise authenticated preview routes through their full browser boundary
+
+- When a route requires a signed session, same-origin request, and CSRF token, build its regression test from the rendered page token instead of bypassing one layer of the contract.
+- A `403` from an incomplete test request is harness evidence, not a product regression; correct the request and rerun the unchanged product assertion.

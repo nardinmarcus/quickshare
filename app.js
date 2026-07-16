@@ -42,12 +42,12 @@ const EMBEDDABLE_UI_CSP = [
   "default-src 'self'",
   "base-uri 'none'",
   "object-src 'none'",
-  "script-src 'self'",
+  "script-src 'self' https://umami.namooca.com",
   "script-src-attr 'none'",
   "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com",
   "font-src 'self' data: https://cdnjs.cloudflare.com https://fonts.gstatic.com",
   "img-src 'self' data:",
-  "connect-src 'self'",
+  "connect-src 'self' https://umami.namooca.com",
   "form-action 'self'",
   "frame-src 'self'"
 ].join('; ');
@@ -784,6 +784,7 @@ function renderSandboxedDocument(renderedContent, contentType, {
       <meta name="twitter:card" content="summary">
       <meta name="twitter:title" content="${pageTitle}">
       <meta name="twitter:description" content="${ogDescription}">
+      ${pageUrl ? '<script defer src="https://umami.namooca.com/script.js" data-website-id="c5b79d49-f1e7-46c1-87c7-b2965383c820"></script>' : ''}
       <style>
         html, body {
           width: 100%;

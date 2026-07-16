@@ -570,3 +570,12 @@ Verify:
 - Browser evidence: locked/cancel/public preview/public publish/relock/retained-session flows passed in Chromium; 375px layout had no page overflow, focus returned correctly after Esc, and console/page errors were empty.
 - Migration evidence: production preflight contained migration `001` and 181 pages; the first migration run applied only `002_site_settings.sql`, the second applied zero and skipped both versions. Postflight preserved the original table counts and created singleton `id=1` in locked mode over an encrypted client connection.
 - Production deployment and rollback evidence: Vercel deployment `dpl_EHWtTQZTbCQ4DmMcYJz7LHULxtKp` reached `READY` and was aliased to `quickshare.namooca.com`. The authenticated admin UI switched public, a clean anonymous browser previewed and published share `SK8pjKzfUtOR`, missing/cross-origin requests returned `403`, and admin/recent/Share API boundaries stayed locked. A live relock redirected a clean session while retaining an existing homepage session, then the admin UI restored public mode. Database readback ended at `homepage_password_required=false` with exactly three ordered setting-transition audits; Vercel error/fatal/5xx scans were empty and the enabled 20-per-60-second sensitive-write firewall rule had no draft changes.
+
+## Umami analytics integration
+
+- [x] Load the provided Umami tracker once on EJS-rendered site pages.
+- [x] Track real `/view/:id` pages without injecting analytics into preview documents or shared `srcdoc` content.
+- [x] Allow the Umami script and event endpoint through the trusted-page CSP.
+- [x] Verify the tracker markup, preview exclusion, CSP, and full test suite.
+
+Review (2026-07-16): the supplied tracker is present once on shared EJS pages and real share wrappers, while generated previews remain untracked. Trusted-page CSP permits only the exact Umami origin for scripts and event delivery. `node --test test/resource-policy.test.js` passed `6/6`, the full `npm test` suite passed `133/133`, `git diff --check` passed, and `https://umami.namooca.com/script.js` returned HTTP `200` with a JavaScript content type.

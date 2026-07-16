@@ -113,6 +113,13 @@ function assertNoInlineExecutableScript(html) {
   );
 }
 
+function assertHasUmamiTracker(html) {
+  assert.match(
+    html,
+    /<script defer src="https:\/\/umami\.namooca\.com\/script\.js" data-website-id="c5b79d49-f1e7-46c1-87c7-b2965383c820"><\/script>/
+  );
+}
+
 test('each trusted route loads only the scripts it uses', async () => {
   const [homepage, loginPage, passwordPage, errorPage, statsPage, auditPage, apiPage] = await Promise.all([
     request('/', { headers: { Cookie: homeCookie } }),
@@ -151,7 +158,35 @@ test('each trusted route loads only the scripts it uses', async () => {
   for (const response of [homepage, loginPage, passwordPage, errorPage, statsPage, auditPage, apiPage]) {
     assert.match(response.text, /src="\/js\/theme\.js"/);
     assert.match(response.text, /font-awesome/);
+    assertHasUmamiTracker(response.text);
   }
+});
+
+test('Umami tracks real share pages but not generated previews', async () => {
+  const homepage = await request('/', { headers: { Cookie: homeCookie } });
+  const csrfToken = homepage.text.match(/<meta name="csrf-token" content="([^"]+)">/)?.[1];
+
+  assert.ok(csrfToken);
+
+  const [sharePage, preview] = await Promise.all([
+    request('/view/resource-public'),
+    request('/api/pages/preview', {
+      method: 'POST',
+      headers: {
+        Cookie: homeCookie,
+        Origin: baseUrl,
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken
+      },
+      body: JSON.stringify({ htmlContent: '<h1>Preview</h1>', codeType: 'html' })
+    })
+  ]);
+
+  assert.equal(sharePage.status, 200);
+  assertHasUmamiTracker(sharePage.text);
+
+  assert.equal(preview.status, 200);
+  assert.doesNotMatch(preview.text, /umami\.namooca\.com/);
 });
 
 test('extracted login and password scripts preserve their interactions', async () => {
@@ -230,14 +265,14 @@ test('enforced CSP protects trusted UI without constraining share content or pre
     assert.match(policy, /default-src 'self'/);
     assert.match(policy, /object-src 'none'/);
     assert.match(policy, /frame-ancestors 'none'/);
-    assert.match(policy, /script-src 'self'(?:;|$)/);
+    assert.match(policy, /script-src 'self' https:\/\/umami\.namooca\.com(?:;|$)/);
+    assert.match(policy, /connect-src 'self' https:\/\/umami\.namooca\.com(?:;|$)/);
     assert.match(policy, /script-src-attr 'none'/);
     assert.doesNotMatch(policy, /script-src[^;]*'unsafe-inline'/);
-    assert.doesNotMatch(policy, /script-src[^;]*https:/);
   }
 
   const passwordPolicy = passwordPage.headers['content-security-policy'] || '';
-  assert.match(passwordPolicy, /script-src 'self'(?:;|$)/);
+  assert.match(passwordPolicy, /script-src 'self' https:\/\/umami\.namooca\.com(?:;|$)/);
   assert.doesNotMatch(passwordPolicy, /frame-ancestors/);
   assert.equal(homepage.headers['content-security-policy'], undefined);
   assert.equal(sharePage.headers['content-security-policy'], undefined);
