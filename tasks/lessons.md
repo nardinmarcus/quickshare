@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-07-21 — Gate schema-reading deploys before Vercel auto-deploys main
+
+- A Vercel `READY` deployment proves that the function built and started; it does not prove that authenticated routes can query newly required columns.
+- When Git integration auto-deploys `main`, apply and read back an additive migration while the old application remains live before merging or pushing code that reads the new schema.
+- A direct Neon owner connection can need a larger one-off connection budget than the pooled runtime path. After a timeout, first prove that no migration landed, then raise only the migration command's bounded timeout and re-run idempotently; do not relax runtime pool budgets.
+- Deploy the reviewed local commit to Preview before pushing `main`; otherwise the Git integration can turn a supposed Preview-first plan into an immediate Production release.
+- Route documentation must name the exact authentication middleware when page and JSON boundaries differ: `requireDashboardAdmin` redirects to HTML, while `requireDashboardApiAdmin` returns `401` JSON.
+
 ## 2026-07-20 — Canonicalize scripted navigation and bound rendered assertions
 
 - Server-generated links are not enough when browser controls rebuild navigation from `window.location.search`; inject the canonical server URL and use it for search, date, and page changes.

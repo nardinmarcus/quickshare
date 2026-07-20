@@ -1,7 +1,7 @@
 # QuickShare 管理后台收藏设计
 
 - 日期：2026-07-20
-- 状态：已发布为 [GitHub Issue #5](https://github.com/nardinmarcus/quickshare/issues/5)，标签 `ready-for-agent`；尚未实施
+- 状态：Issues #6–#8 已实施并进入 `main`；Issue #9 正在完成全量验收与安全发布
 - 范围：管理后台分享列表、分享详情、筛选、导出与审计；不改变公开分享行为
 
 ## 1. 目标

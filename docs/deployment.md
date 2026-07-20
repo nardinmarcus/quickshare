@@ -28,11 +28,12 @@ npm run hash-password -- "your-admin-password"
 - `SESSION_SECRET` 用于签名所有认证 cookie 和 CSRF token，必须是至少 32 bytes 的随机值，且不能使用示例占位符。
 - 未设置 `DATABASE_URL` 时，本地开发会使用内存仓库；生产环境会立即启动失败，绝不把内存仓库当持久数据源。
 - 应用运行时不执行 `CREATE` / `ALTER`；schema 只能通过 `npm run db:migrate` 变更。
+- Vercel Git 集成会在 `main` 更新后自动部署。凡应用代码会读取新字段，必须在合并或推送该代码前，先让旧应用保持在线并完成兼容性迁移与回读；部署显示 `READY` 不能替代 schema 验证。
 
 ### 步骤
 
 1. 在 Vercel 导入仓库并创建 Postgres 存储，推荐 Neon 集成。
-2. 配置上方运行时环境变量，确认 `DATABASE_URL` 使用 pooled、非 owner 账号。
+2. 配置上方运行时环境变量，确认 `DATABASE_URL` 使用 pooled、非 owner 账号。Preview 必须使用独立 provider branch 或独立测试数据库，不得连接生产数据库。
 3. 在可信迁移主机或一次性 CI job 中临时执行：
 
    ```bash
@@ -41,15 +42,16 @@ npm run hash-password -- "your-admin-password"
    ```
 
    首次执行应列出 applied；紧接着的第二次必须全部 skipped。命令结束后立即移除该 job 的 secret 和环境变量。
-4. 核对 `public.quickshare_schema_migrations`、`pages`、`audit_logs`、`api_keys`、`site_settings`、记录数和索引。`site_settings.id=1` 必须存在，且新迁移后的 `homepage_password_required=true`。
-5. 部署应用并完成下方 smoke。
+4. 核对 `public.quickshare_schema_migrations`、`pages`、`audit_logs`、`api_keys`、`site_settings`、记录数和索引。当前迁移台账应包含 `001`、`002`、`003`；`pages.is_favorite` 必须为 `BOOLEAN NOT NULL DEFAULT FALSE`，且不存在 `NULL`。`site_settings.id=1` 必须存在，`homepage_password_required` 应与迁移前保持一致。
+5. 在本地创建已审查的 release commit，但先不要 push `main`；从该 commit 部署 Preview 并完成下方 smoke。
+6. Preview 通过后才把同一 commit push 到 `main`，等待 CI 和 Vercel Production 自动部署，再用 `vercel inspect` 核对自定义域名指向该修订。
 
-全新空库直接按 1–5 执行，不需要备份步骤。已有数据的升级应先创建 provider branch、PITR 检查点或等价备份，保持旧应用在线完成迁移与核对，再部署新代码。
+全新空库直接按 1–6 执行，不需要备份步骤。已有数据的升级应先创建 provider branch、PITR 检查点或等价备份，保持旧应用在线完成迁移与核对，再部署新代码。
 
 ### 回滚与恢复
 
 - 迁移命令在 `COMMIT` 前失败：整批事务自动回滚，不会留下迁移记录；修正原因后重跑即可，无需数据恢复。
-- 新代码部署后需要回滚：先在后台把首页切回“需要密码”，再重新部署上一稳定版本；当前迁移只做兼容性新增，保留 `site_settings` 和迁移记录。
+- 新代码部署后需要回滚：重新部署上一稳定应用版本；当前迁移只做兼容性新增，保留 `site_settings`、`pages.is_favorite`、迁移记录和已经产生的 Favorite Share 数据，不执行破坏性 down migration。
 - `COMMIT` 后确认发生数据异常：先停止写入，再从迁移前的 provider branch / PITR 检查点恢复到新分支；核对表结构和记录数后才切换运行时连接。不要在未核验的生产主库上直接覆盖恢复。
 
 ### 验证清单
@@ -66,6 +68,10 @@ npm run hash-password -- "your-admin-password"
 - 切到公开模式后，匿名 `GET /` 成功，同源创建/预览成功，缺失或跨源 `Origin` 返回 403。
 - 切回需要密码后，新匿名请求立即受限，已有有效首页会话仍可用至过期。
 - `/admin/pages` 页面列表分页/搜索/过滤正常。
+- 列表与详情页可以用键盘收藏和取消收藏，忙碌、成功与失败状态均可观察；失败时保留原状态。
+- `favorite=true` 可与搜索、类型、保护状态、日期、排序和分页组合；在 Favorite Shares 中取消收藏后由服务端重新计算行、总数和页码。
+- 管理导出包含布尔 `isFavorite`，真实状态变化产生一次 `page.favorite.update` 审计，幂等提交不重复审计。
+- 公开查看、密码验证、过期、浏览事件、近期列表、统计和 Share API 均不接受或泄露 Favorite Share 元数据。
 - `POST /api/v1/share` 带有效 `X-API-Key` 可创建分享并返回 URL。
 - `POST /api/v1/share` 不带或带错误 key 返回 401。
 

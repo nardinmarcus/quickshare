@@ -21,6 +21,7 @@ Express 4 + EJS + PostgreSQL (生产) / 内存 (开发)。部署在 Vercel。
 - Markdown 渲染支持多主题（`markdown_theme` 字段），主题 CSS 在 `public/css/markdown-*.css`。
 - UI 主题系统（`UI_THEME` 环境变量）支持 `default`、`hacker`、`cyberpunk`、`popart`。
 - 管理后台支持审计日志（`createAuditLog`）、批量删除、页面克隆、页面导出（JSON）、浏览量统计。
+- Favorite Share 是 PostgreSQL 持久化的管理端全局二元状态；列表与详情共用 `PUT /admin/pages/:id/favorite`，公开页面和 Share API 不投影该字段。
 
 ## 路由清单
 
@@ -37,6 +38,7 @@ Express 4 + EJS + PostgreSQL (生产) / 内存 (开发)。部署在 Vercel。
 | GET | `/admin/pages/export` | requireDashboardAdmin | 导出页面 JSON |
 | GET | `/admin/pages/:id` | requireDashboardAdmin | 页面详情 |
 | PUT | `/admin/pages/:id` | requireDashboardAdmin | 更新页面 |
+| PUT | `/admin/pages/:id/favorite` | requireDashboardApiAdmin | 收藏/取消收藏（401 JSON + CSRF + 严格布尔 payload） |
 | DELETE | `/admin/pages/:id` | requireDashboardAdmin | 删除页面 |
 | DELETE | `/admin/pages/batch` | requireDashboardAdmin | 批量删除（最多 100） |
 | POST | `/admin/pages/:id/clone` | requireDashboardAdmin | 克隆页面 |
@@ -69,7 +71,7 @@ public/          静态资源（css/ js/ icon/）
   js/            main.js + login.js + password.js + view-event.js + admin*.js + paste-fix.js + theme.js
 utils/           security.js（token/CSRF/hash/encrypt）、contentRenderer.js、codeDetector.js、pageTitle.js
 scripts/         hash-password.js
-test/            Node test runner（5 个测试文件）
+test/            Node test runner（HTTP/Repository/UI 行为测试 + integration/ PostgreSQL 套件）
 docs/            deployment.md
 DESIGN.md        后台 UI 设计稿（Toast / Tab / Markdown 主题选择器 + 4 套主题规范）
 Dockerfile       Docker 构建文件
@@ -80,9 +82,10 @@ docker-compose.yml
 
 ```bash
 npm test
+POSTGRES_TEST_URL='postgresql://postgres:password@127.0.0.1:5432/quickshare_test?sslmode=disable' npm run test:postgres
 ```
 
-覆盖：内容类型检测、fenced code block 提取、密码 hash 校验、signed token scope 校验、CSRF 绑定校验、Share API、admin 路由、admin 仓库。
+覆盖：内容渲染、安全与访问策略、Share API、admin 路由、Favorite Share 交互/生命周期/公开边界，以及真实 PostgreSQL 的空库、legacy、重复迁移、Repository 与失败回滚。PostgreSQL 套件会重建 `public` schema，只能指向 localhost 且数据库名必须以 `_test` 结尾。
 
 ## 安全边界
 

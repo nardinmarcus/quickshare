@@ -725,3 +725,44 @@ Local evidence: focused lifecycle and Repository checks passed `20/20`; the comp
 - Initial Standards review found no issues. Initial Spec review found that export silently stopped at 10,000 Shares and that the production PostgreSQL lifecycle lacked integration coverage.
 - Remediation replaced the fixed export ceiling with an explicit unpaginated Repository read for both storage implementations, added a 10,001-Share HTTP regression, locked default PostgreSQL pagination with a unit test, and added a real PostgreSQL lifecycle/inventory integration scenario.
 - Final Standards and Spec reviews found no remaining actionable issues and confirmed no Issue #7 list-filtering or list-UI scope was introduced.
+
+# Issue #9 — Favorite Share full acceptance and safe release (2026-07-21)
+
+Status: release validation in progress on `main`; baseline `81b219c` contains Issues #6–#8.
+
+## Confirmed verification seams
+
+- Automated application boundary: the complete Node suite covers authenticated management behavior, public/API non-exposure, lifecycle, accessibility contracts, and browser-controller state transitions.
+- Real PostgreSQL boundary: the destructive integration suite runs only against an isolated localhost database ending in `_test`, covering empty/legacy schemas, idempotent migrations, rollback, Repository behavior, filters, lifecycle, and public projection.
+- Real browser boundary: Preview and Production must prove rendered geometry, keyboard/focus behavior, live status feedback, server-confirmed filtering, themes, console/page errors, and public regressions.
+- Production release boundary: PostgreSQL is the source of truth; schema/readback precedes application verification, and rollback changes only the application while retaining the additive column and Favorite Share data.
+
+## Plan
+
+- [x] Confirm #7 and #8 are closed and present in current `main`; pin release baseline and current Production deployment.
+- [x] Detect and contain the auto-deploy ordering gap: snapshot production, apply `003`, repeat it idempotently, and prove checksum, column contract, null count, favorite default, and unchanged business row counts.
+- [x] Run the complete Node suite and the real PostgreSQL integration suite against an isolated disposable database.
+- [x] Add the PostgreSQL suite to CI and reconcile deployment/spec/project documentation with the implemented Favorite Share behavior and application-only rollback.
+- [x] Run local syntax, focused, full, PostgreSQL, workflow-YAML, and diff validation; perform Standards and Spec reviews against `81b219c` and remediate findings.
+- [ ] Commit the reviewed release revision locally and deploy that unpushed commit to Preview with an isolated Preview database.
+- [ ] Complete the Preview browser matrix at 375 px, 768 px, 1440 px, and 200% zoom in light/dark themes, including keyboard, busy/success/failure feedback, filtered removal, overflow, console, and page-error checks.
+- [ ] Regress public view, password, expiration, view count, recent/statistics, and Share API boundaries without Favorite metadata leakage.
+- [ ] After Preview passes, push the same commit to `main`, wait for CI/automatic Production deployment, and confirm the custom domain before using one disposable Share for mark, filter, detail, export, unmark, audit, and delete verification.
+- [ ] Scan deployment/server/browser logs, document the application-only rollback target, publish evidence to Issue #9, close #9 and parent #5, and record the final review below.
+
+Verify:
+
+1. Database safety -> empty/legacy/idempotent tests pass; Production has matching `003`, `BOOLEAN NOT NULL DEFAULT FALSE`, zero nulls, and unchanged aggregate row counts.
+2. Browser behavior -> keyboard users can observe and operate every state at all required sizes/themes without page overflow or unexpected console/page errors.
+3. Compatibility -> public viewing, protection, expiration, counts, existing APIs, and URLs behave unchanged and expose no Favorite metadata.
+4. Release -> Preview and Production use a committed reviewed revision; the custom domain, disposable data lifecycle, audit trail, cleanup, and error-log scan all pass.
+5. Rollback -> only the application version rolls back; `003`, `is_favorite`, and existing Favorite Share data remain intact.
+
+## Review
+
+- Local evidence: Favorite/migration focused tests passed `13/13`; the complete Node suite passed `164/164`; the disposable Postgres 17 integration suite passed `11/11`; workflow YAML and `git diff --check` passed.
+- Production containment: Vercel had already auto-deployed Favorite-reading code before schema `003`. A read-only snapshot showed `194 / 165 / 1 / 1` rows across pages, audit logs, API keys, and site settings. After one connection-timeout attempt left schema unchanged, the bounded migration applied only `003`; an immediate rerun skipped all three migrations. Postflight checksum/column/default/null checks passed and all four business counts remained unchanged.
+- Preview database: isolated database `quickshare_issue9_preview_20260721` applied `001`–`003` once and skipped all three on the immediate rerun; it is not connected to production data.
+- Standards review: `0` findings before and after remediation.
+- Spec review: corrected Preview-before-push ordering and the documented `requireDashboardApiAdmin`/`401 JSON` boundary; final re-review found `0` remaining issues.
+- Pending: committed Preview deployment, browser matrix, public regressions, GitHub CI, Production closed loop, log scan, issue closure, and cleanup.
