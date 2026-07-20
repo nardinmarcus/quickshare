@@ -11,6 +11,11 @@
 - Scope empty-query assertions to extracted `href` values and inspect them through `URLSearchParams`; a document-wide `type=` pattern also matches ordinary HTML attributes such as `type="hidden"`.
 - When a rendered-route failure contradicts the visible output, inspect the exact matching substring before changing production behavior.
 
+## 2026-07-20 — Snapshot primitive state before mutating in-memory records
+
+- `MemoryPageRepository.getById()` returns the stored object reference, so a later mutation also changes any earlier variable pointing at that object.
+- For before/after assertions, capture the primitive value before the mutation rather than deriving the expected result from a live object reference.
+
 ## 2026-07-20 — Lock the transition state and whitelist degraded logs
 
 - When a PostgreSQL mutation returns both previous and final state for auditing, lock the row that supplies those values before the conditional update; a single SQL statement without a lock can still report a stale transition under concurrency.

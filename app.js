@@ -1112,13 +1112,14 @@ app.delete('/admin/apis/keys/:id', requireDashboardAdmin, requireDashboardCsrf, 
 
 app.get('/admin/pages/export', requireDashboardAdmin, async (req, res) => {
   try {
-    const pages = await pageRepository.listAdminPages({ limit: 10000, offset: 0 });
+    const pages = await pageRepository.listAdminPages({ limit: null });
     const exportData = pages.map((page) => ({
       id: page.id,
       title: page.title,
       description: page.description,
       codeType: page.code_type,
       isProtected: page.is_protected === 1,
+      isFavorite: page.is_favorite === true,
       createdAt: page.created_at,
       expiresAt: page.expires_at || null
     }));

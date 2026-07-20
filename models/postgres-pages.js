@@ -209,7 +209,11 @@ class PostgresPageRepository {
       return null;
     }
 
-    const { is_expired: isExpired, ...page } = row;
+    const page = { ...row };
+    const isExpired = page.is_expired;
+    delete page.is_expired;
+    delete page.is_favorite;
+
     return {
       page,
       expired: Boolean(isExpired)
@@ -231,6 +235,7 @@ class PostgresPageRepository {
   }
 
   async listAdminPages(options = {}) {
+    const isUnpaginated = options.limit === null;
     const limit = Number.isInteger(options.limit) ? options.limit : 50;
     const offset = Number.isInteger(options.offset) ? options.offset : 0;
     const sortBy = options.sortBy || 'created_at';
@@ -241,7 +246,12 @@ class PostgresPageRepository {
     const orderColumn = allowedSortColumns[sortBy] || 'created_at';
     const orderDirection = sortOrder === 'asc' ? 'ASC' : 'DESC';
 
-    params.push(limit, offset);
+    let paginationClause = '';
+
+    if (!isUnpaginated) {
+      params.push(limit, offset);
+      paginationClause = `LIMIT $${nextParamIndex} OFFSET $${nextParamIndex + 1}`;
+    }
 
     const result = await this.pool.query(
       `
@@ -249,7 +259,7 @@ class PostgresPageRepository {
         FROM pages
         ${whereClause}
         ORDER BY ${orderColumn} ${orderDirection}
-        LIMIT $${nextParamIndex} OFFSET $${nextParamIndex + 1}
+        ${paginationClause}
       `,
       params
     );

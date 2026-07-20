@@ -690,3 +690,38 @@ Local evidence: focused Issue #7 checks passed `51/51`; after review remediation
 
 - Standards review: resolved all three findings by bounding rendered favorite-state assertions to one button, proving the shared `button:focus-visible` rule directly, and sharing one filter pipeline/SQL-condition builder between list rows and counts.
 - Spec review: resolved both findings by starting browser search/date/page navigation from the server-generated canonical URL with empty values omitted, and by proving that a confirmed unmark followed by the canonical GET recalculates rows, total, empty state, and valid page.
+
+# Issue #8 — Favorite Share lifecycle and data boundaries (2026-07-20)
+
+Status: implementation, review remediation, and local verification complete on isolated branch `codex/issue-8-favorite-lifecycle`; baseline is Issue #6 commit `f2d768c`.
+
+## Confirmed TDD seams
+
+- Administrative HTTP boundary: creation, clone, edit, expiration, favorite mutation, deletion, and unfiltered JSON export are observed through authenticated routes and persisted Repository results.
+- Public HTTP boundary: public view, password validation, metadata, recent list, view event, statistics, and both existing creation APIs never accept or expose Favorite Share state.
+- Repository projection boundary: public lookup omits administrative favorite metadata, while administrative list projection supplies the boolean needed by export.
+
+## Plan
+
+- [x] Add a failing management-export slice, then expose `is_favorite` only through the administrative projection and export it as boolean `isFavorite` without inheriting request filters.
+- [x] Add a failing public-projection slice, then keep `is_favorite` out of the Repository object returned by public lookup.
+- [x] Add lifecycle regression coverage proving homepage/API creation defaults, clone reset, edit preservation, expiration independence and operability, and deletion cleanup.
+- [x] Add public-boundary coverage for view, password, metadata, recent list, view event, statistics, and Share API request/response compatibility.
+- [x] Run focused tests after each slice, then the complete Node suite, available PostgreSQL integration seam, JavaScript syntax checks, and `git diff --check`.
+- [x] Run the required Standards and Spec reviews against `f2d768c`, remediate findings, record evidence below, and commit the focused branch.
+
+Verify:
+
+1. Creation and clone -> homepage, Share API, and Favorite Share clone all persist `is_favorite=false`, even when input or source state is true.
+2. Edit and expiration -> content/access/expiry changes preserve favorite state; expired Shares remain available to admin favorite mutation and administrative projection.
+3. Deletion and export -> deleting the Share removes the only favorite record; export includes a boolean for every Share and ignores list-style query filters.
+4. Public boundaries -> no public or existing Share API request/response gains Favorite Share behavior or metadata; view, password, expiry, URL, and view-count behavior remain unchanged.
+5. Scope -> no list filtering/UI work from Issue #7 is duplicated; every retained diff line maps to Issue #8.
+
+## Review
+
+Local evidence: focused lifecycle and Repository checks passed `20/20`; the complete `npm test` suite passed `156/156`; changed JavaScript syntax checks and `git diff --check` passed. The real PostgreSQL lifecycle test is implemented but was not executed because `POSTGRES_TEST_URL` is not configured and no local PostgreSQL client/service is available in this thread.
+
+- Initial Standards review found no issues. Initial Spec review found that export silently stopped at 10,000 Shares and that the production PostgreSQL lifecycle lacked integration coverage.
+- Remediation replaced the fixed export ceiling with an explicit unpaginated Repository read for both storage implementations, added a 10,001-Share HTTP regression, locked default PostgreSQL pagination with a unit test, and added a real PostgreSQL lifecycle/inventory integration scenario.
+- Final Standards and Spec reviews found no remaining actionable issues and confirmed no Issue #7 list-filtering or list-UI scope was introduced.
