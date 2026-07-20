@@ -94,6 +94,7 @@ class MemoryPageRepository {
       description: page.description || null,
       expires_at: page.expiresAt || null,
       markdown_theme: page.markdownTheme || null,
+      is_favorite: false,
       view_count: 0
     });
 
@@ -337,6 +338,34 @@ class MemoryPageRepository {
     page.password_hash = options.passwordHash || null;
     page.encrypted_password = options.encryptedPassword || null;
     return true;
+  }
+
+  async setFavorite(id, isFavorite) {
+    if (typeof isFavorite !== 'boolean') {
+      throw new TypeError('isFavorite must be a boolean');
+    }
+
+    const page = this.pages.get(id);
+
+    if (!page) {
+      return {
+        found: false,
+        changed: false,
+        isFavorite: false,
+        previousValue: null
+      };
+    }
+
+    const previousValue = page.is_favorite;
+
+    page.is_favorite = isFavorite;
+
+    return {
+      found: true,
+      changed: previousValue !== isFavorite,
+      isFavorite,
+      previousValue
+    };
   }
 
   async updatePage(id, options) {

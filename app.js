@@ -117,7 +117,7 @@ function privateNoStore(req, res, next) {
   return next();
 }
 
-function parseSettingsJson(req, res, next) {
+function parseSmallJsonBody(req, res, next) {
   return parseSmallJson(req, res, (error) => {
     if (error?.type === 'entity.parse.failed') {
       return res.status(400).json({
@@ -1180,7 +1180,7 @@ app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
   }
 });
 
-app.put('/admin/settings/homepage-access', requireDashboardApiAdmin, parseSettingsJson, requireDashboardCsrf, async (req, res) => {
+app.put('/admin/settings/homepage-access', requireDashboardApiAdmin, parseSmallJsonBody, requireDashboardCsrf, async (req, res) => {
   if (typeof req.body?.passwordRequired !== 'boolean') {
     return res.status(400).json({
       success: false,
@@ -1302,6 +1302,7 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       title: sharedPage.title,
       description: sharedPage.description,
       isProtected: sharedPage.is_protected === 1,
+      isFavorite: sharedPage.is_favorite === true,
       password: visiblePagePassword(sharedPage),
       expiresAt: sharedPage.expires_at,
       markdownTheme: sharedPage.markdown_theme
@@ -1322,6 +1323,51 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       title: 'Server Error',
       page: 'error-page',
       message: 'Unable to load shared page details'
+    });
+  }
+});
+
+app.put('/admin/pages/:id/favorite', requireDashboardApiAdmin, parseSmallJsonBody, requireDashboardCsrf, async (req, res) => {
+  if (typeof req.body?.isFavorite !== 'boolean') {
+    return res.status(400).json({
+      success: false,
+      error: 'isFavorite must be a boolean'
+    });
+  }
+
+  try {
+    const result = await pageRepository.setFavorite(req.params.id, req.body.isFavorite);
+
+    if (!result.found) {
+      return res.status(404).json({
+        success: false,
+        error: 'Share not found'
+      });
+    }
+
+    if (result.changed) {
+      try {
+        await pageRepository.createAuditLog({
+          action: 'page.favorite.update',
+          pageId: req.params.id,
+          details: JSON.stringify({ from: result.previousValue, to: result.isFavorite }),
+          ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+        });
+      } catch (error) {
+        console.error('Favorite audit log failed:');
+      }
+    }
+
+    return res.json({
+      success: true,
+      changed: result.changed,
+      isFavorite: result.isFavorite
+    });
+  } catch (error) {
+    console.error('Update favorite failed:');
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to update favorite'
     });
   }
 });

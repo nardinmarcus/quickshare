@@ -38,7 +38,7 @@ test('baseline migration handles empty and legacy databases idempotently', async
   try {
     await resetPublicSchema(pool);
     const emptyResult = await runMigrations(pool, { logger: { info() {} } });
-    assert.deepEqual(emptyResult, { applied: ['001', '002'], skipped: [] });
+    assert.deepEqual(emptyResult, { applied: ['001', '002', '003'], skipped: [] });
 
     const emptyTables = await pool.query(`
       SELECT table_name
@@ -61,6 +61,18 @@ test('baseline migration handles empty and legacy databases idempotently', async
       id: 1,
       homepage_password_required: true
     }]);
+    const favoriteColumn = await pool.query(`
+      SELECT data_type, is_nullable, column_default
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'pages'
+        AND column_name = 'is_favorite'
+    `);
+    assert.deepEqual(favoriteColumn.rows, [{
+      data_type: 'boolean',
+      is_nullable: 'NO',
+      column_default: 'false'
+    }]);
 
     await resetPublicSchema(pool);
     await pool.query(`
@@ -82,23 +94,30 @@ test('baseline migration handles empty and legacy databases idempotently', async
     );
 
     const legacyResult = await runMigrations(pool, { logger: { info() {} } });
+    const migratedSentinel = await pool.query(
+      'SELECT id, html_content, created_at, title, view_count, is_favorite FROM pages WHERE id = $1',
+      ['sentinel']
+    );
+    await pool.query('UPDATE pages SET is_favorite = TRUE WHERE id = $1', ['sentinel']);
     const repeatedResult = await runMigrations(pool, { logger: { info() {} } });
-    const sentinel = await pool.query(
-      'SELECT id, html_content, created_at, title, view_count FROM pages WHERE id = $1',
+    const repeatedSentinel = await pool.query(
+      'SELECT is_favorite FROM pages WHERE id = $1',
       ['sentinel']
     );
     const migrationCount = await pool.query('SELECT COUNT(*)::int AS count FROM quickshare_schema_migrations');
 
-    assert.deepEqual(legacyResult, { applied: ['001', '002'], skipped: [] });
-    assert.deepEqual(repeatedResult, { applied: [], skipped: ['001', '002'] });
-    assert.deepEqual(sentinel.rows, [{
+    assert.deepEqual(legacyResult, { applied: ['001', '002', '003'], skipped: [] });
+    assert.deepEqual(repeatedResult, { applied: [], skipped: ['001', '002', '003'] });
+    assert.deepEqual(migratedSentinel.rows, [{
       id: 'sentinel',
       html_content: '<h1>Keep me</h1>',
       created_at: '1234',
       title: 'Sentinel',
-      view_count: '0'
+      view_count: '0',
+      is_favorite: false
     }]);
-    assert.equal(migrationCount.rows[0].count, 2);
+    assert.deepEqual(repeatedSentinel.rows, [{ is_favorite: true }]);
+    assert.equal(migrationCount.rows[0].count, 3);
   } finally {
     await pool.end();
   }
@@ -273,6 +292,50 @@ test('view events atomically enforce page availability without loading content',
   }
 });
 
+test('Postgres favorite mutation persists transitions and preserves idempotency', async () => {
+  const pool = createPostgresPool(connectionString, { env, max: 1 });
+  const repository = Object.create(PostgresPageRepository.prototype);
+  repository.pool = pool;
+
+  try {
+    await resetPublicSchema(pool);
+    await runMigrations(pool, { logger: { info() {} } });
+    await repository.create({
+      id: 'favorite-postgres',
+      htmlContent: '<h1>Postgres favorite</h1>',
+      createdAt: 1000
+    });
+
+    assert.equal((await repository.getById('favorite-postgres')).is_favorite, false);
+    assert.deepEqual(await repository.setFavorite('favorite-postgres', true), {
+      found: true,
+      changed: true,
+      isFavorite: true,
+      previousValue: false
+    });
+    assert.deepEqual(await repository.setFavorite('favorite-postgres', true), {
+      found: true,
+      changed: false,
+      isFavorite: true,
+      previousValue: true
+    });
+    assert.deepEqual(await repository.setFavorite('favorite-postgres', false), {
+      found: true,
+      changed: true,
+      isFavorite: false,
+      previousValue: true
+    });
+    assert.deepEqual(await repository.setFavorite('missing-postgres', true), {
+      found: false,
+      changed: false,
+      isFavorite: false,
+      previousValue: null
+    });
+  } finally {
+    await pool.end();
+  }
+});
+
 test('site settings persist real transitions and audit them exactly once', async () => {
   const pool = createPostgresPool(connectionString, { env, max: 1 });
   const repository = Object.create(PostgresPageRepository.prototype);
@@ -298,7 +361,7 @@ test('site settings persist real transitions and audit them exactly once', async
     assert.equal(await repository.getHomepagePasswordRequired(), false);
 
     const repeatedMigration = await runMigrations(pool, { logger: { info() {} } });
-    assert.deepEqual(repeatedMigration, { applied: [], skipped: ['001', '002'] });
+    assert.deepEqual(repeatedMigration, { applied: [], skipped: ['001', '002', '003'] });
     assert.equal(await repository.getHomepagePasswordRequired(), false);
 
     const logs = await repository.listAuditLogs();

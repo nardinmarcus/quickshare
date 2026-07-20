@@ -623,3 +623,36 @@ Frontier:
 - [Issue #9](https://github.com/nardinmarcus/quickshare/issues/9) becomes available after both #7 and #8.
 
 No Favorite Share implementation code was changed while publishing the Tickets.
+
+# Issue #6 — Favorite Share detail end-to-end (2026-07-20)
+
+Status: implementation, review remediation, and local verification complete. Scope is limited to GitHub Issue #6.
+
+## Confirmed TDD seams
+
+- Repository contract: `MemoryPageRepository` and `PostgresPageRepository` expose identical default, lookup, mark, unmark, idempotent-repeat, and missing-Share behavior.
+- Authenticated HTTP boundary: `PUT /admin/pages/:id/favorite` proves Dashboard authentication, CSRF, strict boolean validation, response status/shape, idempotency, audit, and audit-failure degradation.
+- Rendered detail/browser boundary: the admin detail page renders the persisted state and one shared favorite controller changes it only after a successful server response.
+
+## Plan
+
+- [x] Add a failing migration/repository behavior slice, then implement additive `003_page_favorites.sql` and matching Memory/PostgreSQL `setFavorite` contracts.
+- [x] Add a failing authenticated route slice, then implement the strict idempotent endpoint and best-effort `page.favorite.update` audit.
+- [x] Add a failing rendered/interaction slice, then implement the detail-page outline/filled star, visible text, accessible state, busy state, and failure feedback.
+- [x] Run focused test files after each slice and JavaScript syntax checks regularly.
+- [x] Run the full test suite, PostgreSQL integration suite when its configured seam is available, `git diff --check`, and the required two-axis code review.
+- [x] Fix review findings, document evidence below, and commit the focused work to the current branch.
+
+Verify:
+
+1. Migration and storage -> both repositories report the same final/previous values; rerunning migration never resets a changed favorite.
+2. HTTP and audit -> invalid boundaries never write; real transitions audit exactly once; idempotent requests do not audit; audit failure does not undo the favorite.
+3. Detail UI -> server-rendered state, explicit accessible name, `aria-pressed`, 44px target, server-confirmed update, and non-optimistic failure behavior are observable.
+4. Scope -> public Share and existing Share API behavior remain unchanged; every retained diff line maps to Issue #6.
+
+## Review
+
+Local evidence: focused Issue #6 checks passed `47/47`; after review remediation, the complete `npm test` suite passed `146/146`; changed JavaScript syntax checks and `git diff --check` passed. The real PostgreSQL test seam is implemented but was not executed because `POSTGRES_TEST_URL` is not configured in this thread.
+
+- Standards review: resolved all three findings by preserving the existing admin-list Repository contract, using `Share` in user-visible error copy, and binding only the detail page's single favorite control. The required audit identifier remains `page.favorite.update` because Issue #6 specifies it exactly.
+- Spec review: resolved both findings by locking the PostgreSQL transition row before deriving `from`/`to`, and by logging only the existing allowlisted safe error code during audit degradation.

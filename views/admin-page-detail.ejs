@@ -11,6 +11,20 @@
   </header>
 
   <div class="admin-detail-actions">
+    <button
+      type="button"
+      class="cyber-btn cyber-btn-secondary admin-favorite-toggle"
+      data-favorite-toggle
+      data-page-id="<%= sharedPage.id %>"
+      data-page-title="<%= sharedPage.title || sharedPage.id %>"
+      data-is-favorite="<%= sharedPage.isFavorite ? 'true' : 'false' %>"
+      aria-pressed="<%= sharedPage.isFavorite ? 'true' : 'false' %>"
+      aria-busy="false"
+      aria-label="<%= sharedPage.isFavorite ? `取消收藏 ${sharedPage.title || sharedPage.id}` : `收藏分享 ${sharedPage.title || sharedPage.id}` %>"
+    >
+      <i class="<%= sharedPage.isFavorite ? 'fas' : 'far' %> fa-star admin-favorite-icon" aria-hidden="true"></i>
+      <span class="admin-favorite-label"><%= sharedPage.isFavorite ? '取消收藏' : '收藏' %></span>
+    </button>
     <button type="button" class="cyber-btn cyber-btn-secondary" id="edit-toggle-btn">
       <i class="fas fa-pen" aria-hidden="true"></i>
       <span>编辑</span>
@@ -182,5 +196,6 @@
 
 <script type="application/json" id="page-data"><%- pageDataJson %></script>
 <script src="/js/admin.js"></script>
+<script src="/js/admin-favorite.js"></script>
 <script src="/js/admin-detail.js"></script>
 <%- include('partials/footer', { page }) %>

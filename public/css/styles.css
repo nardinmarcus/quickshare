@@ -1460,6 +1460,19 @@ body:hover::-webkit-scrollbar,
   display: inline-flex;
 }
 
+.admin-favorite-toggle {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.admin-favorite-icon {
+  color: var(--text-secondary);
+}
+
+.admin-favorite-toggle[aria-pressed="true"] .admin-favorite-icon {
+  color: var(--primary);
+}
+
 .admin-kicker {
   color: var(--text-secondary);
   font-size: 0.85rem;

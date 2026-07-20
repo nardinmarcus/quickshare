@@ -396,6 +396,48 @@ class PostgresPageRepository {
     return result.rowCount > 0;
   }
 
+  async setFavorite(id, isFavorite) {
+    if (typeof isFavorite !== 'boolean') {
+      throw new TypeError('isFavorite must be a boolean');
+    }
+
+    const result = await this.pool.query(
+      `
+        WITH existing AS MATERIALIZED (
+          SELECT id, is_favorite
+          FROM pages
+          WHERE id = $1
+          FOR UPDATE
+        ), updated AS (
+          UPDATE pages
+          SET is_favorite = $2
+          FROM existing
+          WHERE pages.id = existing.id
+            AND existing.is_favorite IS DISTINCT FROM $2
+          RETURNING pages.is_favorite
+        )
+        SELECT
+          EXISTS(SELECT 1 FROM existing) AS found,
+          EXISTS(SELECT 1 FROM updated) AS changed,
+          COALESCE(
+            (SELECT is_favorite FROM updated),
+            (SELECT is_favorite FROM existing),
+            FALSE
+          ) AS is_favorite,
+          (SELECT is_favorite FROM existing) AS previous_value
+      `,
+      [id, isFavorite]
+    );
+    const row = result.rows[0];
+
+    return {
+      found: row.found,
+      changed: row.changed,
+      isFavorite: row.is_favorite,
+      previousValue: row.previous_value
+    };
+  }
+
   async updatePage(id, options) {
     const fields = [];
     const params = [];

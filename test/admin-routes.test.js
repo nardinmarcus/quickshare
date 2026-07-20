@@ -122,6 +122,198 @@ test('regular login does not grant dashboard access', async () => {
   assert.equal(response.headers.location, '/admin/login');
 });
 
+test('favorite mutations require a Dashboard session at the JSON boundary', async () => {
+  const sharedPage = await createSharedPage({ htmlContent: '<h1>Favorite auth</h1>' });
+  const regularCookie = await login();
+  const body = JSON.stringify({ isFavorite: true });
+  const anonymousResponse = await request(`/admin/pages/${sharedPage.urlId}/favorite`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body
+  });
+  const regularSessionResponse = await request(`/admin/pages/${sharedPage.urlId}/favorite`, {
+    method: 'PUT',
+    headers: {
+      Cookie: regularCookie,
+      'Content-Type': 'application/json'
+    },
+    body
+  });
+
+  assert.equal(anonymousResponse.status, 401);
+  assert.equal(regularSessionResponse.status, 401);
+  assert.deepEqual(JSON.parse(anonymousResponse.text), {
+    success: false,
+    error: 'Unauthorized'
+  });
+});
+
+test('favorite mutations require Dashboard CSRF and a strict boolean payload', async () => {
+  const sharedPage = await createSharedPage({ htmlContent: '<h1>Favorite validation</h1>' });
+  const cookie = await loginDashboard();
+  const detailResponse = await request(`/admin/pages/${sharedPage.urlId}`, {
+    headers: { Cookie: cookie }
+  });
+  const csrfToken = detailResponse.text.match(/name="csrf-token" content="([^"]+)"/)?.[1];
+
+  assert.ok(csrfToken);
+
+  const missingCsrfResponse = await request(`/admin/pages/${sharedPage.urlId}/favorite`, {
+    method: 'PUT',
+    headers: {
+      Cookie: cookie,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ isFavorite: true })
+  });
+  const invalidPayloadResponse = await request(`/admin/pages/${sharedPage.urlId}/favorite`, {
+    method: 'PUT',
+    headers: {
+      Cookie: cookie,
+      'Content-Type': 'application/json',
+      'X-CSRF-Token': csrfToken
+    },
+    body: JSON.stringify({ isFavorite: 'true' })
+  });
+  const malformedJsonResponse = await request(`/admin/pages/${sharedPage.urlId}/favorite`, {
+    method: 'PUT',
+    headers: {
+      Cookie: cookie,
+      'Content-Type': 'application/json',
+      'X-CSRF-Token': csrfToken
+    },
+    body: '{'
+  });
+
+  assert.equal(missingCsrfResponse.status, 403);
+  assert.equal(invalidPayloadResponse.status, 400);
+  assert.equal(malformedJsonResponse.status, 400);
+  assert.equal((await app.locals.pageRepository.getById(sharedPage.urlId)).is_favorite, false);
+});
+
+test('favorite mutations persist final state and audit only real transitions', async () => {
+  const sharedPage = await createSharedPage({ htmlContent: '<h1>Favorite transition route</h1>' });
+  const cookie = await loginDashboard();
+  const detailResponse = await request(`/admin/pages/${sharedPage.urlId}`, {
+    headers: { Cookie: cookie }
+  });
+  const csrfToken = detailResponse.text.match(/name="csrf-token" content="([^"]+)"/)?.[1];
+  const headers = {
+    Cookie: cookie,
+    'Content-Type': 'application/json',
+    'X-CSRF-Token': csrfToken
+  };
+
+  const favoriteResponse = await request(`/admin/pages/${sharedPage.urlId}/favorite`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ isFavorite: true })
+  });
+  const repeatedResponse = await request(`/admin/pages/${sharedPage.urlId}/favorite`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ isFavorite: true })
+  });
+  const unfavoriteResponse = await request(`/admin/pages/${sharedPage.urlId}/favorite`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ isFavorite: false })
+  });
+
+  assert.deepEqual(JSON.parse(favoriteResponse.text), {
+    success: true,
+    changed: true,
+    isFavorite: true
+  });
+  assert.deepEqual(JSON.parse(repeatedResponse.text), {
+    success: true,
+    changed: false,
+    isFavorite: true
+  });
+  assert.deepEqual(JSON.parse(unfavoriteResponse.text), {
+    success: true,
+    changed: true,
+    isFavorite: false
+  });
+  assert.equal((await app.locals.pageRepository.getById(sharedPage.urlId)).is_favorite, false);
+
+  const logs = (await app.locals.pageRepository.listAuditLogs({ limit: 200 }))
+    .filter(log => log.action === 'page.favorite.update' && log.pageId === sharedPage.urlId);
+  const auditResponse = await request('/admin/audit', { headers: { Cookie: cookie } });
+  assert.equal(logs.length, 2);
+  assert.deepEqual(logs.map(log => JSON.parse(log.details)).reverse(), [
+    { from: false, to: true },
+    { from: true, to: false }
+  ]);
+  assert.match(auditResponse.text, />Favorite Share 状态更新</);
+  assert.doesNotMatch(auditResponse.text, />page\.favorite\.update</);
+});
+
+test('favorite mutation errors preserve data and audit failure degrades safely', async () => {
+  const sharedPage = await createSharedPage({ htmlContent: '<h1>Favorite failure boundaries</h1>' });
+  const cookie = await loginDashboard();
+  const detailResponse = await request(`/admin/pages/${sharedPage.urlId}`, {
+    headers: { Cookie: cookie }
+  });
+  const csrfToken = detailResponse.text.match(/name="csrf-token" content="([^"]+)"/)?.[1];
+  const headers = {
+    Cookie: cookie,
+    'Content-Type': 'application/json',
+    'X-CSRF-Token': csrfToken
+  };
+  const repository = app.locals.pageRepository;
+  const originalCreateAuditLog = repository.createAuditLog;
+  const originalSetFavorite = repository.setFavorite;
+  const originalConsoleError = console.error;
+  const loggedErrors = [];
+
+  try {
+    console.error = (...args) => loggedErrors.push(args);
+    repository.createAuditLog = async () => {
+      const error = new Error('postgres://user:secret@example.test/quickshare');
+      error.name = 'postgres://audit-name:secret@example.test/quickshare';
+      error.code = 'DATABASE_PASSWORD_SECRET';
+      throw error;
+    };
+
+    const auditFailureResponse = await request(`/admin/pages/${sharedPage.urlId}/favorite`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ isFavorite: true })
+    });
+
+    assert.equal(auditFailureResponse.status, 200);
+    assert.equal(JSON.parse(auditFailureResponse.text).isFavorite, true);
+    assert.equal((await repository.getById(sharedPage.urlId)).is_favorite, true);
+    assert.deepEqual(loggedErrors, [['Favorite audit log failed:']]);
+
+    repository.createAuditLog = originalCreateAuditLog;
+    const missingResponse = await request('/admin/pages/missing-favorite-route/favorite', {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ isFavorite: true })
+    });
+    assert.equal(missingResponse.status, 404);
+    assert.equal(JSON.parse(missingResponse.text).error, 'Share not found');
+
+    repository.setFavorite = async () => {
+      throw new Error('persistence unavailable');
+    };
+    const persistenceFailureResponse = await request(`/admin/pages/${sharedPage.urlId}/favorite`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ isFavorite: false })
+    });
+
+    assert.equal(persistenceFailureResponse.status, 500);
+    assert.equal((await repository.getById(sharedPage.urlId)).is_favorite, true);
+  } finally {
+    repository.createAuditLog = originalCreateAuditLog;
+    repository.setFavorite = originalSetFavorite;
+    console.error = originalConsoleError;
+  }
+});
+
 test('dashboard login rejects the regular creation password', async () => {
   const response = await request('/admin/login', {
     method: 'POST',
@@ -244,6 +436,42 @@ test('admin page detail safely serializes user-controlled content', async () => 
   assert.doesNotMatch(response.text, /<\/script><script>window\.__quickshareXss/);
   assert.match(response.text, /\\u003c\/script\\u003e\\u003cscript\\u003ewindow\.__quickshareXss/);
   assert.match(response.text, /\\u0026\\u003e\\u2028\\u2029/);
+});
+
+test('admin detail renders the persisted Favorite Share state', async () => {
+  const unmarkedPage = await createSharedPage({
+    htmlContent: '<h1>Unmarked detail favorite</h1>',
+    title: 'Unmarked Share'
+  });
+  const favoritePage = await createSharedPage({
+    htmlContent: '<h1>Marked detail favorite</h1>',
+    title: 'Marked Share'
+  });
+  await app.locals.pageRepository.setFavorite(favoritePage.urlId, true);
+  const cookie = await loginDashboard();
+  const unmarkedResponse = await request(`/admin/pages/${unmarkedPage.urlId}`, {
+    headers: { Cookie: cookie }
+  });
+  const favoriteResponse = await request(`/admin/pages/${favoritePage.urlId}`, {
+    headers: { Cookie: cookie }
+  });
+
+  assert.match(
+    unmarkedResponse.text,
+    /data-favorite-toggle[^>]+aria-pressed="false"[^>]+aria-label="收藏分享 Unmarked Share"/
+  );
+  assert.match(unmarkedResponse.text, /class="far fa-star admin-favorite-icon"/);
+  assert.match(unmarkedResponse.text, /class="admin-favorite-label">收藏</);
+  assert.match(unmarkedResponse.text, /"isFavorite":false/);
+
+  assert.match(
+    favoriteResponse.text,
+    /data-favorite-toggle[^>]+aria-pressed="true"[^>]+aria-label="取消收藏 Marked Share"/
+  );
+  assert.match(favoriteResponse.text, /class="fas fa-star admin-favorite-icon"/);
+  assert.match(favoriteResponse.text, /class="admin-favorite-label">取消收藏</);
+  assert.match(favoriteResponse.text, /"isFavorite":true/);
+  assert.match(favoriteResponse.text, /src="\/js\/admin-favorite\.js"/);
 });
 
 test('dashboard page mutations reject requests without a CSRF token', async () => {

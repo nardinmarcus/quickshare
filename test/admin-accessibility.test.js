@@ -164,6 +164,21 @@ test('detail tabs expose complete relationships and keyboard-ready state', async
   assert.match(detail.text, /id="panel-rendered"[^>]+aria-labelledby="tab-rendered"/);
 });
 
+test('detail Favorite Share control exposes state, progress, and a 44px target', async () => {
+  const detail = await adminRequest('/admin/pages/admin-accessibility');
+  const favoriteScript = fs.readFileSync(path.join(__dirname, '../public/js/admin-favorite.js'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, '../public/css/styles.css'), 'utf8');
+
+  assert.match(detail.text, /data-favorite-toggle[^>]+aria-pressed="false"[^>]+aria-busy="false"/);
+  assert.match(detail.text, /aria-label="收藏分享 Accessible admin"/);
+  assert.match(detail.text, /class="far fa-star admin-favorite-icon"[^>]+aria-hidden="true"/);
+  assert.match(favoriteScript, /control\.disabled = true/);
+  assert.match(favoriteScript, /control\.setAttribute\('aria-busy', 'true'\)/);
+  assert.match(favoriteScript, /if \(control\.getAttribute\('aria-busy'\) === 'true'\) return/);
+  assert.match(css, /\.admin-favorite-toggle\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/s);
+  assert.match(css, /\.admin-favorite-toggle\[aria-pressed="true"\] \.admin-favorite-icon\s*\{[^}]*color:\s*var\(--primary\)/s);
+});
+
 test('delete modal and tabs implement one accessible keyboard controller', () => {
   const adminScript = fs.readFileSync(path.join(__dirname, '../public/js/admin.js'), 'utf8');
   const detailScript = fs.readFileSync(path.join(__dirname, '../public/js/admin-detail.js'), 'utf8');

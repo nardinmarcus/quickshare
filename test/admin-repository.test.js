@@ -38,6 +38,87 @@ test('admin page listing is sorted by creation time and paginated', async () => 
   assert.equal(await repository.countPages(), 3);
 });
 
+test('memory pages default to a non-null false favorite state', async () => {
+  const repository = new MemoryPageRepository();
+
+  await repository.create({
+    id: 'favorite-default',
+    htmlContent: '<h1>Default favorite state</h1>',
+    createdAt: 1000,
+    isProtected: false,
+    codeType: 'html'
+  });
+
+  const page = await repository.getById('favorite-default');
+  assert.equal(page.is_favorite, false);
+});
+
+test('memory repository marks a Share favorite and reports the transition', async () => {
+  const repository = new MemoryPageRepository();
+
+  await repository.create({
+    id: 'favorite-transition',
+    htmlContent: '<h1>Favorite transition</h1>',
+    createdAt: 1000
+  });
+
+  const result = await repository.setFavorite('favorite-transition', true);
+
+  assert.deepEqual(result, {
+    found: true,
+    changed: true,
+    isFavorite: true,
+    previousValue: false
+  });
+  assert.equal((await repository.getById('favorite-transition')).is_favorite, true);
+});
+
+test('memory favorite mutation is idempotent and missing-safe', async () => {
+  const repository = new MemoryPageRepository();
+
+  await repository.create({
+    id: 'favorite-idempotent',
+    htmlContent: '<h1>Favorite idempotency</h1>',
+    createdAt: 1000
+  });
+  await repository.setFavorite('favorite-idempotent', true);
+
+  assert.deepEqual(await repository.setFavorite('favorite-idempotent', true), {
+    found: true,
+    changed: false,
+    isFavorite: true,
+    previousValue: true
+  });
+  assert.deepEqual(await repository.setFavorite('favorite-idempotent', false), {
+    found: true,
+    changed: true,
+    isFavorite: false,
+    previousValue: true
+  });
+  assert.deepEqual(await repository.setFavorite('missing-favorite', true), {
+    found: false,
+    changed: false,
+    isFavorite: false,
+    previousValue: null
+  });
+});
+
+test('memory favorite mutation accepts only boolean targets', async () => {
+  const repository = new MemoryPageRepository();
+
+  await repository.create({
+    id: 'favorite-boolean',
+    htmlContent: '<h1>Favorite boolean</h1>',
+    createdAt: 1000
+  });
+
+  await assert.rejects(
+    repository.setFavorite('favorite-boolean', 'true'),
+    /isFavorite must be a boolean/
+  );
+  assert.equal((await repository.getById('favorite-boolean')).is_favorite, false);
+});
+
 test('admin stats aggregate totals, protection, types, and recent days', async () => {
   const repository = new MemoryPageRepository();
   await repository.init();
@@ -142,6 +223,60 @@ test('Postgres public lookup reports expiry in one query', async () => {
   assert.equal(queries.length, 3);
   assert.deepEqual(queries[0].params, ['expired-page', 5000]);
   assert.match(queries[0].sql, /expires_at IS NOT NULL AND expires_at <= \$2/);
+});
+
+test('Postgres favorite mutation exposes the same result contract as memory storage', async () => {
+  const repository = Object.create(PostgresPageRepository.prototype);
+  const queries = [];
+  const outcomes = {
+    changed: {
+      found: true,
+      changed: true,
+      is_favorite: true,
+      previous_value: false
+    },
+    unchanged: {
+      found: true,
+      changed: false,
+      is_favorite: true,
+      previous_value: true
+    },
+    missing: {
+      found: false,
+      changed: false,
+      is_favorite: false,
+      previous_value: null
+    }
+  };
+
+  repository.pool = {
+    async query(sql, params) {
+      queries.push({ sql, params });
+      return { rows: [outcomes[params[0]]] };
+    }
+  };
+
+  assert.deepEqual(await repository.setFavorite('changed', true), {
+    found: true,
+    changed: true,
+    isFavorite: true,
+    previousValue: false
+  });
+  assert.deepEqual(await repository.setFavorite('unchanged', true), {
+    found: true,
+    changed: false,
+    isFavorite: true,
+    previousValue: true
+  });
+  assert.deepEqual(await repository.setFavorite('missing', true), {
+    found: false,
+    changed: false,
+    isFavorite: false,
+    previousValue: null
+  });
+  await assert.rejects(repository.setFavorite('changed', 1), /isFavorite must be a boolean/);
+  assert.match(queries[0].sql, /SELECT id, is_favorite[\s\S]+FOR UPDATE/i);
+  assert.match(queries[0].sql, /UPDATE pages[\s\S]+FROM existing/i);
 });
 
 test('view events update eligible rows without selecting page content', async () => {

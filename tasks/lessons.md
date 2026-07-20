@@ -1,5 +1,15 @@
 # Lessons
 
+## 2026-07-20 — Lock the transition state and whitelist degraded logs
+
+- When a PostgreSQL mutation returns both previous and final state for auditing, lock the row that supplies those values before the conditional update; a single SQL statement without a lock can still report a stale transition under concurrency.
+- Sanitized failure logging must whitelist every retained field. Do not copy `error.name`, `error.message`, or arbitrary `error.code` values merely because they are structured.
+
+## 2026-07-20 — Match rendered assertions to the seeded domain record
+
+- When an accessibility assertion includes a user-visible Share title, derive the expected wording from the test fixture rather than a nearby test label.
+- Read the rendered failure output before changing production code; a title mismatch in the expectation is test-harness evidence, not a UI regression.
+
 ## 2026-07-14 — Preserve explicitly retained product behavior
 
 - When a proposed security improvement changes visible behavior such as generated-password length or format, treat that as a product decision rather than silently strengthening it.

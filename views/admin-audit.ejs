@@ -30,9 +30,10 @@
           </thead>
           <tbody>
             <% logs.forEach((log) => { %>
+              <% const isFavoriteUpdate = log.action === 'page.favorite.update'; %>
               <tr>
                 <td><time datetime="<%= new Date(log.createdAt).toISOString() %>"><%= new Date(log.createdAt).toLocaleString('zh-CN', { hour12: false }) %></time></td>
-                <td><span class="admin-audit-badge <%= log.action %>"><%= log.action %></span></td>
+                <td><span class="admin-audit-badge <%= isFavoriteUpdate ? 'favorite-share-update' : log.action %>"><%= isFavoriteUpdate ? 'Favorite Share 状态更新' : log.action %></span></td>
                 <td>
                   <% if (log.pageId) { %>
                     <a href="/admin/pages/<%= encodeURIComponent(log.pageId) %>"><%= log.pageId %></a>
