@@ -225,6 +225,26 @@ test('Postgres public lookup reports expiry in one query', async () => {
   assert.match(queries[0].sql, /expires_at IS NOT NULL AND expires_at <= \$2/);
 });
 
+test('Postgres admin listing supports explicit unpaginated reads for exports', async () => {
+  const repository = Object.create(PostgresPageRepository.prototype);
+  const queries = [];
+
+  repository.pool = {
+    async query(sql, params) {
+      queries.push({ sql, params });
+      return { rows: [] };
+    }
+  };
+
+  await repository.listAdminPages({ limit: null });
+  await repository.listAdminPages();
+
+  assert.deepEqual(queries[0].params, []);
+  assert.doesNotMatch(queries[0].sql, /LIMIT \$\d+ OFFSET \$\d+/i);
+  assert.deepEqual(queries[1].params, [50, 0]);
+  assert.match(queries[1].sql, /LIMIT \$1 OFFSET \$2/i);
+});
+
 test('Postgres favorite mutation exposes the same result contract as memory storage', async () => {
   const repository = Object.create(PostgresPageRepository.prototype);
   const queries = [];

@@ -160,8 +160,11 @@ class MemoryPageRepository {
       return null;
     }
 
+    const publicPage = { ...page };
+    delete publicPage.is_favorite;
+
     return {
-      page,
+      page: publicPage,
       expired: page.expires_at !== null && Number(page.expires_at) <= now
     };
   }
@@ -181,6 +184,7 @@ class MemoryPageRepository {
   }
 
   async listAdminPages(options = {}) {
+    const isUnpaginated = options.limit === null;
     const limit = Number.isInteger(options.limit) ? options.limit : 50;
     const offset = Number.isInteger(options.offset) ? options.offset : 0;
     const search = options.search || '';
@@ -234,8 +238,9 @@ class MemoryPageRepository {
       return sortOrder === 'asc' ? comparison : -comparison;
     });
 
-    return results
-      .slice(offset, offset + limit)
+    const visibleResults = isUnpaginated ? results : results.slice(offset, offset + limit);
+
+    return visibleResults
       .map((page) => ({
         id: page.id,
         created_at: page.created_at,
@@ -243,6 +248,7 @@ class MemoryPageRepository {
         title: page.title,
         description: page.description,
         is_protected: page.is_protected,
+        is_favorite: page.is_favorite,
         encrypted_password: page.encrypted_password,
         expires_at: page.expires_at
       }));

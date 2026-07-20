@@ -336,6 +336,91 @@ test('Postgres favorite mutation persists transitions and preserves idempotency'
   }
 });
 
+test('Postgres Favorite Share lifecycle preserves admin state and public boundaries', async () => {
+  const pool = createPostgresPool(connectionString, { env, max: 1 });
+  const repository = Object.create(PostgresPageRepository.prototype);
+  repository.pool = pool;
+
+  try {
+    await resetPublicSchema(pool);
+    await runMigrations(pool, { logger: { info() {} } });
+    await repository.create({
+      id: 'favorite-lifecycle-source',
+      htmlContent: '<h1>Favorite lifecycle source</h1>',
+      createdAt: 1000,
+      title: 'Favorite lifecycle source',
+      isFavorite: true
+    });
+
+    assert.equal((await repository.getById('favorite-lifecycle-source')).is_favorite, false);
+    await repository.setFavorite('favorite-lifecycle-source', true);
+    await repository.updatePage('favorite-lifecycle-source', {
+      title: 'Edited favorite lifecycle source',
+      description: 'Still managed after expiry',
+      htmlContent: '<h1>Edited favorite lifecycle source</h1>',
+      expiresAt: 5000,
+      isProtected: true,
+      passwordHash: 'password-hash',
+      encryptedPassword: 'encrypted-password'
+    });
+
+    const updatedSource = await repository.getById('favorite-lifecycle-source');
+    const publicLookup = await repository.getPublicById('favorite-lifecycle-source', 5000);
+
+    assert.equal(updatedSource.is_favorite, true);
+    assert.equal(updatedSource.expires_at, '5000');
+    assert.equal(updatedSource.is_protected, 1);
+    assert.equal(publicLookup.expired, true);
+    assert.equal(Object.hasOwn(publicLookup.page, 'is_favorite'), false);
+    assert.equal((await repository.setFavorite('favorite-lifecycle-source', false)).isFavorite, false);
+    assert.equal((await repository.setFavorite('favorite-lifecycle-source', true)).isFavorite, true);
+
+    await repository.create({
+      id: 'favorite-lifecycle-clone',
+      htmlContent: updatedSource.html_content,
+      passwordHash: null,
+      encryptedPassword: null,
+      isProtected: false,
+      codeType: updatedSource.code_type,
+      title: `${updatedSource.title} (Copy)`,
+      description: updatedSource.description,
+      createdAt: 2000,
+      expiresAt: null,
+      markdownTheme: updatedSource.markdown_theme
+    });
+    await pool.query(`
+      INSERT INTO pages (id, html_content, created_at)
+      SELECT 'favorite-export-' || number, '<p>Export boundary</p>', 2000 + number
+      FROM generate_series(1, 51) AS generated(number)
+    `);
+
+    const adminPages = await repository.listAdminPages({ limit: null });
+    const adminSource = adminPages.find(page => page.id === 'favorite-lifecycle-source');
+    const adminClone = adminPages.find(page => page.id === 'favorite-lifecycle-clone');
+
+    assert.equal(adminPages.length, 53);
+    assert.equal(adminSource.is_favorite, true);
+    assert.equal(adminSource.expires_at, '5000');
+    assert.equal(adminClone.is_favorite, false);
+
+    assert.equal(await repository.deletePage('favorite-lifecycle-source'), true);
+    assert.equal(await repository.getById('favorite-lifecycle-source'), null);
+    assert.deepEqual(await repository.setFavorite('favorite-lifecycle-source', true), {
+      found: false,
+      changed: false,
+      isFavorite: false,
+      previousValue: null
+    });
+    assert.equal(
+      (await repository.listAdminPages({ limit: null }))
+        .some(page => page.id === 'favorite-lifecycle-source'),
+      false
+    );
+  } finally {
+    await pool.end();
+  }
+});
+
 test('site settings persist real transitions and audit them exactly once', async () => {
   const pool = createPostgresPool(connectionString, { env, max: 1 });
   const repository = Object.create(PostgresPageRepository.prototype);
