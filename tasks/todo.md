@@ -579,3 +579,47 @@ Verify:
 - [x] Verify the tracker markup, preview exclusion, CSP, and full test suite.
 
 Review (2026-07-16): the supplied tracker is present once on shared EJS pages and real share wrappers, while generated previews remain untracked. Trusted-page CSP permits only the exact Umami origin for scripts and event delivery. `node --test test/resource-policy.test.js` passed `6/6`, the full `npm test` suite passed `133/133`, `git diff --check` passed, and `https://umami.namooca.com/script.js` returned HTTP `200` with a JavaScript content type.
+
+# Admin favorite feature design session (2026-07-20)
+
+Status: specification published as GitHub Issue #5 with `ready-for-agent`; feature implementation has not started.
+
+- [x] Inspect the current admin authentication boundary, page-list filters, Repository implementations, migrations, and route tests.
+- [x] Resolve whether a favorite is shared dashboard metadata or personal administrator state: it is global metadata on a Share and is identical across dashboard sessions.
+- [x] Resolve favorite lifecycle behavior, list interaction, filtering, cloning, export, and audit expectations one decision at a time.
+  - [x] Model favorite as a binary marked/unmarked classification without a favorite timestamp or favorite-specific ordering.
+  - [x] Keep the favorite filter to `all` and `favorites only`; combine it with the existing search, type, protection-status, and date filters.
+  - [x] Expose the favorite toggle in each admin-list row and in the admin-detail header; never expose it on a public Share.
+  - [x] A cloned Share starts unmarked even when its source is a Favorite Share; the source remains unchanged.
+  - [x] Include favorite state as `isFavorite` in the admin JSON export.
+  - [x] Record each real favorite-state transition as `page.favorite.update` with `from` and `to`; do not audit idempotent submissions.
+  - [x] Keep favorite status independent of expiration; expired Shares remain markable and filterable, while deleting a Share removes its favorite status with the entity.
+  - [x] In favorites-only results, wait for server success before refreshing the filtered list so an unmarked row disappears and totals/pagination remain correct.
+  - [x] Keep bulk favorite and bulk unfavorite actions out of scope for the first version.
+  - [x] Render an unmarked Share with a neutral outline star and a Favorite Share with a filled cyan star, plus text and `aria-pressed` semantics.
+  - [x] Keep a successful favorite-state change when its best-effort audit write fails; log the audit failure on the server.
+- [x] Record agreed domain terms in `CONTEXT.md`; no ADR is needed because the decisions are compatible, unsurprising, and reversible.
+- [x] Produce a minimal implementation plan with explicit migration, application, UI, test, deployment, and rollback checks: `docs/superpowers/specs/2026-07-20-admin-favorites-design.md`.
+- [x] Publish the agreed specification as [GitHub Issue #5](https://github.com/nardinmarcus/quickshare/issues/5) with `ready-for-agent`; keep feature code unchanged in this task.
+
+Verify:
+
+1. Repository facts -> every claimed constraint is traceable to the current checkout rather than runtime cache or historical notes.
+2. Product decisions -> each unresolved branch has an explicit user answer and recommended default.
+3. Documentation -> the glossary contains domain language only; implementation details remain in this task plan.
+4. Implementation gate -> no migration, route, Repository, template, script, or test file changes before explicit approval.
+
+## Ticket publication review
+
+- [x] Split parent Issue #5 into four approved tracer-bullet Tickets sized for one fresh implementation context each.
+- [x] Publish Issues #6–#9 with the `ready-for-agent` label and explicit parent and blocker references.
+- [x] Add GitHub-native blocking relationships: #7 and #8 are blocked by #6; #9 is blocked by #7 and #8.
+- [x] Read back every child Issue and confirm the parent Issue remains open and unmodified.
+
+Frontier:
+
+- [Issue #6](https://github.com/nardinmarcus/quickshare/issues/6) can start immediately.
+- [Issue #7](https://github.com/nardinmarcus/quickshare/issues/7) and [Issue #8](https://github.com/nardinmarcus/quickshare/issues/8) become available after #6.
+- [Issue #9](https://github.com/nardinmarcus/quickshare/issues/9) becomes available after both #7 and #8.
+
+No Favorite Share implementation code was changed while publishing the Tickets.

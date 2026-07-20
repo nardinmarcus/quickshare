@@ -94,3 +94,17 @@ npm test
 - 页面密码支持自定义（4-12 个允许的 ASCII 字符）或自动生成（6 位数字），密码以 hash 存储、以 encrypt 存储（供管理后台回显）。
 - 页面访问通过 `page_access_{id}` 签名 cookie 控制，有效期 24 小时。
 - `GET /view/:id` 必须保持只读；浏览量由同源 `POST /view/:id/view-event` 近似记录，数据库正常路径不得再次读取正文。
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in GitHub Issues for `nardinmarcus/quickshare`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the standard five-role triage vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository with a root `CONTEXT.md` and root-level `docs/adr/` when ADRs are needed. See `docs/agents/domain.md`.
