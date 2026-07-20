@@ -728,7 +728,7 @@ Local evidence: focused lifecycle and Repository checks passed `20/20`; the comp
 
 # Issue #9 — Favorite Share full acceptance and safe release (2026-07-21)
 
-Status: release validation in progress on `main`; baseline `81b219c` contains Issues #6–#8.
+Status: complete on `main` and Production at `92eaa8a`; Issues #9 and #5 are closed.
 
 ## Confirmed verification seams
 
@@ -744,11 +744,11 @@ Status: release validation in progress on `main`; baseline `81b219c` contains Is
 - [x] Run the complete Node suite and the real PostgreSQL integration suite against an isolated disposable database.
 - [x] Add the PostgreSQL suite to CI and reconcile deployment/spec/project documentation with the implemented Favorite Share behavior and application-only rollback.
 - [x] Run local syntax, focused, full, PostgreSQL, workflow-YAML, and diff validation; perform Standards and Spec reviews against `81b219c` and remediate findings.
-- [ ] Commit the reviewed release revision locally and deploy that unpushed commit to Preview with an isolated Preview database.
-- [ ] Complete the Preview browser matrix at 375 px, 768 px, 1440 px, and 200% zoom in light/dark themes, including keyboard, busy/success/failure feedback, filtered removal, overflow, console, and page-error checks.
-- [ ] Regress public view, password, expiration, view count, recent/statistics, and Share API boundaries without Favorite metadata leakage.
-- [ ] After Preview passes, push the same commit to `main`, wait for CI/automatic Production deployment, and confirm the custom domain before using one disposable Share for mark, filter, detail, export, unmark, audit, and delete verification.
-- [ ] Scan deployment/server/browser logs, document the application-only rollback target, publish evidence to Issue #9, close #9 and parent #5, and record the final review below.
+- [x] Commit the reviewed release revision locally and deploy that unpushed commit to Preview with an isolated Preview database.
+- [x] Complete the Preview browser matrix at 375 px, 768 px, 1440 px, and 200% zoom in light/dark themes, including keyboard, busy/success/failure feedback, filtered removal, overflow, console, and page-error checks.
+- [x] Regress public view, password, expiration, view count, recent/statistics, and Share API boundaries without Favorite metadata leakage.
+- [x] After Preview passes, push the same commit to `main`, wait for CI/automatic Production deployment, and confirm the custom domain before using one disposable Share for mark, filter, detail, export, unmark, audit, and delete verification.
+- [x] Scan deployment/server/browser logs, document the application-only rollback target, publish evidence to Issue #9, close #9 and parent #5, and record the final review below.
 
 Verify:
 
@@ -760,9 +760,15 @@ Verify:
 
 ## Review
 
-- Local evidence: Favorite/migration focused tests passed `13/13`; the complete Node suite passed `164/164`; the disposable Postgres 17 integration suite passed `11/11`; workflow YAML and `git diff --check` passed.
+- Local evidence: Favorite/migration focused tests passed `13/13`; after the live-browser network regression was added, the complete Node suite passed `165/165`; the disposable Postgres 17 integration suite passed `11/11`; workflow YAML and `git diff --check` passed.
 - Production containment: Vercel had already auto-deployed Favorite-reading code before schema `003`. A read-only snapshot showed `194 / 165 / 1 / 1` rows across pages, audit logs, API keys, and site settings. After one connection-timeout attempt left schema unchanged, the bounded migration applied only `003`; an immediate rerun skipped all three migrations. Postflight checksum/column/default/null checks passed and all four business counts remained unchanged.
 - Preview database: isolated database `quickshare_issue9_preview_20260721` applied `001`–`003` once and skipped all three on the immediate rerun; it is not connected to production data.
 - Standards review: `0` findings before and after remediation.
 - Spec review: corrected Preview-before-push ordering and the documented `requireDashboardApiAdmin`/`401 JSON` boundary; final re-review found `0` remaining issues.
-- Pending: committed Preview deployment, browser matrix, public regressions, GitHub CI, Production closed loop, log scan, issue closure, and cleanup.
+- Live-browser remediation: Chromium reproduced a rejected Favorite request exposing the native English `Failed to fetch`. A failing browser-controller test was added, the fetch boundary now reports `网络连接失败，请重试`, and both Standards and Spec re-reviews found `0` issues.
+- Preview evidence: committed revision `92eaa8a` passed the 375 px, 768 px, 1440 px, and 720 CSS px 200%-zoom-equivalent matrix in both system themes. Every case had zero page-level overflow, one correctly filtered row, a 44×44 Favorite control, and no unexpected console/page errors. Keyboard busy, success, failure, detail, and filtered-removal flows passed.
+- Compatibility evidence: public and password-protected views, wrong/correct password feedback, expired `410`, exactly-once view counts, recent/statistics, administrative Export, metadata, and Share API responses behaved unchanged. Public/API projections contained no `isFavorite`, `is_favorite`, or Favorite controls.
+- Release evidence: GitHub Actions run `29761976096` passed Node and PostgreSQL jobs. Production deployment `dpl_36UxKNpWy8R4DJ5vKziTLKy4iBZz` is READY at `92eaa8a`, and `quickshare.namooca.com` points to it.
+- Production evidence: one disposable public Share completed API creation, keyboard mark, combined Favorite filtering, detail, Export, audit readback, custom-domain public view, keyboard unmark, and keyboard delete. The Share row was removed; aggregate state returned to 194 pages, 0 favorites, 0 null favorites, 1 API key, and 1 site setting. Only the expected login/create/mark/unmark/delete audit trail remains.
+- Cleanup and rollback: Preview and verification deployments were removed, displaced aliases were restored, the isolated Preview database was dropped, and the local Postgres container plus OrbStack runtime were stopped. Preview, Production, verification-deployment, and browser scans found no error-level, 5xx, or page errors. Application-only rollback target `dpl_h3rMff5hYRbvi7JFgdzvgQBg8sUu` / `ec4cd4f` retains `003`, `is_favorite`, and Favorite Share data.
+- GitHub evidence: Issue #9 and parent Issue #5 are closed with the release evidence attached.
