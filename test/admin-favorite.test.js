@@ -180,6 +180,23 @@ test('favorite control keeps its previous state when the request fails', async (
   assert.deepEqual(navigation, []);
 });
 
+test('favorite control translates a rejected network request into retryable Chinese feedback', async () => {
+  const { favorite, notifications } = runController({
+    isFavorite: true,
+    async fetch() {
+      throw new TypeError('Failed to fetch');
+    }
+  });
+
+  favorite.click();
+  await flushPromises();
+
+  assert.equal(favorite.control.disabled, false);
+  assert.equal(favorite.attributes.get('aria-busy'), 'false');
+  assert.equal(favorite.attributes.get('aria-pressed'), 'true');
+  assert.deepEqual(notifications, [{ type: 'error', message: '网络连接失败，请重试' }]);
+});
+
 test('shared favorite controller binds every row and refreshes only a confirmed Favorite Shares removal', async () => {
   const fetchCalls = [];
   const refreshUrl = '/admin/pages?search=Issue7+Rows&favorite=true&sort=created_at&order=desc&page=2';

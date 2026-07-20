@@ -37,6 +37,8 @@
           'X-CSRF-Token': csrfToken()
         },
         body: JSON.stringify({ isFavorite: targetState })
+      }).catch(function () {
+        throw new Error('网络连接失败，请重试');
       });
       var data = await response.json();
 
