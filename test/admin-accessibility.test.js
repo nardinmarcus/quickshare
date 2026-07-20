@@ -179,6 +179,25 @@ test('detail Favorite Share control exposes state, progress, and a 44px target',
   assert.match(css, /\.admin-favorite-toggle\[aria-pressed="true"\] \.admin-favorite-icon\s*\{[^}]*color:\s*var\(--primary\)/s);
 });
 
+test('list Favorite Share controls expose server state, focus semantics, and 44px targets', async () => {
+  const list = await adminRequest('/admin/pages?search=Accessible%20admin');
+  const favoriteScript = fs.readFileSync(path.join(__dirname, '../public/js/admin-favorite.js'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, '../public/css/styles.css'), 'utf8');
+
+  assert.match(
+    list.text,
+    /data-favorite-toggle[^>]+data-page-id="admin-accessibility"[^>]+data-is-favorite="false"[^>]+aria-pressed="false"[^>]+aria-busy="false"[^>]+aria-label="收藏分享 Accessible admin"/
+  );
+  assert.match(list.text, /class="far fa-star admin-favorite-icon"[^>]+aria-hidden="true"/);
+  assert.match(list.text, /src="\/js\/admin-favorite\.js"/);
+  assert.match(favoriteScript, /querySelectorAll\('\[data-favorite-toggle\]'\)/);
+  assert.match(css, /\.admin-list-favorite-toggle\s*\{[^}]*width:\s*44px[^}]*height:\s*44px/s);
+  assert.match(
+    css,
+    /:where\(a, button, input, textarea, select, \[tabindex\]\):focus-visible\s*\{[^}]*outline:\s*2px solid var\(--primary-light\)[^}]*outline-offset:\s*3px/s
+  );
+});
+
 test('delete modal and tabs implement one accessible keyboard controller', () => {
   const adminScript = fs.readFileSync(path.join(__dirname, '../public/js/admin.js'), 'utf8');
   const detailScript = fs.readFileSync(path.join(__dirname, '../public/js/admin-detail.js'), 'utf8');

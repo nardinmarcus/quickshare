@@ -80,11 +80,40 @@ window.Toast = {
 };
 
 (function initAdminPages() {
+  var pagesContext = document.getElementById('admin-pages-context');
+  var searchForm = document.getElementById('admin-search-form');
+  var searchInput = document.getElementById('admin-search-input');
   var jumpInput = document.getElementById('jump-page-input');
   var jumpBtn = document.getElementById('jump-page-btn');
   var dateFromInput = document.getElementById('filter-date-from');
   var dateToInput = document.getElementById('filter-date-to');
   var dateFilterBtn = document.getElementById('date-filter-btn');
+
+  function adminPageParams() {
+    var source = pagesContext && pagesContext.dataset.adminPagesUrl
+      ? pagesContext.dataset.adminPagesUrl
+      : '/admin/pages' + window.location.search;
+
+    return new URL(source, window.location.origin).searchParams;
+  }
+
+  function navigateAdminPages(params) {
+    var query = params.toString();
+    window.location.href = query ? '/admin/pages?' + query : '/admin/pages';
+  }
+
+  if (searchForm && searchInput) {
+    searchForm.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var params = adminPageParams();
+
+      if (searchInput.value) params.set('search', searchInput.value);
+      else params.delete('search');
+
+      params.delete('page');
+      navigateAdminPages(params);
+    });
+  }
 
   if (jumpInput && jumpBtn) {
     function doJump() {
@@ -92,9 +121,9 @@ window.Toast = {
       if (!Number.isFinite(page) || page < 1) return;
 
       var maxPage = parseInt(jumpInput.max, 10) || 1;
-      var params = new URLSearchParams(window.location.search);
+      var params = adminPageParams();
       params.set('page', Math.min(page, maxPage));
-      window.location.href = '/admin/pages?' + params.toString();
+      navigateAdminPages(params);
     }
 
     jumpBtn.addEventListener('click', doJump);
@@ -105,7 +134,7 @@ window.Toast = {
 
   if (dateFilterBtn && dateFromInput && dateToInput) {
     dateFilterBtn.addEventListener('click', function () {
-      var params = new URLSearchParams(window.location.search);
+      var params = adminPageParams();
 
       if (dateFromInput.value) params.set('dateFrom', dateFromInput.value);
       else params.delete('dateFrom');
@@ -114,7 +143,7 @@ window.Toast = {
       else params.delete('dateTo');
 
       params.delete('page');
-      window.location.href = '/admin/pages?' + params.toString();
+      navigateAdminPages(params);
     });
   }
 

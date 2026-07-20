@@ -14,11 +14,13 @@ function createDeferred() {
   return { promise, resolve };
 }
 
-function createControl(isFavorite) {
+function createControl(isFavorite, options = {}) {
+  const pageId = options.pageId || 'favorite/test';
+  const pageTitle = options.pageTitle || 'Test Share';
   const attributes = new Map([
     ['aria-busy', 'false'],
     ['aria-pressed', String(isFavorite)],
-    ['aria-label', isFavorite ? '取消收藏 Test Share' : '收藏分享 Test Share']
+    ['aria-label', isFavorite ? `取消收藏 ${pageTitle}` : `收藏分享 ${pageTitle}`]
   ]);
   const iconClasses = new Set([isFavorite ? 'fas' : 'far', 'fa-star', 'admin-favorite-icon']);
   const icon = {
@@ -35,9 +37,10 @@ function createControl(isFavorite) {
   return {
     control: {
       dataset: {
-        pageId: 'favorite/test',
-        pageTitle: 'Test Share',
-        isFavorite: String(isFavorite)
+        pageId,
+        pageTitle,
+        isFavorite: String(isFavorite),
+        ...(options.refreshUrl ? { refreshUrl: options.refreshUrl } : {})
       },
       disabled: false,
       getAttribute(name) {
@@ -67,17 +70,32 @@ async function flushPromises() {
   await new Promise(resolve => setImmediate(resolve));
 }
 
-function runController({ isFavorite, fetch }) {
-  const favorite = createControl(isFavorite);
+function runController({ isFavorite, controls, fetch }) {
+  const favorites = (controls || [{ isFavorite }]).map((options) =>
+    createControl(options.isFavorite, options)
+  );
   const notifications = [];
+  const navigation = [];
+  const location = {
+    assign(url) {
+      navigation.push(url);
+    }
+  };
   const context = {
     document: {
       querySelector(selector) {
-        if (selector === '[data-favorite-toggle]') return favorite.control;
+        if (selector === '[data-favorite-toggle]') return favorites[0]?.control || null;
         return { getAttribute: () => 'csrf-token' };
+      },
+      querySelectorAll(selector) {
+        return selector === '[data-favorite-toggle]'
+          ? favorites.map(favorite => favorite.control)
+          : [];
       }
     },
     fetch,
+    location,
+    window: { location },
     Toast: {
       success(message) {
         notifications.push({ type: 'success', message });
@@ -89,7 +107,7 @@ function runController({ isFavorite, fetch }) {
   };
 
   vm.runInNewContext(source, context);
-  return { favorite, notifications };
+  return { favorite: favorites[0], favorites, notifications, navigation };
 }
 
 test('favorite control waits for the server and ignores repeat clicks while busy', async () => {
@@ -134,8 +152,11 @@ test('favorite control waits for the server and ignores repeat clicks while busy
 });
 
 test('favorite control keeps its previous state when the request fails', async () => {
-  const { favorite, notifications } = runController({
-    isFavorite: true,
+  const { favorite, notifications, navigation } = runController({
+    controls: [{
+      isFavorite: true,
+      refreshUrl: '/admin/pages?favorite=true&search=Retry'
+    }],
     async fetch() {
       return {
         ok: false,
@@ -156,4 +177,52 @@ test('favorite control keeps its previous state when the request fails', async (
   assert.equal(favorite.label.textContent, '取消收藏');
   assert.equal(favorite.iconClasses.has('fas'), true);
   assert.deepEqual(notifications, [{ type: 'error', message: '暂时无法更新收藏' }]);
+  assert.deepEqual(navigation, []);
+});
+
+test('shared favorite controller binds every row and refreshes only a confirmed Favorite Shares removal', async () => {
+  const fetchCalls = [];
+  const refreshUrl = '/admin/pages?search=Issue7+Rows&favorite=true&sort=created_at&order=desc&page=2';
+  const { favorites, notifications, navigation } = runController({
+    controls: [
+      { isFavorite: false, pageId: 'normal-row', pageTitle: 'Normal Row' },
+      {
+        isFavorite: true,
+        pageId: 'filtered-row',
+        pageTitle: 'Filtered Row',
+        refreshUrl
+      }
+    ],
+    async fetch(url, options) {
+      fetchCalls.push({ url, options });
+      const { isFavorite } = JSON.parse(options.body);
+      return {
+        ok: true,
+        async json() {
+          return { success: true, changed: true, isFavorite };
+        }
+      };
+    }
+  });
+
+  favorites[0].click();
+  await flushPromises();
+
+  assert.equal(favorites[0].attributes.get('aria-pressed'), 'true');
+  assert.equal(favorites[1].attributes.get('aria-pressed'), 'true');
+  assert.deepEqual(navigation, []);
+
+  favorites[1].click();
+  await flushPromises();
+
+  assert.deepEqual(fetchCalls.map(call => call.url), [
+    '/admin/pages/normal-row/favorite',
+    '/admin/pages/filtered-row/favorite'
+  ]);
+  assert.equal(favorites[1].attributes.get('aria-pressed'), 'false');
+  assert.deepEqual(notifications, [
+    { type: 'success', message: '已收藏' },
+    { type: 'success', message: '已取消收藏' }
+  ]);
+  assert.deepEqual(navigation, [refreshUrl]);
 });

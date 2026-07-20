@@ -843,6 +843,24 @@ function parsePagination(query) {
   };
 }
 
+function buildAdminPagesUrl(filters, overrides = {}) {
+  const values = { ...filters, ...overrides };
+  const params = new URLSearchParams();
+  const keys = ['search', 'type', 'status', 'favorite', 'sort', 'order', 'dateFrom', 'dateTo', 'page'];
+
+  keys.forEach((key) => {
+    const value = values[key];
+
+    if (value === undefined || value === null || value === '') return;
+    if (key === 'favorite' && value !== 'true') return;
+    if (key === 'page' && Number(value) <= 1) return;
+    params.set(key, String(value));
+  });
+
+  const query = params.toString();
+  return query ? `/admin/pages?${query}` : '/admin/pages';
+}
+
 function publicPageUrl(req, id) {
   const base = config.shareBaseUrl || config.baseUrl || `${req.protocol}://${req.get('host')}`;
   return `${base.replace(/\/+$/, '')}/view/${encodeURIComponent(id)}`;
@@ -1117,12 +1135,14 @@ app.get('/admin/pages/export', requireDashboardAdmin, async (req, res) => {
 app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
   try {
     const requestedPagination = parsePagination(req.query);
+    const favorite = req.query.favorite === 'true' ? 'true' : '';
     const filterOptions = {
       search: req.query.search || '',
       codeType: req.query.type || '',
       isProtected: req.query.status || '',
       dateFrom: req.query.dateFrom || '',
-      dateTo: req.query.dateTo || ''
+      dateTo: req.query.dateTo || '',
+      isFavorite: favorite === 'true'
     };
     const sortBy = req.query.sort || 'created_at';
     const sortOrder = req.query.order === 'asc' ? 'asc' : 'desc';
@@ -1145,6 +1165,20 @@ app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
       ...sharedPage,
       visiblePassword: visiblePagePassword(sharedPage)
     }));
+    const filters = {
+      search: filterOptions.search,
+      type: filterOptions.codeType,
+      status: filterOptions.isProtected,
+      favorite,
+      sort: sortBy,
+      order: sortOrder,
+      dateFrom: filterOptions.dateFrom,
+      dateTo: filterOptions.dateTo
+    };
+    const hasActiveFilters = Boolean(
+      filters.search || filters.type || filters.status || filters.favorite || filters.dateFrom || filters.dateTo
+    );
+    const hasAnyPages = total > 0 || (hasActiveFilters && await pageRepository.countPages() > 0);
     const sessionToken = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE] || '';
 
     return res.render('admin-pages', {
@@ -1159,15 +1193,10 @@ app.get('/admin/pages', requireDashboardAdmin, async (req, res) => {
         hasPrevious: pagination.page > 1,
         hasNext: pagination.page < totalPages
       },
-      filters: {
-        search: filterOptions.search,
-        type: filterOptions.codeType,
-        status: filterOptions.isProtected,
-        sort: sortBy,
-        order: sortOrder,
-        dateFrom: filterOptions.dateFrom,
-        dateTo: filterOptions.dateTo
-      },
+      filters,
+      hasAnyPages,
+      adminPagesUrl: (overrides) => buildAdminPagesUrl(filters, overrides),
+      favoriteRefreshUrl: buildAdminPagesUrl(filters, { page: pagination.page }),
       publicPageUrl: (id) => publicPageUrl(req, id)
     });
   } catch (error) {

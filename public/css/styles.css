@@ -997,6 +997,7 @@ html:is([data-theme="default"], [data-theme="dark"], [data-theme="light"]) .cybe
 
 html:is([data-theme="default"], [data-theme="dark"], [data-theme="light"]) .cyber-btn-secondary,
 html:is([data-theme="default"], [data-theme="dark"], [data-theme="light"]) .admin-icon-link,
+html:is([data-theme="default"], [data-theme="dark"], [data-theme="light"]) .admin-list-favorite-toggle,
 html:is([data-theme="default"], [data-theme="dark"], [data-theme="light"]) .admin-clone-btn,
 html:is([data-theme="default"], [data-theme="dark"], [data-theme="light"]) .admin-delete-btn,
 html:is([data-theme="default"], [data-theme="dark"], [data-theme="light"]) .admin-toggle-password-btn,
@@ -1011,6 +1012,7 @@ html:is([data-theme="default"], [data-theme="dark"], [data-theme="light"]) .resu
 
 html:is([data-theme="default"], [data-theme="dark"], [data-theme="light"]) .cyber-btn-secondary:hover,
 html:is([data-theme="default"], [data-theme="dark"], [data-theme="light"]) .admin-icon-link:hover,
+html:is([data-theme="default"], [data-theme="dark"], [data-theme="light"]) .admin-list-favorite-toggle:hover,
 html:is([data-theme="default"], [data-theme="dark"], [data-theme="light"]) .admin-clone-btn:hover,
 html:is([data-theme="default"], [data-theme="dark"], [data-theme="light"]) .admin-toggle-password-btn:hover,
 html:is([data-theme="default"], [data-theme="dark"], [data-theme="light"]) .toggle-password-btn:hover,
@@ -1471,6 +1473,31 @@ body:hover::-webkit-scrollbar,
 
 .admin-favorite-toggle[aria-pressed="true"] .admin-favorite-icon {
   color: var(--primary);
+}
+
+.admin-list-favorite-toggle {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+}
+
+.admin-list-favorite-toggle:hover {
+  border-color: var(--primary);
+  background: var(--button-hover);
+}
+
+.admin-list-favorite-toggle:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .admin-kicker {
@@ -2116,12 +2143,13 @@ body:hover::-webkit-scrollbar,
 }
 
 .admin-actions-col {
-  width: 120px;
-  min-width: 120px;
+  width: 172px;
+  min-width: 172px;
   white-space: nowrap;
 }
 
 .admin-actions-col form,
+.admin-actions-col .admin-list-favorite-toggle,
 .admin-actions-col .admin-clone-btn,
 .admin-actions-col .admin-delete-btn {
   display: inline-flex;

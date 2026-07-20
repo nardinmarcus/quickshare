@@ -1,6 +1,6 @@
 <%- include('partials/header', { title, page, csrfToken }) %>
 
-<div class="admin-container">
+<div class="admin-container" id="admin-pages-context" data-admin-pages-url="<%= favoriteRefreshUrl %>">
   <header class="admin-header">
     <div>
       <p class="admin-kicker">QuickShare</p>
@@ -18,33 +18,35 @@
   </div>
 
   <section class="card admin-card">
-    <% if (pagination.total === 0 && !filters.search && !filters.type && !filters.status) { %>
+    <% if (!hasAnyPages) { %>
       <div class="admin-empty">
         <h2>还没有分享</h2>
         <p>可以从首页或 Share API 创建第一个分享。</p>
       </div>
     <% } else { %>
       <div class="admin-filter-bar">
-        <form class="admin-search-form" method="get" action="/admin/pages">
+        <form class="admin-search-form" id="admin-search-form" method="get" action="/admin/pages">
           <div class="admin-search-box">
             <i class="fas fa-search" aria-hidden="true"></i>
             <input
               type="text"
+              id="admin-search-input"
               name="search"
               value="<%= filters.search %>"
               placeholder="按标题、ID 或描述搜索"
               aria-label="搜索分享"
             >
           </div>
-          <input type="hidden" name="type" value="<%= filters.type %>">
-          <input type="hidden" name="status" value="<%= filters.status %>">
+          <% if (filters.type) { %><input type="hidden" name="type" value="<%= filters.type %>"><% } %>
+          <% if (filters.status) { %><input type="hidden" name="status" value="<%= filters.status %>"><% } %>
+          <% if (filters.favorite) { %><input type="hidden" name="favorite" value="true"><% } %>
           <input type="hidden" name="sort" value="<%= filters.sort %>">
           <input type="hidden" name="order" value="<%= filters.order %>">
-          <input type="hidden" name="dateFrom" value="<%= filters.dateFrom || '' %>">
-          <input type="hidden" name="dateTo" value="<%= filters.dateTo || '' %>">
+          <% if (filters.dateFrom) { %><input type="hidden" name="dateFrom" value="<%= filters.dateFrom %>"><% } %>
+          <% if (filters.dateTo) { %><input type="hidden" name="dateTo" value="<%= filters.dateTo %>"><% } %>
           <button type="submit" class="cyber-btn cyber-btn-secondary">搜索</button>
           <% if (filters.search) { %>
-            <a class="cyber-btn cyber-btn-secondary" href="/admin/pages?type=<%= encodeURIComponent(filters.type) %>&status=<%= encodeURIComponent(filters.status) %>&sort=<%= filters.sort %>&order=<%= filters.order %>&dateFrom=<%= encodeURIComponent(filters.dateFrom || '') %>&dateTo=<%= encodeURIComponent(filters.dateTo || '') %>">清除</a>
+            <a class="cyber-btn cyber-btn-secondary" href="<%= adminPagesUrl({ search: '', page: '' }) %>">清除</a>
           <% } %>
         </form>
 
@@ -56,8 +58,7 @@
             <input type="date" id="filter-date-to" value="<%= filters.dateTo || '' %>" aria-label="结束日期">
             <button type="button" class="cyber-btn cyber-btn-secondary" id="date-filter-btn">筛选</button>
             <% if (filters.dateFrom || filters.dateTo) { %>
-              <% var clearParams = new URLSearchParams(); if (filters.search) clearParams.set('search', filters.search); if (filters.type) clearParams.set('type', filters.type); if (filters.status) clearParams.set('status', filters.status); if (filters.sort) clearParams.set('sort', filters.sort); if (filters.order) clearParams.set('order', filters.order); %>
-              <a class="cyber-btn cyber-btn-secondary" href="/admin/pages?<%= clearParams.toString() %>">清除</a>
+              <a class="cyber-btn cyber-btn-secondary" href="<%= adminPagesUrl({ dateFrom: '', dateTo: '', page: '' }) %>">清除</a>
             <% } %>
           </div>
         </div>
@@ -65,9 +66,9 @@
         <div class="admin-filter-group">
           <span class="admin-filter-label">类型</span>
           <div class="admin-filter-buttons">
-            <a class="admin-filter-btn <%= !filters.type ? 'active' : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&status=<%= encodeURIComponent(filters.status) %>&sort=<%= filters.sort %>&order=<%= filters.order %>">全部</a>
+            <a class="admin-filter-btn <%= !filters.type ? 'active' : '' %>" href="<%= adminPagesUrl({ type: '', page: '' }) %>">全部</a>
             <% ['html', 'markdown', 'svg', 'mermaid'].forEach(function(t) { %>
-              <a class="admin-filter-btn <%= filters.type === t ? 'active' : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&type=<%= t %>&status=<%= encodeURIComponent(filters.status) %>&sort=<%= filters.sort %>&order=<%= filters.order %>"><%= t %></a>
+              <a class="admin-filter-btn <%= filters.type === t ? 'active' : '' %>" href="<%= adminPagesUrl({ type: t, page: '' }) %>"><%= t %></a>
             <% }); %>
           </div>
         </div>
@@ -75,9 +76,17 @@
         <div class="admin-filter-group">
           <span class="admin-filter-label">状态</span>
           <div class="admin-filter-buttons">
-            <a class="admin-filter-btn <%= !filters.status ? 'active' : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&sort=<%= filters.sort %>&order=<%= filters.order %>">全部</a>
-            <a class="admin-filter-btn <%= filters.status === 'public' ? 'active' : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&status=public&sort=<%= filters.sort %>&order=<%= filters.order %>">公开</a>
-            <a class="admin-filter-btn <%= filters.status === 'protected' ? 'active' : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&status=protected&sort=<%= filters.sort %>&order=<%= filters.order %>">密码保护</a>
+            <a class="admin-filter-btn <%= !filters.status ? 'active' : '' %>" href="<%= adminPagesUrl({ status: '', page: '' }) %>">全部</a>
+            <a class="admin-filter-btn <%= filters.status === 'public' ? 'active' : '' %>" href="<%= adminPagesUrl({ status: 'public', page: '' }) %>">公开</a>
+            <a class="admin-filter-btn <%= filters.status === 'protected' ? 'active' : '' %>" href="<%= adminPagesUrl({ status: 'protected', page: '' }) %>">密码保护</a>
+          </div>
+        </div>
+
+        <div class="admin-filter-group">
+          <span class="admin-filter-label">收藏</span>
+          <div class="admin-filter-buttons">
+            <a class="admin-filter-btn <%= !filters.favorite ? 'active' : '' %>" href="<%= adminPagesUrl({ favorite: '', page: '' }) %>">全部 Shares</a>
+            <a class="admin-filter-btn <%= filters.favorite ? 'active' : '' %>" href="<%= adminPagesUrl({ favorite: 'true', page: '' }) %>">Favorite Shares</a>
           </div>
         </div>
       </div>
@@ -108,17 +117,17 @@
                 </th>
                 <th scope="col">标题</th>
                 <th scope="col" aria-sort="<%= filters.sort === 'code_type' ? (filters.order === 'asc' ? 'ascending' : 'descending') : 'none' %>">
-                  <a class="admin-sortable <%= filters.sort === 'code_type' ? filters.order : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&status=<%= encodeURIComponent(filters.status) %>&sort=code_type&order=<%= filters.sort === 'code_type' && filters.order === 'desc' ? 'asc' : 'desc' %>">
+                  <a class="admin-sortable <%= filters.sort === 'code_type' ? filters.order : '' %>" href="<%= adminPagesUrl({ sort: 'code_type', order: filters.sort === 'code_type' && filters.order === 'desc' ? 'asc' : 'desc', page: '' }) %>">
                     类型 <i class="fas fa-sort<%= filters.sort === 'code_type' ? (filters.order === 'asc' ? '-up' : '-down') : '' %>" aria-hidden="true"></i>
                   </a>
                 </th>
                 <th scope="col" aria-sort="<%= filters.sort === 'created_at' ? (filters.order === 'asc' ? 'ascending' : 'descending') : 'none' %>">
-                  <a class="admin-sortable <%= filters.sort === 'created_at' ? filters.order : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&status=<%= encodeURIComponent(filters.status) %>&sort=created_at&order=<%= filters.sort === 'created_at' && filters.order === 'desc' ? 'asc' : 'desc' %>">
+                  <a class="admin-sortable <%= filters.sort === 'created_at' ? filters.order : '' %>" href="<%= adminPagesUrl({ sort: 'created_at', order: filters.sort === 'created_at' && filters.order === 'desc' ? 'asc' : 'desc', page: '' }) %>">
                     创建时间 <i class="fas fa-sort<%= filters.sort === 'created_at' ? (filters.order === 'asc' ? '-up' : '-down') : '' %>" aria-hidden="true"></i>
                   </a>
                 </th>
                 <th scope="col" aria-sort="<%= filters.sort === 'is_protected' ? (filters.order === 'asc' ? 'ascending' : 'descending') : 'none' %>">
-                  <a class="admin-sortable <%= filters.sort === 'is_protected' ? filters.order : '' %>" href="/admin/pages?search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&status=<%= encodeURIComponent(filters.status) %>&sort=is_protected&order=<%= filters.sort === 'is_protected' && filters.order === 'desc' ? 'asc' : 'desc' %>">
+                  <a class="admin-sortable <%= filters.sort === 'is_protected' ? filters.order : '' %>" href="<%= adminPagesUrl({ sort: 'is_protected', order: filters.sort === 'is_protected' && filters.order === 'desc' ? 'asc' : 'desc', page: '' }) %>">
                     状态 <i class="fas fa-sort<%= filters.sort === 'is_protected' ? (filters.order === 'asc' ? '-up' : '-down') : '' %>" aria-hidden="true"></i>
                   </a>
                 </th>
@@ -180,6 +189,21 @@
                     </a>
                   </td>
                   <td class="admin-actions-col">
+                    <button
+                      type="button"
+                      class="admin-favorite-toggle admin-list-favorite-toggle"
+                      data-favorite-toggle
+                      data-page-id="<%= sharedPage.id %>"
+                      data-page-title="<%= sharedPage.title || sharedPage.id %>"
+                      data-is-favorite="<%= sharedPage.is_favorite ? 'true' : 'false' %>"
+                      <% if (filters.favorite) { %>data-refresh-url="<%= favoriteRefreshUrl %>"<% } %>
+                      aria-pressed="<%= sharedPage.is_favorite ? 'true' : 'false' %>"
+                      aria-busy="false"
+                      aria-label="<%= sharedPage.is_favorite ? `取消收藏 ${sharedPage.title || sharedPage.id}` : `收藏分享 ${sharedPage.title || sharedPage.id}` %>"
+                    >
+                      <i class="<%= sharedPage.is_favorite ? 'fas' : 'far' %> fa-star admin-favorite-icon" aria-hidden="true"></i>
+                      <span class="sr-only admin-favorite-label"><%= sharedPage.is_favorite ? '取消收藏' : '收藏' %></span>
+                    </button>
                     <form method="post" action="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>/clone" class="admin-inline-form">
                       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                       <button type="submit" class="admin-clone-btn" aria-label="克隆分享 <%= sharedPage.title || sharedPage.id %>">
@@ -204,7 +228,7 @@
 
         <nav class="admin-pagination" aria-label="分享列表分页">
           <% if (pagination.hasPrevious) { %>
-            <a class="cyber-btn cyber-btn-secondary" href="/admin/pages?page=<%= pagination.page - 1 %>&search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&status=<%= encodeURIComponent(filters.status) %>&sort=<%= filters.sort %>&order=<%= filters.order %>">上一页</a>
+            <a class="cyber-btn cyber-btn-secondary" href="<%= adminPagesUrl({ page: pagination.page - 1 }) %>">上一页</a>
           <% } else { %>
             <span class="cyber-btn cyber-btn-secondary disabled" aria-disabled="true">上一页</span>
           <% } %>
@@ -215,7 +239,7 @@
             <button type="button" class="cyber-btn cyber-btn-secondary" id="jump-page-btn">前往</button>
           </span>
           <% if (pagination.hasNext) { %>
-            <a class="cyber-btn cyber-btn-secondary" href="/admin/pages?page=<%= pagination.page + 1 %>&search=<%= encodeURIComponent(filters.search) %>&type=<%= encodeURIComponent(filters.type) %>&status=<%= encodeURIComponent(filters.status) %>&sort=<%= filters.sort %>&order=<%= filters.order %>">下一页</a>
+            <a class="cyber-btn cyber-btn-secondary" href="<%= adminPagesUrl({ page: pagination.page + 1 }) %>">下一页</a>
           <% } else { %>
             <span class="cyber-btn cyber-btn-secondary disabled" aria-disabled="true">下一页</span>
           <% } %>
@@ -240,4 +264,5 @@
 </div>
 
 <script src="/js/admin.js"></script>
+<script src="/js/admin-favorite.js"></script>
 <%- include('partials/footer', { page }) %>

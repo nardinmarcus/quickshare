@@ -119,6 +119,70 @@ test('memory favorite mutation accepts only boolean targets', async () => {
   assert.equal((await repository.getById('favorite-boolean')).is_favorite, false);
 });
 
+test('admin favorite filtering composes with every existing condition and keeps count aligned', async () => {
+  const repository = new MemoryPageRepository();
+  const fixtures = [
+    {
+      id: 'favorite-combination-match',
+      title: 'Quarterly Favorite Match',
+      codeType: 'markdown',
+      isProtected: true,
+      createdAt: Date.parse('2026-07-10T12:00:00Z'),
+      favorite: true
+    },
+    {
+      id: 'favorite-wrong-type',
+      title: 'Quarterly Favorite HTML',
+      codeType: 'html',
+      isProtected: true,
+      createdAt: Date.parse('2026-07-11T12:00:00Z'),
+      favorite: true
+    },
+    {
+      id: 'unmarked-combination-match',
+      title: 'Quarterly Unmarked Match',
+      codeType: 'markdown',
+      isProtected: true,
+      createdAt: Date.parse('2026-07-12T12:00:00Z'),
+      favorite: false
+    },
+    {
+      id: 'favorite-outside-date',
+      title: 'Quarterly Favorite Old',
+      codeType: 'markdown',
+      isProtected: true,
+      createdAt: Date.parse('2026-06-30T12:00:00Z'),
+      favorite: true
+    }
+  ];
+
+  for (const fixture of fixtures) {
+    await repository.create({
+      id: fixture.id,
+      htmlContent: '# Favorite filter fixture',
+      title: fixture.title,
+      codeType: fixture.codeType,
+      isProtected: fixture.isProtected,
+      createdAt: fixture.createdAt
+    });
+    if (fixture.favorite) await repository.setFavorite(fixture.id, true);
+  }
+
+  const filters = {
+    search: 'Quarterly',
+    codeType: 'markdown',
+    isProtected: 'protected',
+    dateFrom: '2026-07-01',
+    dateTo: '2026-07-31',
+    isFavorite: true
+  };
+  const pages = await repository.listAdminPages(filters);
+
+  assert.deepEqual(pages.map(page => page.id), ['favorite-combination-match']);
+  assert.equal(pages[0].is_favorite, true);
+  assert.equal(await repository.countPages(filters), 1);
+});
+
 test('admin stats aggregate totals, protection, types, and recent days', async () => {
   const repository = new MemoryPageRepository();
   await repository.init();
@@ -277,6 +341,47 @@ test('Postgres favorite mutation exposes the same result contract as memory stor
   await assert.rejects(repository.setFavorite('changed', 1), /isFavorite must be a boolean/);
   assert.match(queries[0].sql, /SELECT id, is_favorite[\s\S]+FOR UPDATE/i);
   assert.match(queries[0].sql, /UPDATE pages[\s\S]+FROM existing/i);
+});
+
+test('Postgres admin favorite list and count share one composed filter contract', async () => {
+  const repository = Object.create(PostgresPageRepository.prototype);
+  const queries = [];
+
+  repository.pool = {
+    async query(sql, params) {
+      queries.push({ sql, params });
+      if (/COUNT\(\*\)/i.test(sql)) return { rows: [{ count: '1' }] };
+      return { rows: [{ id: 'favorite-combination-match', is_favorite: true }] };
+    }
+  };
+
+  const filters = {
+    search: 'Quarterly',
+    codeType: 'markdown',
+    isProtected: 'protected',
+    dateFrom: '2026-07-01',
+    dateTo: '2026-07-31',
+    isFavorite: true
+  };
+  const pages = await repository.listAdminPages({
+    ...filters,
+    limit: 50,
+    offset: 0,
+    sortBy: 'created_at',
+    sortOrder: 'desc'
+  });
+  const count = await repository.countPages(filters);
+  const normalizedWhere = (sql) => sql
+    .match(/WHERE ([\s\S]*?)(?:ORDER BY|LIMIT|$)/i)?.[1]
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  assert.equal(pages[0].is_favorite, true);
+  assert.equal(count, 1);
+  assert.match(queries[0].sql, /SELECT[\s\S]+is_favorite[\s\S]+FROM pages/i);
+  assert.match(queries[0].sql, /is_favorite = TRUE/i);
+  assert.equal(normalizedWhere(queries[0].sql), normalizedWhere(queries[1].sql));
+  assert.deepEqual(queries[0].params.slice(0, -2), queries[1].params);
 });
 
 test('view events update eligible rows without selecting page content', async () => {

@@ -30,6 +30,58 @@ function buildDailyStats(createdAtRows, days = 14) {
   }));
 }
 
+function buildAdminPageFilter(options = {}) {
+  const conditions = [];
+  const params = [];
+  let paramIndex = 1;
+
+  if (options.search) {
+    conditions.push(`(id ILIKE $${paramIndex} OR title ILIKE $${paramIndex} OR description ILIKE $${paramIndex})`);
+    params.push(`%${options.search}%`);
+    paramIndex += 1;
+  }
+
+  if (options.codeType) {
+    conditions.push(`code_type = $${paramIndex}`);
+    params.push(options.codeType);
+    paramIndex += 1;
+  }
+
+  if (options.isProtected !== undefined && options.isProtected !== '') {
+    conditions.push(`is_protected = $${paramIndex}`);
+    params.push(options.isProtected === true || options.isProtected === 'true' || options.isProtected === 1 || options.isProtected === 'protected' ? 1 : 0);
+    paramIndex += 1;
+  }
+
+  if (options.isFavorite === true) {
+    conditions.push('is_favorite = TRUE');
+  }
+
+  if (options.dateFrom) {
+    const fromTime = new Date(options.dateFrom).getTime();
+    if (Number.isFinite(fromTime)) {
+      conditions.push(`created_at >= $${paramIndex}`);
+      params.push(fromTime);
+      paramIndex += 1;
+    }
+  }
+
+  if (options.dateTo) {
+    const toTime = new Date(options.dateTo + 'T23:59:59.999').getTime();
+    if (Number.isFinite(toTime)) {
+      conditions.push(`created_at <= $${paramIndex}`);
+      params.push(toTime);
+      paramIndex += 1;
+    }
+  }
+
+  return {
+    whereClause: conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '',
+    params,
+    nextParamIndex: paramIndex
+  };
+}
+
 class PostgresPageRepository {
   constructor(connectionString, env = process.env) {
     if (!connectionString) {
@@ -181,53 +233,9 @@ class PostgresPageRepository {
   async listAdminPages(options = {}) {
     const limit = Number.isInteger(options.limit) ? options.limit : 50;
     const offset = Number.isInteger(options.offset) ? options.offset : 0;
-    const search = options.search || '';
-    const codeType = options.codeType || '';
-    const isProtected = options.isProtected;
     const sortBy = options.sortBy || 'created_at';
     const sortOrder = options.sortOrder || 'desc';
-
-    const conditions = [];
-    const params = [];
-    let paramIndex = 1;
-
-    if (search) {
-      conditions.push(`(id ILIKE $${paramIndex} OR title ILIKE $${paramIndex} OR description ILIKE $${paramIndex})`);
-      params.push(`%${search}%`);
-      paramIndex += 1;
-    }
-
-    if (codeType) {
-      conditions.push(`code_type = $${paramIndex}`);
-      params.push(codeType);
-      paramIndex += 1;
-    }
-
-    if (isProtected !== undefined && isProtected !== '') {
-      conditions.push(`is_protected = $${paramIndex}`);
-      params.push(isProtected === true || isProtected === 'true' || isProtected === 1 || isProtected === 'protected' ? 1 : 0);
-      paramIndex += 1;
-    }
-
-    if (options.dateFrom) {
-      const fromTime = new Date(options.dateFrom).getTime();
-      if (Number.isFinite(fromTime)) {
-        conditions.push(`created_at >= $${paramIndex}`);
-        params.push(fromTime);
-        paramIndex += 1;
-      }
-    }
-
-    if (options.dateTo) {
-      const toTime = new Date(options.dateTo + 'T23:59:59.999').getTime();
-      if (Number.isFinite(toTime)) {
-        conditions.push(`created_at <= $${paramIndex}`);
-        params.push(toTime);
-        paramIndex += 1;
-      }
-    }
-
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { whereClause, params, nextParamIndex } = buildAdminPageFilter(options);
 
     const allowedSortColumns = { created_at: 'created_at', code_type: 'code_type', is_protected: 'is_protected' };
     const orderColumn = allowedSortColumns[sortBy] || 'created_at';
@@ -237,11 +245,11 @@ class PostgresPageRepository {
 
     const result = await this.pool.query(
       `
-        SELECT id, created_at, code_type, title, description, is_protected, encrypted_password, expires_at, COALESCE(view_count, 0) AS view_count
+        SELECT id, created_at, code_type, title, description, is_protected, is_favorite, encrypted_password, expires_at, COALESCE(view_count, 0) AS view_count
         FROM pages
         ${whereClause}
         ORDER BY ${orderColumn} ${orderDirection}
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+        LIMIT $${nextParamIndex} OFFSET $${nextParamIndex + 1}
       `,
       params
     );
@@ -250,51 +258,7 @@ class PostgresPageRepository {
   }
 
   async countPages(options = {}) {
-    const search = options.search || '';
-    const codeType = options.codeType || '';
-    const isProtected = options.isProtected;
-
-    const conditions = [];
-    const params = [];
-    let paramIndex = 1;
-
-    if (search) {
-      conditions.push(`(id ILIKE $${paramIndex} OR title ILIKE $${paramIndex} OR description ILIKE $${paramIndex})`);
-      params.push(`%${search}%`);
-      paramIndex += 1;
-    }
-
-    if (codeType) {
-      conditions.push(`code_type = $${paramIndex}`);
-      params.push(codeType);
-      paramIndex += 1;
-    }
-
-    if (isProtected !== undefined && isProtected !== '') {
-      conditions.push(`is_protected = $${paramIndex}`);
-      params.push(isProtected === true || isProtected === 'true' || isProtected === 1 || isProtected === 'protected' ? 1 : 0);
-      paramIndex += 1;
-    }
-
-    if (options.dateFrom) {
-      const fromTime = new Date(options.dateFrom).getTime();
-      if (Number.isFinite(fromTime)) {
-        conditions.push(`created_at >= $${paramIndex}`);
-        params.push(fromTime);
-        paramIndex += 1;
-      }
-    }
-
-    if (options.dateTo) {
-      const toTime = new Date(options.dateTo + 'T23:59:59.999').getTime();
-      if (Number.isFinite(toTime)) {
-        conditions.push(`created_at <= $${paramIndex}`);
-        params.push(toTime);
-        paramIndex += 1;
-      }
-    }
-
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { whereClause, params } = buildAdminPageFilter(options);
 
     const result = await this.pool.query(
       `SELECT COUNT(*) AS count FROM pages ${whereClause}`,

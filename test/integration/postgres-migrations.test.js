@@ -336,6 +336,52 @@ test('Postgres favorite mutation persists transitions and preserves idempotency'
   }
 });
 
+test('Postgres Favorite Shares combine with every admin list condition and aligned counts', async () => {
+  const pool = createPostgresPool(connectionString, { env, max: 1 });
+  const repository = Object.create(PostgresPageRepository.prototype);
+  repository.pool = pool;
+
+  try {
+    await resetPublicSchema(pool);
+    await runMigrations(pool, { logger: { info() {} } });
+    const fixtures = [
+      ['favorite-filter-match', 'Quarterly Favorite Match', 'markdown', true, '2026-07-10T12:00:00Z', true],
+      ['favorite-filter-html', 'Quarterly Favorite HTML', 'html', true, '2026-07-11T12:00:00Z', true],
+      ['favorite-filter-public', 'Quarterly Favorite Public', 'markdown', false, '2026-07-12T12:00:00Z', true],
+      ['favorite-filter-unmarked', 'Quarterly Unmarked Match', 'markdown', true, '2026-07-13T12:00:00Z', false],
+      ['favorite-filter-old', 'Quarterly Favorite Old', 'markdown', true, '2026-06-30T12:00:00Z', true]
+    ];
+
+    for (const [id, title, codeType, isProtected, date, favorite] of fixtures) {
+      await repository.create({
+        id,
+        htmlContent: '# Postgres favorite filter fixture',
+        title,
+        codeType,
+        isProtected,
+        createdAt: Date.parse(date)
+      });
+      if (favorite) await repository.setFavorite(id, true);
+    }
+
+    const filters = {
+      search: 'Quarterly',
+      codeType: 'markdown',
+      isProtected: 'protected',
+      dateFrom: '2026-07-01',
+      dateTo: '2026-07-31',
+      isFavorite: true
+    };
+    const pages = await repository.listAdminPages(filters);
+
+    assert.deepEqual(pages.map(page => page.id), ['favorite-filter-match']);
+    assert.equal(pages[0].is_favorite, true);
+    assert.equal(await repository.countPages(filters), 1);
+  } finally {
+    await pool.end();
+  }
+});
+
 test('site settings persist real transitions and audit them exactly once', async () => {
   const pool = createPostgresPool(connectionString, { env, max: 1 });
   const repository = Object.create(PostgresPageRepository.prototype);

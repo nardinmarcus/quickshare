@@ -28,6 +28,47 @@ function buildDailyStats(pages, days = 14) {
   }));
 }
 
+function filterAdminPages(pages, options = {}) {
+  const search = options.search || '';
+  const codeType = options.codeType || '';
+  const isProtected = options.isProtected;
+  const dateFrom = options.dateFrom ? new Date(options.dateFrom).getTime() : null;
+  const dateTo = options.dateTo ? new Date(options.dateTo + 'T23:59:59.999').getTime() : null;
+  let results = pages;
+
+  if (search) {
+    const query = search.toLowerCase();
+    results = results.filter((page) =>
+      (page.id && page.id.toLowerCase().includes(query)) ||
+      (page.title && page.title.toLowerCase().includes(query)) ||
+      (page.description && page.description.toLowerCase().includes(query))
+    );
+  }
+
+  if (codeType) {
+    results = results.filter((page) => page.code_type === codeType);
+  }
+
+  if (isProtected !== undefined && isProtected !== '') {
+    const target = isProtected === true || isProtected === 'true' || isProtected === 1 || isProtected === 'protected' ? 1 : 0;
+    results = results.filter((page) => page.is_protected === target);
+  }
+
+  if (options.isFavorite === true) {
+    results = results.filter((page) => page.is_favorite === true);
+  }
+
+  if (dateFrom && Number.isFinite(dateFrom)) {
+    results = results.filter((page) => Number(page.created_at) >= dateFrom);
+  }
+
+  if (dateTo && Number.isFinite(dateTo)) {
+    results = results.filter((page) => Number(page.created_at) <= dateTo);
+  }
+
+  return results;
+}
+
 class MemoryPageRepository {
   constructor() {
     this.pages = new Map();
@@ -183,40 +224,9 @@ class MemoryPageRepository {
   async listAdminPages(options = {}) {
     const limit = Number.isInteger(options.limit) ? options.limit : 50;
     const offset = Number.isInteger(options.offset) ? options.offset : 0;
-    const search = options.search || '';
-    const codeType = options.codeType || '';
-    const isProtected = options.isProtected;
     const sortBy = options.sortBy || 'created_at';
     const sortOrder = options.sortOrder || 'desc';
-    const dateFrom = options.dateFrom ? new Date(options.dateFrom).getTime() : null;
-    const dateTo = options.dateTo ? new Date(options.dateTo + 'T23:59:59.999').getTime() : null;
-
-    let results = Array.from(this.pages.values());
-
-    if (search) {
-      const query = search.toLowerCase();
-      results = results.filter((page) =>
-        (page.id && page.id.toLowerCase().includes(query)) ||
-        (page.title && page.title.toLowerCase().includes(query)) ||
-        (page.description && page.description.toLowerCase().includes(query))
-      );
-    }
-
-    if (codeType) {
-      results = results.filter((page) => page.code_type === codeType);
-    }
-
-    if (isProtected !== undefined && isProtected !== '') {
-      const target = isProtected === true || isProtected === 'true' || isProtected === 1 || isProtected === 'protected' ? 1 : 0;
-      results = results.filter((page) => page.is_protected === target);
-    }
-
-    if (dateFrom && Number.isFinite(dateFrom)) {
-      results = results.filter((page) => Number(page.created_at) >= dateFrom);
-    }
-    if (dateTo && Number.isFinite(dateTo)) {
-      results = results.filter((page) => Number(page.created_at) <= dateTo);
-    }
+    const results = filterAdminPages(Array.from(this.pages.values()), options);
 
     results.sort((left, right) => {
       let comparison = 0;
@@ -243,46 +253,14 @@ class MemoryPageRepository {
         title: page.title,
         description: page.description,
         is_protected: page.is_protected,
+        is_favorite: page.is_favorite,
         encrypted_password: page.encrypted_password,
         expires_at: page.expires_at
       }));
   }
 
   async countPages(options = {}) {
-    const search = options.search || '';
-    const codeType = options.codeType || '';
-    const isProtected = options.isProtected;
-    const dateFrom = options.dateFrom ? new Date(options.dateFrom).getTime() : null;
-    const dateTo = options.dateTo ? new Date(options.dateTo + 'T23:59:59.999').getTime() : null;
-
-    let results = Array.from(this.pages.values());
-
-    if (search) {
-      const query = search.toLowerCase();
-      results = results.filter((page) =>
-        (page.id && page.id.toLowerCase().includes(query)) ||
-        (page.title && page.title.toLowerCase().includes(query)) ||
-        (page.description && page.description.toLowerCase().includes(query))
-      );
-    }
-
-    if (codeType) {
-      results = results.filter((page) => page.code_type === codeType);
-    }
-
-    if (isProtected !== undefined && isProtected !== '') {
-      const target = isProtected === true || isProtected === 'true' || isProtected === 1 || isProtected === 'protected' ? 1 : 0;
-      results = results.filter((page) => page.is_protected === target);
-    }
-
-    if (dateFrom && Number.isFinite(dateFrom)) {
-      results = results.filter((page) => Number(page.created_at) >= dateFrom);
-    }
-    if (dateTo && Number.isFinite(dateTo)) {
-      results = results.filter((page) => Number(page.created_at) <= dateTo);
-    }
-
-    return results.length;
+    return filterAdminPages(Array.from(this.pages.values()), options).length;
   }
 
   async getAdminStats() {

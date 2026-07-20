@@ -385,6 +385,235 @@ test('admin pages list and detail expose content without password hashes', async
   assert.doesNotMatch(detailResponse.text, /scrypt\$/);
 });
 
+test('Favorite Shares combine with all filters and keep totals, pagination, and links aligned', async () => {
+  const repository = app.locals.pageRepository;
+  const matchingCreatedAt = Date.parse('2026-07-10T12:00:00Z');
+
+  for (let index = 1; index <= 51; index += 1) {
+    const id = `issue7-filter-match-${String(index).padStart(2, '0')}`;
+    await repository.create({
+      id,
+      htmlContent: '# Favorite list match',
+      createdAt: matchingCreatedAt + index,
+      isProtected: true,
+      codeType: 'markdown',
+      title: `Issue7 Bulk ${String(index).padStart(2, '0')}`
+    });
+    await repository.setFavorite(id, true);
+  }
+
+  const misses = [
+    ['issue7-filter-unmarked', 'markdown', true, matchingCreatedAt, false],
+    ['issue7-filter-html', 'html', true, matchingCreatedAt, true],
+    ['issue7-filter-public', 'markdown', false, matchingCreatedAt, true],
+    ['issue7-filter-old', 'markdown', true, Date.parse('2026-06-30T12:00:00Z'), true]
+  ];
+  for (const [id, codeType, isProtected, createdAt, favorite] of misses) {
+    await repository.create({
+      id,
+      htmlContent: '# Favorite list miss',
+      createdAt,
+      isProtected,
+      codeType,
+      title: `Issue7 Bulk ${id}`
+    });
+    if (favorite) await repository.setFavorite(id, true);
+  }
+
+  const cookie = await loginDashboard();
+  const query = new URLSearchParams({
+    favorite: 'true',
+    search: 'Issue7 Bulk',
+    type: 'markdown',
+    status: 'protected',
+    dateFrom: '2026-07-01',
+    dateTo: '2026-07-31',
+    sort: 'created_at',
+    order: 'asc'
+  });
+  const firstPage = await request(`/admin/pages?${query}`, { headers: { Cookie: cookie } });
+  const secondPage = await request(`/admin/pages?${query}&page=2`, { headers: { Cookie: cookie } });
+  const nextHref = firstPage.text
+    .match(/<a[^>]+href="([^"]+)"[^>]*>下一页<\/a>/)?.[1]
+    .replaceAll('&amp;', '&');
+  const previousHref = secondPage.text
+    .match(/<a[^>]+href="([^"]+)"[^>]*>上一页<\/a>/)?.[1]
+    .replaceAll('&amp;', '&');
+  const sortHref = firstPage.text
+    .match(/<a class="admin-sortable[^"]*" href="([^"]+)"[^>]*>\s*创建时间/)?.[1]
+    .replaceAll('&amp;', '&');
+  const searchClearHref = firstPage.text
+    .match(/<form class="admin-search-form"[\s\S]*?<a class="cyber-btn cyber-btn-secondary" href="([^"]+)">清除<\/a>[\s\S]*?<\/form>/)?.[1]
+    .replaceAll('&amp;', '&');
+  const dateClearHref = firstPage.text
+    .match(/<div class="admin-date-range">[\s\S]*?<a class="cyber-btn cyber-btn-secondary" href="([^"]+)">清除<\/a>/)?.[1]
+    .replaceAll('&amp;', '&');
+  const typeHtmlHref = firstPage.text
+    .match(/<span class="admin-filter-label">类型<\/span>[\s\S]*?<a class="admin-filter-btn[^"]*" href="([^"]+)">html<\/a>/)?.[1]
+    .replaceAll('&amp;', '&');
+  const statusPublicHref = firstPage.text
+    .match(/<span class="admin-filter-label">状态<\/span>[\s\S]*?<a class="admin-filter-btn[^"]*" href="([^"]+)">公开<\/a>/)?.[1]
+    .replaceAll('&amp;', '&');
+  const allSharesHref = firstPage.text
+    .match(/<span class="admin-filter-label">收藏<\/span>[\s\S]*?<a class="admin-filter-btn[^"]*" href="([^"]+)">全部 Shares<\/a>/)?.[1]
+    .replaceAll('&amp;', '&');
+
+  assert.equal(firstPage.status, 200);
+  assert.equal(secondPage.status, 200);
+  assert.match(firstPage.text, /共 51 个分享/);
+  assert.match(firstPage.text, /第 1 \/ 2 页/);
+  assert.match(secondPage.text, /第 2 \/ 2 页/);
+  assert.match(secondPage.text, /Issue7 Bulk 51/);
+  assert.doesNotMatch(secondPage.text, /issue7-filter-unmarked/);
+  assert.match(firstPage.text, /data-favorite-toggle[^>]+data-is-favorite="true"[^>]+aria-pressed="true"/);
+  assert.match(firstPage.text, /class="fas fa-star admin-favorite-icon"/);
+  const listHrefs = Array.from(firstPage.text.matchAll(/href="(\/admin\/pages\?[^\"]+)"/g));
+  for (const match of listHrefs) {
+    const url = new URL(match[1].replaceAll('&amp;', '&'), baseUrl);
+    for (const value of url.searchParams.values()) assert.notEqual(value, '');
+  }
+
+  for (const [href, expectedPage] of [[nextHref, '2'], [previousHref, null]]) {
+    assert.ok(href);
+    const url = new URL(href, baseUrl);
+    assert.equal(url.searchParams.get('favorite'), 'true');
+    assert.equal(url.searchParams.get('search'), 'Issue7 Bulk');
+    assert.equal(url.searchParams.get('type'), 'markdown');
+    assert.equal(url.searchParams.get('status'), 'protected');
+    assert.equal(url.searchParams.get('dateFrom'), '2026-07-01');
+    assert.equal(url.searchParams.get('dateTo'), '2026-07-31');
+    assert.equal(url.searchParams.get('sort'), 'created_at');
+    assert.equal(url.searchParams.get('order'), 'asc');
+    assert.equal(url.searchParams.get('page'), expectedPage);
+  }
+
+  const sortUrl = new URL(sortHref, baseUrl);
+  assert.equal(sortUrl.searchParams.get('favorite'), 'true');
+  assert.equal(sortUrl.searchParams.get('dateFrom'), '2026-07-01');
+  assert.equal(sortUrl.searchParams.get('dateTo'), '2026-07-31');
+  assert.equal(sortUrl.searchParams.get('sort'), 'created_at');
+  assert.equal(sortUrl.searchParams.get('order'), 'desc');
+  assert.equal(sortUrl.searchParams.has('page'), false);
+
+  const searchClearUrl = new URL(searchClearHref, baseUrl);
+  assert.equal(searchClearUrl.searchParams.has('search'), false);
+  assert.equal(searchClearUrl.searchParams.get('favorite'), 'true');
+  assert.equal(searchClearUrl.searchParams.get('dateFrom'), '2026-07-01');
+  assert.equal(searchClearUrl.searchParams.get('dateTo'), '2026-07-31');
+
+  const dateClearUrl = new URL(dateClearHref, baseUrl);
+  assert.equal(dateClearUrl.searchParams.has('dateFrom'), false);
+  assert.equal(dateClearUrl.searchParams.has('dateTo'), false);
+  assert.equal(dateClearUrl.searchParams.get('search'), 'Issue7 Bulk');
+  assert.equal(dateClearUrl.searchParams.get('favorite'), 'true');
+
+  const typeHtmlUrl = new URL(typeHtmlHref, baseUrl);
+  assert.equal(typeHtmlUrl.searchParams.get('type'), 'html');
+  assert.equal(typeHtmlUrl.searchParams.get('status'), 'protected');
+  assert.equal(typeHtmlUrl.searchParams.get('favorite'), 'true');
+  assert.equal(typeHtmlUrl.searchParams.get('dateFrom'), '2026-07-01');
+
+  const statusPublicUrl = new URL(statusPublicHref, baseUrl);
+  assert.equal(statusPublicUrl.searchParams.get('type'), 'markdown');
+  assert.equal(statusPublicUrl.searchParams.get('status'), 'public');
+  assert.equal(statusPublicUrl.searchParams.get('favorite'), 'true');
+  assert.equal(statusPublicUrl.searchParams.get('dateTo'), '2026-07-31');
+
+  const allSharesUrl = new URL(allSharesHref, baseUrl);
+  assert.equal(allSharesUrl.searchParams.has('favorite'), false);
+  assert.equal(allSharesUrl.searchParams.get('search'), 'Issue7 Bulk');
+  assert.equal(allSharesUrl.searchParams.get('type'), 'markdown');
+  assert.equal(allSharesUrl.searchParams.get('status'), 'protected');
+  assert.equal(allSharesUrl.searchParams.get('dateFrom'), '2026-07-01');
+  assert.equal(allSharesUrl.searchParams.get('dateTo'), '2026-07-31');
+});
+
+test('admin list offers only all and Favorite Shares and distinguishes a filtered empty result', async () => {
+  const repository = app.locals.pageRepository;
+  await repository.create({
+    id: 'issue7-canonical-favorite',
+    htmlContent: '<h1>Canonical favorite</h1>',
+    createdAt: Date.now(),
+    title: 'Issue7 Canonical Favorite'
+  });
+  await repository.create({
+    id: 'issue7-canonical-unmarked',
+    htmlContent: '<h1>Canonical unmarked</h1>',
+    createdAt: Date.now() + 1,
+    title: 'Issue7 Canonical Unmarked'
+  });
+  await repository.setFavorite('issue7-canonical-favorite', true);
+
+  const cookie = await loginDashboard();
+  const ignoredFalse = await request('/admin/pages?favorite=false&search=Issue7%20Canonical', {
+    headers: { Cookie: cookie }
+  });
+  const emptyFavorite = await request('/admin/pages?favorite=true&search=Issue7%20No%20Match', {
+    headers: { Cookie: cookie }
+  });
+
+  assert.match(ignoredFalse.text, />全部 Shares<\/a>/);
+  assert.match(ignoredFalse.text, />Favorite Shares<\/a>/);
+  assert.doesNotMatch(ignoredFalse.text, /未收藏 Shares|favorite=false/);
+  assert.match(ignoredFalse.text, /Issue7 Canonical Favorite/);
+  assert.match(ignoredFalse.text, /Issue7 Canonical Unmarked/);
+  assert.match(
+    ignoredFalse.text,
+    /<button\b(?=[^>]*data-page-id="issue7-canonical-favorite")(?=[^>]*aria-pressed="true")[^>]*>/
+  );
+  assert.match(
+    ignoredFalse.text,
+    /<button\b(?=[^>]*data-page-id="issue7-canonical-unmarked")(?=[^>]*aria-pressed="false")[^>]*>/
+  );
+
+  assert.match(emptyFavorite.text, /没有符合条件的分享/);
+  assert.match(emptyFavorite.text, /清除全部筛选条件/);
+  assert.doesNotMatch(emptyFavorite.text, /还没有分享/);
+});
+
+test('confirmed removal from Favorite Shares recalculates rows, total, empty state, and page', async () => {
+  const repository = app.locals.pageRepository;
+  await repository.create({
+    id: 'issue7-recompute-removal',
+    htmlContent: '<h1>Recompute favorite result</h1>',
+    createdAt: Date.now(),
+    title: 'Issue7 Recompute Removal'
+  });
+  await repository.setFavorite('issue7-recompute-removal', true);
+
+  const cookie = await loginDashboard();
+  const initial = await request('/admin/pages?favorite=true&search=Issue7%20Recompute&page=7', {
+    headers: { Cookie: cookie }
+  });
+  const csrfToken = initial.text.match(/name="csrf-token" content="([^"]+)"/)?.[1];
+  const refreshUrl = initial.text
+    .match(/<button\b[^>]*data-page-id="issue7-recompute-removal"[^>]*data-refresh-url="([^"]+)"[^>]*>/)?.[1]
+    .replaceAll('&amp;', '&');
+
+  assert.ok(csrfToken);
+  assert.ok(refreshUrl);
+  assert.equal(new URL(refreshUrl, baseUrl).searchParams.has('page'), false);
+
+  const mutation = await request('/admin/pages/issue7-recompute-removal/favorite', {
+    method: 'PUT',
+    headers: {
+      Cookie: cookie,
+      'Content-Type': 'application/json',
+      'X-CSRF-Token': csrfToken
+    },
+    body: JSON.stringify({ isFavorite: false })
+  });
+  const refreshed = await request(refreshUrl, { headers: { Cookie: cookie } });
+
+  assert.equal(mutation.status, 200);
+  assert.equal(JSON.parse(mutation.text).isFavorite, false);
+  assert.equal(refreshed.status, 200);
+  assert.match(refreshed.text, /共 0 个分享/);
+  assert.match(refreshed.text, /没有符合条件的分享/);
+  assert.doesNotMatch(refreshed.text, /data-page-id="issue7-recompute-removal"/);
+  assert.doesNotMatch(refreshed.text, /第 [2-9] \/ /);
+});
+
 test('admin stats render aggregate charts', async () => {
   await createSharedPage({
     htmlContent: '<h1>Stats HTML</h1>',

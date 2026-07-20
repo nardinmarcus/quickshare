@@ -656,3 +656,37 @@ Local evidence: focused Issue #6 checks passed `47/47`; after review remediation
 
 - Standards review: resolved all three findings by preserving the existing admin-list Repository contract, using `Share` in user-visible error copy, and binding only the detail page's single favorite control. The required audit identifier remains `page.favorite.update` because Issue #6 specifies it exactly.
 - Spec review: resolved both findings by locking the PostgreSQL transition row before deriving `from`/`to`, and by logging only the existing allowlisted safe error code during audit degradation.
+
+# Issue #7 — Favorite Share list operations and combined filtering (2026-07-20)
+
+Status: implementation, review remediation, and local verification complete. Scope is limited to GitHub Issue #7; baseline is `f2d768c` on the current `main` branch.
+
+## Confirmed TDD seams
+
+- Repository query contract: `MemoryPageRepository` and `PostgresPageRepository` apply the same favorite, search, type, protection-status, and date conditions to both rows and counts.
+- Authenticated rendered-list boundary: `GET /admin/pages` canonicalizes `favorite=true`, keeps list totals and pagination aligned, preserves every active query condition, and distinguishes system-empty from filtered-empty states.
+- Shared browser-controller boundary: every `[data-favorite-toggle]` uses the existing favorite endpoint, commits UI state only after server success, ignores repeat clicks while busy, and reloads the canonical URL only after removing a Share from Favorite Shares.
+
+## Plan
+
+- [x] Add a failing Repository combination slice, then project and filter `is_favorite` identically in Memory and PostgreSQL list/count queries.
+- [x] Add a failing rendered-route slice, then normalize `favorite=true`, centralize non-empty admin-list URL generation, and keep row/count/pagination conditions identical.
+- [x] Add a failing list-interaction slice, then render accessible row controls and extend the shared Favorite controller to all matching controls plus filtered-result refresh.
+- [x] Add focused empty-state, query-retention, sorting, pagination, initial-state, success, failure, and duplicate-click coverage.
+- [x] Run focused tests and JavaScript syntax checks after each vertical slice, then the complete Node suite, available PostgreSQL seam, and `git diff --check`.
+- [x] Run the required two-axis code review against `f2d768c`, remediate findings, record evidence below, and commit the focused work to the current branch.
+
+Verify:
+
+1. Repository filters -> favorite plus search/type/protection/date returns the same Share set and count in both implementations.
+2. List route and URLs -> only `favorite=true` activates Favorite Shares; empty values disappear; filter, sort, clear, and pagination links preserve every other valid condition.
+3. List interaction -> each row starts from server state, exposes an explicit name, `aria-pressed`, visible focus and a 44px target; failure preserves state and a busy control cannot submit twice.
+4. Favorite-result removal -> a successful unmark reloads the current canonical filtered URL so the server recomputes rows, total, and valid page; failure never reloads.
+5. Scope -> existing detail Favorite behavior and all public Share/API boundaries remain unchanged; every retained diff line maps to Issue #7.
+
+## Review
+
+Local evidence: focused Issue #7 checks passed `51/51`; after review remediation, the complete `npm test` suite passed `154/154`; changed JavaScript syntax checks and `git diff --check` passed. The real PostgreSQL combination-filter test is implemented but was not executed because `POSTGRES_TEST_URL` is not configured in this thread.
+
+- Standards review: resolved all three findings by bounding rendered favorite-state assertions to one button, proving the shared `button:focus-visible` rule directly, and sharing one filter pipeline/SQL-condition builder between list rows and counts.
+- Spec review: resolved both findings by starting browser search/date/page navigation from the server-generated canonical URL with empty values omitted, and by proving that a confirmed unmark followed by the canonical GET recalculates rows, total, empty state, and valid page.

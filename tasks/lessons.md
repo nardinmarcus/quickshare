@@ -1,5 +1,16 @@
 # Lessons
 
+## 2026-07-20 — Canonicalize scripted navigation and bound rendered assertions
+
+- Server-generated links are not enough when browser controls rebuild navigation from `window.location.search`; inject the canonical server URL and use it for search, date, and page changes.
+- Keep rendered attribute assertions within one element tag, using bounded matching or lookaheads, so state from one row cannot satisfy identity from another row.
+- When list rows and totals must obey exactly the same filters, share one filter pipeline or SQL-condition builder instead of maintaining parallel copies.
+
+## 2026-07-20 — Parse query links before asserting query semantics
+
+- Scope empty-query assertions to extracted `href` values and inspect them through `URLSearchParams`; a document-wide `type=` pattern also matches ordinary HTML attributes such as `type="hidden"`.
+- When a rendered-route failure contradicts the visible output, inspect the exact matching substring before changing production behavior.
+
 ## 2026-07-20 — Lock the transition state and whitelist degraded logs
 
 - When a PostgreSQL mutation returns both previous and final state for auditing, lock the row that supplies those values before the conditional update; a single SQL statement without a lock can still report a stale transition under concurrency.

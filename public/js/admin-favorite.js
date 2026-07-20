@@ -1,7 +1,7 @@
 (function initFavoriteControls() {
-  var control = document.querySelector('[data-favorite-toggle]');
+  var controls = document.querySelectorAll('[data-favorite-toggle]');
 
-  if (!control) return;
+  if (!controls.length) return;
 
   function csrfToken() {
     var meta = document.querySelector('meta[name="csrf-token"]');
@@ -46,6 +46,9 @@
 
       renderState(control, data.isFavorite);
       Toast.success(data.isFavorite ? '已收藏' : '已取消收藏');
+      if (!data.isFavorite && control.dataset.refreshUrl) {
+        window.location.assign(control.dataset.refreshUrl);
+      }
     } catch (error) {
       Toast.error(error.message || '更新收藏状态失败');
     } finally {
@@ -54,7 +57,9 @@
     }
   }
 
-  control.addEventListener('click', function () {
-    toggleFavorite(control);
+  controls.forEach(function (control) {
+    control.addEventListener('click', function () {
+      toggleFavorite(control);
+    });
   });
 })();
