@@ -4,7 +4,7 @@ Status: Phases 0–3 deployed on 2026-07-15; the representative WP8 traffic base
 
 ## Site identity icon replacement design (2026-07-22)
 
-Status: local implementation and review complete; scoped publication and production verification are in progress.
+Status: complete; asset commit `e2e46e0` is pushed and production deployment `dpl_C9G92ugidV333Rcz2L3vxtfs4YEv` was verified on 2026-07-22.
 
 - [x] Inventory the current icon assets, source references, live metadata, and prepared IconKitchen output.
 - [x] Confirm that “Figma-related elements” means the favicon and coordinated Site Identity Icon set.
@@ -44,7 +44,9 @@ Review:
 - Tests: focused resource-policy suite passes 6/6; full repository suite passes 165/165.
 - Typecheck: not applicable because this JavaScript repository defines no typecheck script and this change contains no typed source changes.
 - Code review: Standards 0 findings; Spec 0 findings.
-- Publication: commit, push, production deployment, and live hash verification remain in progress.
+- Publication: asset commit `e2e46e0` is on `origin/main`; Vercel deployment `dpl_C9G92ugidV333Rcz2L3vxtfs4YEv` is READY and aliased to `quickshare.namooca.com`.
+- Production hashes: favicon `9e0f92fc040f`, Apple Touch `dfbfb4a67691`, 192px `bff1408ebda5`, 192px maskable `3741ff6033f5`, 512px/OG `60b7b9542bb4`, and 512px maskable `916f5ab41870` all match their prepared sources.
+- Browser verification: the four existing identity URLs and OG wiring are unchanged; the in-page brand pulse remains; no Manifest was added.
 
 Baseline reviewed: GitHub `main` commit `b3c15be67c93fc76e8ae047e82017f726d9cee12` and its current Vercel production deployment.
 
