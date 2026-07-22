@@ -38,7 +38,7 @@ Verify:
 Local verification:
 
 - TDD: the Catalog module and shared baseline each began with a failing contract; the empty admin write also failed as `null` before normalization was corrected.
-- Tests: the post-review focused Catalog/renderer/HTTP slice passes 20/20; the complete Node suite passes 191/191; changed JavaScript syntax and `git diff --check` pass.
+- Tests: the post-review focused Catalog/renderer/HTTP slice passes 21/21; the complete Node suite passes 192/192; changed JavaScript syntax and `git diff --check` pass.
 - Browser geometry: light and dark ByteDance pass at 375, 768, and 1440 px; the reading column is bounded at 900 px and document `scrollWidth` equals `clientWidth` at every width.
 - Narrow reflow: at 320 CSS px the page remains 305/305 px with table, code, and Mermaid overflow contained internally; the table alone scrolls 280 px inside a 271 px container.
 - Visual/accessibility: representative light and dark body, link, quote, code, heading, and focus colors meet the measured contrast boundary; keyboard focus exposes a solid 3 px theme-aware outline.
@@ -54,6 +54,7 @@ Independent review remediation:
 - New-write consistency: admin clone resolves null, `random`, and invalid legacy Markdown values to ByteDance and writes null for non-Markdown clones.
 - Preservation coverage: the theme-only admin test now retains non-default password hash/ciphertext, protection, expiration, Favorite Share state, view count, content, title, and description; the Share API invalid-value path is covered.
 - Standards: obsolete `MARKDOWN_THEMES`/`resolveTheme` forwarding exports were removed and the new test helper uses the Share domain term.
+- Legacy compatibility follow-up: shared syntax roles are optional signature enhancements and otherwise inherit the active code foreground. GitHub, Apple, and Notion explicitly retain their existing dark text on light fenced-code surfaces in both system appearances until Issues #12/#13 migrate them; cache-busted browser readback confirmed GitHub `#24292f` on `#f6f8fa` with no fixed highlight stylesheet.
 
 ## Site identity icon replacement design (2026-07-22)
 

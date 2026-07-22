@@ -19,12 +19,6 @@
   --theme-diagram-node-border: #2563eb;
   --theme-diagram-line: #64748b;
   --theme-diagram-label-surface: #ffffff;
-  --theme-syntax-comment: #9aa9bd;
-  --theme-syntax-keyword: #f58ac3;
-  --theme-syntax-string: #a7db78;
-  --theme-syntax-number: #d6a6ff;
-  --theme-syntax-title: #7cc7ff;
-  --theme-syntax-meta: #ffd166;
   --theme-reading-width: 900px;
   --theme-reading-padding: clamp(24px, 5vw, 56px);
 }
@@ -127,32 +121,32 @@ body {
 
 .markdown-body .hljs {
   display: block;
-  color: var(--theme-code-text);
+  color: inherit;
   background: transparent;
 }
 
 .markdown-body :where(.hljs-comment, .hljs-quote) {
-  color: var(--theme-syntax-comment);
+  color: var(--theme-syntax-comment, currentColor);
 }
 
 .markdown-body :where(.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-type) {
-  color: var(--theme-syntax-keyword);
+  color: var(--theme-syntax-keyword, currentColor);
 }
 
 .markdown-body :where(.hljs-string, .hljs-regexp, .hljs-addition, .hljs-attribute) {
-  color: var(--theme-syntax-string);
+  color: var(--theme-syntax-string, currentColor);
 }
 
 .markdown-body :where(.hljs-number, .hljs-symbol, .hljs-bullet) {
-  color: var(--theme-syntax-number);
+  color: var(--theme-syntax-number, currentColor);
 }
 
 .markdown-body :where(.hljs-title, .hljs-section, .hljs-name, .hljs-selector-id, .hljs-selector-class) {
-  color: var(--theme-syntax-title);
+  color: var(--theme-syntax-title, currentColor);
 }
 
 .markdown-body :where(.hljs-meta, .hljs-built_in, .hljs-variable, .hljs-template-variable) {
-  color: var(--theme-syntax-meta);
+  color: var(--theme-syntax-meta, currentColor);
 }
 
 .markdown-body table {
@@ -260,12 +254,6 @@ body {
     --theme-diagram-node-border: #7db4ff;
     --theme-diagram-line: #93a4ba;
     --theme-diagram-label-surface: #182235;
-    --theme-syntax-comment: #9aa9bd;
-    --theme-syntax-keyword: #f58ac3;
-    --theme-syntax-string: #a7db78;
-    --theme-syntax-number: #d6a6ff;
-    --theme-syntax-title: #7cc7ff;
-    --theme-syntax-meta: #ffd166;
   }
 }
 
