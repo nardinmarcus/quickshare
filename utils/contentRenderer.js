@@ -5,68 +5,10 @@
 
 const { marked } = require('marked');
 const { CODE_TYPES } = require('./codeDetector');
-
-const MARKDOWN_THEMES = {
-  bytedance: '/css/markdown-bytedance.css',
-  github: '/css/markdown-github.css',
-  apple: '/css/markdown-apple.css',
-  notion: '/css/markdown-notion.css',
-  claude: '/css/markdown-claude.css'
-};
-
-const MERMAID_LIGHT_THEME = {
-  darkMode: false,
-  background: '#ffffff',
-  fontFamily: '"Inter", "SF Pro Display", system-ui, -apple-system, sans-serif',
-  fontSize: '14px',
-  primaryColor: '#EEF2FF',
-  primaryTextColor: '#1e293b',
-  primaryBorderColor: '#6366f1',
-  secondaryColor: '#F0FDF4',
-  tertiaryColor: '#F8FAFC',
-  lineColor: '#94a3b8',
-  mainBkg: '#EEF2FF',
-  nodeBorder: '#6366f1',
-  clusterBkg: '#F8FAFC',
-  clusterBorder: '#e2e8f0',
-  defaultLinkColor: '#6366f1',
-  titleColor: '#0f172a',
-  edgeLabelBackground: '#ffffff',
-  nodeTextColor: '#1e293b',
-  useGradient: true,
-  gradientStart: '#EEF2FF',
-  gradientStop: '#E0E7FF',
-  dropShadow: 'drop-shadow(0px 2px 4px rgba(99, 102, 241, 0.12))',
-  radius: 10,
-  strokeWidth: 2,
-};
-
-const MERMAID_DARK_THEME = {
-  darkMode: true,
-  background: '#0f172a',
-  fontFamily: '"Inter", "SF Pro Display", system-ui, -apple-system, sans-serif',
-  fontSize: '14px',
-  primaryColor: '#1e293b',
-  primaryTextColor: '#e2e8f0',
-  primaryBorderColor: '#6366f1',
-  secondaryColor: '#1e3a5f',
-  tertiaryColor: '#0f172a',
-  lineColor: '#64748b',
-  mainBkg: '#1e293b',
-  nodeBorder: '#6366f1',
-  clusterBkg: '#1e293b',
-  clusterBorder: '#334155',
-  defaultLinkColor: '#818cf8',
-  titleColor: '#f1f5f9',
-  edgeLabelBackground: '#1e293b',
-  nodeTextColor: '#e2e8f0',
-  useGradient: true,
-  gradientStart: '#1e293b',
-  gradientStop: '#1e3a5f',
-  dropShadow: 'drop-shadow(0px 2px 6px rgba(0, 0, 0, 0.4))',
-  radius: 10,
-  strokeWidth: 2,
-};
+const {
+  MARKDOWN_THEME_BASELINE_HREF,
+  resolveMarkdownTheme
+} = require('./markdownThemeCatalog');
 
 const MERMAID_THEME_CSS = `
   .node rect, .node circle, .node polygon { rx: 10; ry: 10; }
@@ -75,11 +17,38 @@ const MERMAID_THEME_CSS = `
   .cluster rect { rx: 12; }
 `;
 
+const STANDALONE_MERMAID_LIGHT_THEME = {
+  darkMode: false,
+  background: '#ffffff',
+  primaryColor: '#eef2ff',
+  primaryTextColor: '#1e293b',
+  primaryBorderColor: '#6366f1',
+  secondaryColor: '#f0fdf4',
+  tertiaryColor: '#f8fafc',
+  lineColor: '#94a3b8',
+  clusterBorder: '#e2e8f0',
+  defaultLinkColor: '#6366f1',
+  titleColor: '#0f172a'
+};
+
+const STANDALONE_MERMAID_DARK_THEME = {
+  darkMode: true,
+  background: '#0f172a',
+  primaryColor: '#1e293b',
+  primaryTextColor: '#e2e8f0',
+  primaryBorderColor: '#6366f1',
+  secondaryColor: '#1e3a5f',
+  tertiaryColor: '#0f172a',
+  lineColor: '#64748b',
+  clusterBorder: '#334155',
+  defaultLinkColor: '#818cf8',
+  titleColor: '#f1f5f9'
+};
+
 const MERMAID_CDN = 'https://cdn.jsdelivr.net/npm/mermaid@11.6.0/dist/mermaid.min.js';
 const HIGHLIGHT_CSS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-dark.min.css';
 const HIGHLIGHT_JS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js';
 
-const THEME_KEYS = Object.keys(MARKDOWN_THEMES);
 const MERMAID_PATTERNS = [
   /^(graph|flowchart)\s+(TB|TD|BT|RL|LR)\b/m,
   /^sequenceDiagram\b/m,
@@ -221,8 +190,8 @@ function renderHtml(content) {
  * @returns {string} - u6e32u67d3u540eu7684HTML
  */
 async function renderMarkdown(content, theme) {
-  const resolvedTheme = resolveTheme(theme);
-  const themeCss = MARKDOWN_THEMES[resolvedTheme] || MARKDOWN_THEMES.bytedance;
+  const resolvedTheme = resolveMarkdownTheme(theme);
+  const themeCss = resolvedTheme.signatureHref;
   // 预处理内容，处理独立的 Mermaid 代码
   const processedContent = await preprocessMarkdown(content);
   
@@ -276,10 +245,58 @@ async function renderMarkdown(content, theme) {
   <script>
     // 配置 Mermaid
     document.addEventListener('DOMContentLoaded', function() {
-      // 检测暗色模式
-      const isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const appearanceQuery = window.matchMedia
+        ? window.matchMedia('(prefers-color-scheme: dark)')
+        : { matches: false };
 
       try {
+        const themeToken = function(name, fallback) {
+          const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+          return value || fallback;
+        };
+
+        const mermaidThemeVariables = function() {
+          return {
+            darkMode: appearanceQuery.matches,
+            background: themeToken('--theme-diagram-surface', '#ffffff'),
+            fontFamily: themeToken('--theme-font-family', 'ui-sans-serif, system-ui, sans-serif'),
+            fontSize: '14px',
+            primaryColor: themeToken('--theme-diagram-node-surface', '#f1f5f9'),
+            primaryTextColor: themeToken('--theme-diagram-text', '#243147'),
+            primaryBorderColor: themeToken('--theme-diagram-node-border', '#2563eb'),
+            secondaryColor: themeToken('--theme-quote-surface', '#f1f5f9'),
+            tertiaryColor: themeToken('--theme-table-surface', '#ffffff'),
+            lineColor: themeToken('--theme-diagram-line', '#64748b'),
+            mainBkg: themeToken('--theme-diagram-node-surface', '#f1f5f9'),
+            nodeBorder: themeToken('--theme-diagram-node-border', '#2563eb'),
+            clusterBkg: themeToken('--theme-table-surface', '#ffffff'),
+            clusterBorder: themeToken('--theme-border', '#cbd5e1'),
+            defaultLinkColor: themeToken('--theme-link', '#095fba'),
+            titleColor: themeToken('--theme-text', '#243147'),
+            edgeLabelBackground: themeToken('--theme-diagram-label-surface', '#ffffff'),
+            nodeTextColor: themeToken('--theme-diagram-text', '#243147'),
+            useGradient: false,
+            radius: 8,
+            strokeWidth: 2
+          };
+        };
+
+        const mermaidConfig = function(startOnLoad) {
+          return {
+            startOnLoad: startOnLoad,
+            securityLevel: 'loose',
+            theme: 'base',
+            themeVariables: mermaidThemeVariables(),
+            themeCSS: ${JSON.stringify(MERMAID_THEME_CSS)},
+            look: 'neo',
+            flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'rounded' },
+            sequence: { useMaxWidth: true },
+            gantt: { useMaxWidth: true },
+            er: { useMaxWidth: true },
+            pie: { useMaxWidth: true }
+          };
+        };
+
         // 将 <pre><code class="language-mermaid"> 转换为 <div class="mermaid">
         const convertMermaidCodeBlocks = function() {
           const codeBlocks = document.querySelectorAll('pre code.language-mermaid');
@@ -309,20 +326,41 @@ async function renderMarkdown(content, theme) {
         // 首先转换代码块
         convertMermaidCodeBlocks();
 
-        // 配置 Mermaid - 使用自定义 base 主题
-        mermaid.initialize({
-          startOnLoad: true,
-          securityLevel: 'loose',
-          theme: 'base',
-          themeVariables: isDarkMode ? ${JSON.stringify(MERMAID_DARK_THEME)} : ${JSON.stringify(MERMAID_LIGHT_THEME)},
-          themeCSS: ${JSON.stringify(MERMAID_THEME_CSS)},
-          look: 'neo',
-          flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'rounded' },
-          sequence: { useMaxWidth: true },
-          gantt: { useMaxWidth: true },
-          er: { useMaxWidth: true },
-          pie: { useMaxWidth: true }
+        document.querySelectorAll('.mermaid').forEach(function(el) {
+          if (!el.dataset.mermaidSource) {
+            el.dataset.mermaidSource = el.textContent;
+          }
         });
+
+        mermaid.initialize(mermaidConfig(true));
+
+        const rerenderForAppearance = function() {
+          const nodes = Array.from(document.querySelectorAll('.mermaid'));
+
+          nodes.forEach(function(el) {
+            if (el.dataset.mermaidSource) {
+              el.removeAttribute('data-processed');
+              el.textContent = el.dataset.mermaidSource;
+              el.classList.remove('mermaid-error');
+            }
+          });
+
+          mermaid.initialize(mermaidConfig(false));
+
+          if (typeof mermaid.run === 'function') {
+            Promise.resolve(mermaid.run({ nodes: nodes })).catch(function(error) {
+              console.error('Failed to rerender Mermaid after appearance change:', error);
+            });
+          } else if (typeof mermaid.init === 'function') {
+            nodes.forEach(function(el) { mermaid.init(undefined, el); });
+          }
+        };
+
+        if (typeof appearanceQuery.addEventListener === 'function') {
+          appearanceQuery.addEventListener('change', rerenderForAppearance);
+        } else if (typeof appearanceQuery.addListener === 'function') {
+          appearanceQuery.addListener(rerenderForAppearance);
+        }
         
         // 定时检查是否有未渲染的 Mermaid 元素
         setTimeout(function checkMermaidElements() {
@@ -401,9 +439,6 @@ async function renderMarkdown(content, theme) {
 
   const mermaidAssets = usesMermaid ? `${mermaidStyles}
       ${mermaidScript}` : '';
-  const highlightStylesheet = usesCodeHighlight
-    ? `<link rel="stylesheet" href="${HIGHLIGHT_CSS_CDN}">`
-    : '';
   const highlightScript = usesCodeHighlight
     ? `
       <script src="${HIGHLIGHT_JS_CDN}"></script>
@@ -438,7 +473,7 @@ async function renderMarkdown(content, theme) {
   // 返回带有字节跳动风格的HTML
   return `
     <!DOCTYPE html>
-    <html lang="zh-CN">
+    <html lang="zh-CN" data-markdown-theme="${resolvedTheme.id}">
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -449,24 +484,23 @@ async function renderMarkdown(content, theme) {
       <link rel="apple-touch-icon" href="/icon/web/apple-touch-icon.png">
       <link rel="icon" type="image/png" sizes="192x192" href="/icon/web/icon-192.png">
       <link rel="icon" type="image/png" sizes="512x512" href="/icon/web/icon-512.png">
-      <meta name="theme-color" content="#6366f1">
+      <meta name="theme-color" content="${resolvedTheme.appearances.light.themeColor}" media="(prefers-color-scheme: light)">
+      <meta name="theme-color" content="${resolvedTheme.appearances.dark.themeColor}" media="(prefers-color-scheme: dark)">
       
       <!-- iOS 特殊设置 -->
       <meta name="apple-mobile-web-app-capable" content="yes">
       <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
       <meta name="apple-mobile-web-app-title" content="QuickShare">
       
+      <link rel="stylesheet" href="${MARKDOWN_THEME_BASELINE_HREF}">
       <link rel="stylesheet" href="${themeCss}">
-      ${highlightStylesheet}
       <style>
-        body {
-          margin: 0;
-          padding: 0;
-          background-color: #f5f5f7;
+        :root {
+          --theme-canvas: ${resolvedTheme.appearances.light.canvas};
         }
         @media (prefers-color-scheme: dark) {
-          body {
-            background-color: #1a1a1a;
+          :root {
+            --theme-canvas: ${resolvedTheme.appearances.dark.canvas};
           }
         }
         ${embeddedStyles}
@@ -779,7 +813,7 @@ ${escapedMermaidCode}
             startOnLoad: true,
             securityLevel: 'loose',
             theme: 'base',
-            themeVariables: isDark ? ${JSON.stringify(MERMAID_DARK_THEME)} : ${JSON.stringify(MERMAID_LIGHT_THEME)},
+            themeVariables: isDark ? ${JSON.stringify(STANDALONE_MERMAID_DARK_THEME)} : ${JSON.stringify(STANDALONE_MERMAID_LIGHT_THEME)},
             themeCSS: ${JSON.stringify(MERMAID_THEME_CSS)},
             look: 'neo',
             flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'rounded' },
@@ -960,13 +994,6 @@ async function renderContent(content, contentType, theme) {
   }
 }
 
-function resolveTheme(theme) {
-  if (!theme || theme === 'random') {
-    return 'bytedance';
-  }
-  return MARKDOWN_THEMES[theme] ? theme : 'bytedance';
-}
-
 /**
  * 预处理Markdown内容
  * @param {string} content - Markdown内容
@@ -1005,7 +1032,5 @@ module.exports = {
   renderMarkdown,
   renderSvg,
   renderMermaid,
-  escapeHtml,
-  resolveTheme,
-  MARKDOWN_THEMES
+  escapeHtml
 };

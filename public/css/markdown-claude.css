@@ -1,193 +1,231 @@
-/* ===== Claude Warm Editorial Markdown 主题 ===== */
-
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
-
-.markdown-body {
-  font-family: 'Inter', 'StyreneB', system-ui, -apple-system, sans-serif;
-  font-size: 16px;
-  line-height: 1.55;
-  color: #3d3d3a;
-  max-width: 800px;
-  margin: 0 auto;
-  padding: 32px 24px;
-  word-wrap: break-word;
-  background-color: #faf9f5;
+/* Claude 暖调 signature: warm editorial paper, system serif, and terracotta. */
+:root {
+  --theme-canvas: #faf7f2;
+  --theme-text: #3d392f;
+  --theme-muted: #686056;
+  --theme-accent: #984b32;
+  --theme-link: #984b32;
+  --theme-border: #d8cfc3;
+  --theme-quote-surface: #f2e9dd;
+  --theme-table-surface: #fffaf4;
+  --theme-diagram-surface: #f7efe5;
+  --theme-code-text: #f8f4ed;
+  --theme-code-surface: #211f1c;
+  --theme-focus: #8c3f2c;
+  --theme-heading-on-accent: #ffffff;
+  --theme-font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Noto Sans SC", Arial, sans-serif;
+  --theme-diagram-text: #3d392f;
+  --theme-diagram-node-surface: #f0e4d7;
+  --theme-diagram-node-border: #984b32;
+  --theme-diagram-line: #686056;
+  --theme-diagram-label-surface: #fffaf4;
+  --theme-syntax-comment: #bcb3a8;
+  --theme-syntax-keyword: #f0a581;
+  --theme-syntax-string: #a9d6a2;
+  --theme-syntax-number: #f3c67a;
+  --theme-syntax-title: #9fc8e8;
+  --theme-syntax-meta: #d5b5e8;
+  --theme-reading-width: 800px;
+  --claude-heading-font: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  --claude-inline-code: #713d2c;
+  --claude-inline-code-surface: #efe5d8;
+  --claude-row-alt: #f5ede3;
+  --claude-mark-surface: #984b32;
+  --claude-mark-text: #ffffff;
 }
 
-/* ===== Headings — serif display ===== */
-.markdown-body h1, .markdown-body h2, .markdown-body h3,
-.markdown-body h4, .markdown-body h5, .markdown-body h6 {
-  font-family: Georgia, 'Copernicus', 'Tiempos Headline', serif;
-  color: #141413;
-  line-height: 1.15;
+.markdown-body {
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.markdown-body :where(h1, h2, h3, h4, h5, h6) {
+  color: var(--theme-text);
+  font-family: var(--claude-heading-font);
   font-weight: 400;
-  letter-spacing: -0.3px;
+  line-height: 1.16;
+  letter-spacing: -0.015em;
 }
 
 .markdown-body h1 {
-  font-size: 2.25em;
-  margin-top: 1.2em;
-  margin-bottom: 0.5em;
-  letter-spacing: -1px;
+  margin-block: 1.2em 0.5em;
   padding-bottom: 0.4em;
-  border-bottom: 2px solid #e6dfd8;
+  font-size: 2.25em;
+  letter-spacing: -0.03em;
+  border-bottom: 2px solid var(--theme-border);
 }
 
 .markdown-body h2 {
-  font-size: 1.6em;
-  margin-top: 1.5em;
-  margin-bottom: 0.4em;
-  letter-spacing: -0.5px;
+  margin-block: 1.5em 0.4em;
   padding-bottom: 0.3em;
-  border-bottom: 1px solid #ebe6df;
+  font-size: 1.6em;
+  border-bottom: 1px solid var(--theme-border);
 }
 
 .markdown-body h3 {
+  margin-block: 1.3em 0.4em;
   font-size: 1.3em;
-  margin-top: 1.3em;
-  margin-bottom: 0.4em;
 }
 
-.markdown-body h4 { font-size: 1.1em; margin-top: 1.2em; margin-bottom: 0.3em; }
-.markdown-body h5 { font-size: 1em; margin-top: 1em; margin-bottom: 0.3em; font-weight: 500; }
-.markdown-body h6 { font-size: 0.9em; margin-top: 1em; margin-bottom: 0.3em; font-weight: 500; color: #6c6a64; }
+.markdown-body h4 { margin-block: 1.2em 0.3em; font-size: 1.1em; }
+.markdown-body h5 { margin-block: 1em 0.3em; font-size: 1em; font-weight: 600; }
+.markdown-body h6 { margin-block: 1em 0.3em; color: var(--theme-muted); font-size: 0.9em; font-weight: 600; }
 
-/* ===== Body text ===== */
 .markdown-body p {
-  margin-top: 0;
-  margin-bottom: 1em;
+  margin-block: 0 1em;
 }
 
-.markdown-body strong { font-weight: 600; color: #141413; }
-.markdown-body em { font-style: italic; }
+.markdown-body strong {
+  color: var(--theme-text);
+  font-weight: 650;
+}
 
-/* ===== Links — coral ===== */
 .markdown-body a {
-  color: #cc785c;
+  color: var(--theme-link);
   text-decoration: underline;
   text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
-  transition: color 0.15s ease;
+  text-underline-offset: 0.18em;
 }
 
 .markdown-body a:hover {
-  color: #a9583e;
+  text-decoration-thickness: 2px;
 }
 
-/* ===== Blockquote ===== */
 .markdown-body blockquote {
-  margin: 0 0 1em 0;
-  padding: 0.75em 1em;
-  color: #6c6a64;
-  border-left: 3px solid #cc785c;
-  background-color: #f5f0e8;
+  margin: 0 0 1em;
+  padding: 0.8em 1em;
+  color: var(--theme-muted);
+  background: var(--theme-quote-surface);
+  border-left: 3px solid var(--theme-accent);
   border-radius: 0 6px 6px 0;
 }
 
-.markdown-body blockquote p:last-child { margin-bottom: 0; }
+.markdown-body blockquote p:last-child {
+  margin-bottom: 0;
+}
 
-/* ===== Code — dark surface ===== */
 .markdown-body code {
-  padding: 0.15em 0.4em;
-  margin: 0;
-  font-size: 87%;
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  background-color: #efe9de;
+  padding: 0.14em 0.38em;
+  color: var(--claude-inline-code);
+  background: var(--claude-inline-code-surface);
   border-radius: 4px;
-  color: #141413;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 87%;
 }
 
 .markdown-body pre {
-  margin-top: 0;
-  margin-bottom: 1em;
+  margin-block: 0 1em;
   padding: 1em 1.25em;
-  overflow: auto;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 14px;
   line-height: 1.6;
-  background-color: #181715;
-  color: #faf9f5;
-  border-radius: 8px;
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .markdown-body pre code {
   padding: 0;
-  margin: 0;
-  font-size: 100%;
-  white-space: pre;
+  color: inherit;
   background: transparent;
   border-radius: 0;
-  color: inherit;
+  font-size: 100%;
 }
 
-/* ===== Tables ===== */
 .markdown-body table {
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  overflow: auto;
-  border-collapse: collapse;
   margin-bottom: 1em;
+  border-radius: 6px;
   font-size: 14px;
 }
 
-.markdown-body th, .markdown-body td {
-  padding: 10px 14px;
-  border: 1px solid #e6dfd8;
+.markdown-body :where(th, td) {
+  padding: 0.625em 0.875em;
 }
 
 .markdown-body th {
+  color: var(--theme-text);
+  background: var(--theme-quote-surface);
   font-weight: 600;
-  color: #141413;
-  background-color: #f5f0e8;
 }
 
-.markdown-body tr { background-color: #faf9f5; }
-.markdown-body tr:nth-child(even) { background-color: #f5f0e8; }
+.markdown-body tr:nth-child(even) {
+  background: var(--claude-row-alt);
+}
 
-/* ===== Lists ===== */
-.markdown-body ul, .markdown-body ol {
-  margin-top: 0;
-  margin-bottom: 1em;
+.markdown-body :where(ul, ol) {
+  margin-block: 0 1em;
   padding-left: 2em;
 }
 
-.markdown-body li { margin-bottom: 0.3em; }
-.markdown-body li + li { margin-top: 0.3em; }
+.markdown-body li {
+  margin-bottom: 0.3em;
+}
 
-/* ===== HR ===== */
+.markdown-body li + li {
+  margin-top: 0.3em;
+}
+
 .markdown-body hr {
   height: 1px;
-  padding: 0;
   margin: 2em 0;
-  background-color: #e6dfd8;
+  background: var(--theme-border);
   border: 0;
 }
 
-/* ===== Images ===== */
 .markdown-body img {
-  max-width: 100%;
   border-radius: 8px;
 }
 
-/* ===== Kbd ===== */
 .markdown-body kbd {
   display: inline-block;
-  padding: 3px 6px;
-  font-size: 12px;
-  line-height: 1.4;
-  color: #141413;
-  vertical-align: middle;
-  background-color: #efe9de;
-  border: 1px solid #e6dfd8;
+  padding: 0.2em 0.45em;
+  color: var(--theme-text);
+  background: var(--claude-inline-code-surface);
+  border: 1px solid var(--theme-border);
   border-radius: 4px;
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.75em;
+  line-height: 1.4;
 }
 
-/* ===== Inline mark / highlight ===== */
 .markdown-body mark {
-  background-color: #cc785c;
-  color: #faf9f5;
   padding: 0.1em 0.3em;
+  color: var(--claude-mark-text);
+  background: var(--claude-mark-surface);
   border-radius: 3px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --theme-canvas: #211e1a;
+    --theme-text: #f1e8dc;
+    --theme-muted: #c1b3a4;
+    --theme-accent: #e39a79;
+    --theme-link: #e39a79;
+    --theme-border: #5c4e44;
+    --theme-quote-surface: #302821;
+    --theme-table-surface: #28231f;
+    --theme-diagram-surface: #2c2621;
+    --theme-code-text: #f6eee3;
+    --theme-code-surface: #151311;
+    --theme-focus: #ffad88;
+    --theme-heading-on-accent: #211e1a;
+    --theme-font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Noto Sans SC", Arial, sans-serif;
+    --theme-diagram-text: #f1e8dc;
+    --theme-diagram-node-surface: #3a3028;
+    --theme-diagram-node-border: #e39a79;
+    --theme-diagram-line: #c1b3a4;
+    --theme-diagram-label-surface: #28231f;
+    --theme-syntax-comment: #bdb4aa;
+    --theme-syntax-keyword: #f0a581;
+    --theme-syntax-string: #a9d6a2;
+    --theme-syntax-number: #f3c67a;
+    --theme-syntax-title: #9fc8e8;
+    --theme-syntax-meta: #d5b5e8;
+    --theme-reading-width: 800px;
+    --claude-heading-font: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+    --claude-inline-code: #f0b79d;
+    --claude-inline-code-surface: #3a2b24;
+    --claude-row-alt: #302923;
+    --claude-mark-surface: #e39a79;
+    --claude-mark-text: #211e1a;
+  }
 }

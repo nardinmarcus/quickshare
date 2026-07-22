@@ -1,0 +1,300 @@
+/* Airbnb 暖居 — warm, hospitable Markdown signature */
+
+:root {
+  --theme-canvas: #fff8f2;
+  --theme-text: #3e302c;
+  --theme-muted: #6f5a54;
+  --theme-heading: #2d211e;
+  --theme-link: #873527;
+  --theme-accent: #963f30;
+  --theme-focus: #873527;
+  --theme-border: #d7c2b9;
+  --theme-soft-surface: #fffdf9;
+  --theme-quote-text: #654b43;
+  --theme-quote-surface: #f7e7dc;
+  --theme-table-surface: #fffdf9;
+  --theme-table-heading: #3a2924;
+  --theme-table-heading-surface: #f7e8de;
+  --theme-code-text: #fff5ed;
+  --theme-code-surface: #2f2421;
+  --theme-heading-on-accent: #fffaf6;
+  --theme-diagram-text: #3a2924;
+  --theme-diagram-surface: #fffdf9;
+  --theme-diagram-node-surface: #f5e6dc;
+  --theme-diagram-node-border: #963f30;
+  --theme-diagram-line: #806b63;
+  --theme-diagram-label-surface: #fffdf9;
+  --theme-syntax-comment: #c9b7ae;
+  --theme-syntax-keyword: #f4a58d;
+  --theme-syntax-string: #b7d795;
+  --theme-syntax-number: #dcb7ef;
+  --theme-syntax-title: #f0c28f;
+  --theme-syntax-meta: #dfb4d4;
+  --theme-font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Noto Sans SC", Arial, sans-serif;
+  --theme-reading-width: 820px;
+  --theme-surface-shadow: 0 4px 14px rgba(87, 53, 42, 0.08);
+}
+
+.markdown-body {
+  font-family: var(--theme-font-family);
+  font-size: 17px;
+  line-height: 1.72;
+}
+
+.markdown-body :where(h1, h2, h3, h4, h5) {
+  color: var(--theme-heading);
+  font-weight: 650;
+  line-height: 1.24;
+  letter-spacing: -0.018em;
+}
+
+.markdown-body h1 {
+  margin: 0 0 1.25em;
+  padding: 0.78em 0.9em;
+  font-size: clamp(2rem, 5vw, 2.7rem);
+  background: var(--theme-soft-surface);
+  border: 1px solid var(--theme-border);
+  border-bottom: 5px solid var(--theme-accent);
+  border-radius: 18px;
+  box-shadow: var(--theme-surface-shadow);
+}
+
+.markdown-body h2 {
+  margin: 2.15em 0 0.8em;
+  padding-bottom: 0.4em;
+  font-size: clamp(1.45rem, 3.2vw, 1.75rem);
+  border-bottom: 2px solid #c9917f;
+}
+
+.markdown-body h3 {
+  margin: 1.85em 0 0.68em;
+  color: var(--theme-accent);
+  font-size: 1.24rem;
+}
+
+.markdown-body :where(h4, h5) {
+  margin: 1.55em 0 0.5em;
+}
+
+.markdown-body h6 {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin: 1.5em 0 0.7em;
+  padding: 0.28em 0.7em;
+  color: var(--theme-accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--theme-quote-surface);
+  border: 1px solid #d7ae9f;
+  border-radius: 999px;
+}
+
+.markdown-body p {
+  margin: 0 0 1.12em;
+}
+
+.markdown-body a {
+  font-weight: 600;
+  text-decoration-thickness: 1px;
+}
+
+.markdown-body :where(strong, b) {
+  color: var(--theme-heading);
+  font-weight: 700;
+}
+
+.markdown-body blockquote {
+  margin: 1.4em 0;
+  padding: 1.05em 1.2em;
+  color: var(--theme-quote-text);
+  background: var(--theme-quote-surface);
+  border: 1px solid #e0c4b8;
+  border-left: 5px solid var(--theme-accent);
+  border-radius: 18px;
+  box-shadow: var(--theme-surface-shadow);
+}
+
+.markdown-body blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body :where(ul, ol) {
+  margin: 0 0 1.12em;
+  padding-left: 1.65em;
+}
+
+.markdown-body li {
+  margin: 0.34em 0;
+}
+
+.markdown-body li::marker {
+  color: var(--theme-accent);
+}
+
+.markdown-body hr {
+  height: 1px;
+  margin: 2.35em 0;
+  background: var(--theme-border);
+  border: 0;
+}
+
+.markdown-body code {
+  padding: 0.14em 0.4em;
+  color: #713326;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.86em;
+  background: #f5e4d8;
+  border-radius: 7px;
+}
+
+.markdown-body pre {
+  margin: 1.4em 0;
+  padding: 1.15em 1.25em;
+  color: var(--theme-code-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.88rem;
+  line-height: 1.65;
+  background: var(--theme-code-surface);
+  border: 1px solid #5b4740;
+  border-radius: 18px;
+  box-shadow: var(--theme-surface-shadow);
+}
+
+.markdown-body pre code {
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+  background: transparent;
+  border: 0;
+}
+
+.markdown-body table {
+  margin: 1.4em 0;
+  background: var(--theme-table-surface);
+  border: 1px solid var(--theme-border);
+  border-radius: 18px;
+  box-shadow: var(--theme-surface-shadow);
+}
+
+.markdown-body :where(th, td) {
+  padding: 0.72em 0.9em;
+  text-align: left;
+  border-color: #dfcec7;
+}
+
+.markdown-body th {
+  color: var(--theme-table-heading);
+  font-weight: 650;
+  background: var(--theme-table-heading-surface);
+}
+
+.markdown-body tbody tr:nth-child(even) {
+  background: #fff9f4;
+}
+
+.markdown-body :where(img, .mermaid) {
+  border-radius: 18px;
+  box-shadow: var(--theme-surface-shadow);
+}
+
+.markdown-body img {
+  margin: 1.5em auto;
+  border: 1px solid var(--theme-border);
+}
+
+.markdown-body kbd {
+  display: inline-block;
+  padding: 0.14em 0.44em;
+  color: var(--theme-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8em;
+  background: var(--theme-soft-surface);
+  border: 1px solid var(--theme-border);
+  border-bottom-width: 2px;
+  border-radius: 7px;
+}
+
+.markdown-body mark {
+  padding: 0.08em 0.25em;
+  color: var(--theme-heading);
+  background: #f2d6a8;
+  border-radius: 5px;
+}
+
+.markdown-body input[type="checkbox"] {
+  accent-color: var(--theme-accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --theme-canvas: #211a18;
+    --theme-text: #f2e6df;
+    --theme-muted: #c4aea4;
+    --theme-heading: #fff8f2;
+    --theme-link: #f1aa93;
+    --theme-accent: #e89c84;
+    --theme-focus: #f1aa93;
+    --theme-border: #74584f;
+    --theme-soft-surface: #2d2421;
+    --theme-quote-text: #eadbd4;
+    --theme-quote-surface: #392824;
+    --theme-table-surface: #2b2320;
+    --theme-table-heading: #fff8f2;
+    --theme-table-heading-surface: #3a2b27;
+    --theme-code-text: #fff5ed;
+    --theme-code-surface: #120e0d;
+    --theme-heading-on-accent: #2b1510;
+    --theme-diagram-text: #fff1e9;
+    --theme-diagram-surface: #2b2320;
+    --theme-diagram-node-surface: #402d28;
+    --theme-diagram-node-border: #e89c84;
+    --theme-diagram-line: #c0a59a;
+    --theme-diagram-label-surface: #2b2320;
+    --theme-syntax-comment: #bca79e;
+    --theme-syntax-keyword: #f4aa93;
+    --theme-syntax-string: #b9db9b;
+    --theme-syntax-number: #d9b9eb;
+    --theme-syntax-title: #efc18e;
+    --theme-syntax-meta: #dfb9d3;
+    --theme-surface-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  }
+
+  .markdown-body h2 {
+    border-color: #9f6758;
+  }
+
+  .markdown-body h6 {
+    border-color: #815c51;
+  }
+
+  .markdown-body blockquote {
+    border-color: #684a42;
+    border-left-color: var(--theme-accent);
+  }
+
+  .markdown-body code {
+    color: #f4c7b8;
+    background: #4a3029;
+  }
+
+  .markdown-body :where(th, td) {
+    border-color: #58443e;
+  }
+
+  .markdown-body th {
+    background: var(--theme-table-heading-surface);
+  }
+
+  .markdown-body tbody tr:nth-child(even) {
+    background: #302522;
+  }
+
+  .markdown-body mark {
+    color: #fff3e8;
+    background: #684b26;
+  }
+}

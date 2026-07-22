@@ -1,0 +1,3 @@
+# Structure Markdown themes as a shared reading baseline with preset signatures
+
+QuickShare Markdown Theme Presets will share one responsive readability and accessibility baseline while each Preset supplies its own brand-inspired visual signature for typography, color, headings, quotations, code, tables, and related rendered elements. This balances recognizable themes with consistent reading behavior and prevents responsive, overflow, dark-mode, and accessibility fixes from being duplicated across every Preset; fully independent stylesheets and token-only themes were rejected because they respectively multiply maintenance risk or erase too much visual distinction.

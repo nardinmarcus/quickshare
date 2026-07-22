@@ -2,6 +2,89 @@
 
 Status: Phases 0–3 deployed on 2026-07-15; the representative WP8 traffic baseline remains in passive collection.
 
+## Issue #11 — Markdown Theme Catalog, shared baseline, and ByteDance tracer (2026-07-22)
+
+Status: complete on `codex/markdown-theme-catalog`; Issue #11 is closed after independent review and remote PostgreSQL CI. Parent Issue #10 remains unreleased.
+
+Confirmed boundaries:
+
+- One server-owned Catalog is authoritative for stable IDs, labels, order, trusted local signature paths, and light/dark wrapper metadata.
+- The homepage, admin editor, request normalization, and renderer consume Catalog projections instead of maintaining option lists or asset maps.
+- One independently loaded Theme Reading Baseline owns responsive containment, focus visibility, image/task normalization, and bounded tables, code, and diagrams.
+- ByteDance is the first migrated end-to-end signature and deterministic fallback. GitHub, Apple, Notion, and Claude remain operational until Issues #12 and #13 migrate them.
+- The persisted text field and every existing API response shape remain unchanged. The disposable `prototypes/` tree is neither read nor committed.
+
+Plan:
+
+- [x] Add failing Catalog contract tests for identity, order, safe projection, local assets, paired appearance metadata, immutability, and ByteDance fallback.
+- [x] Add failing renderer tests proving baseline-before-signature loading, trusted appearance metadata, unknown-value safety, and conditional Mermaid/highlight assets.
+- [x] Add failing HTTP tests proving Catalog-driven homepage/admin options, ByteDance create/preview/public behavior, unknown normalization, and read-only fallback for invalid stored values.
+- [x] Implement the Catalog module and replace duplicated server/template theme lists with its safe projection.
+- [x] Add the shared reading baseline and refactor ByteDance into a signature-only, system-font, light/dark stylesheet without malformed glyphs or broad blur.
+- [x] Run focused tests, the complete Node suite, syntax/diff checks, and real-browser ByteDance acceptance at 375/768/1440 plus a 320 CSS px reflow boundary equivalent to 640 px at 200% browser zoom.
+- [x] Run the GitHub CI job against its isolated PostgreSQL 17 `quickshare_test` service.
+- [x] Run Standards and Spec review, remediate findings, commit and push the #11 slice on the integration branch, attach evidence, and close #11 only after independent verification.
+
+Verify:
+
+1. Catalog -> five existing IDs are unique and ordered, labels/assets/appearance metadata are trusted, and every invalid value resolves to ByteDance.
+2. Projection -> homepage and admin render options from the same server projection; browser strings cannot become stylesheet URLs.
+3. Renderer -> baseline loads before the resolved signature; wrapper canvas/theme-color follows trusted light/dark metadata; optional runtimes remain content-conditional.
+4. ByteDance -> create, preview, persistence, metadata, admin update, and public rendering preserve its ID and recognizable blue/teal signature.
+5. Resilience -> signature failure leaves readable contained content; invalid stored values render ByteDance without rewriting the row during a read.
+6. Compatibility -> database/API shapes and non-Markdown flows are unchanged; the four pending legacy signatures remain usable.
+7. Visual -> ByteDance light/dark has no page-level overflow, passes representative contrast/focus checks, and reflows at required widths and 200% zoom.
+
+Local verification:
+
+- TDD: the Catalog module and shared baseline each began with a failing contract; the empty admin write also failed as `null` before normalization was corrected.
+- Tests: the post-review focused Catalog/renderer/HTTP slice passes 21/21; the complete Node suite passes 192/192; changed JavaScript syntax and `git diff --check` pass.
+- Browser geometry: light and dark ByteDance pass at 375, 768, and 1440 px; the reading column is bounded at 900 px and document `scrollWidth` equals `clientWidth` at every width.
+- Narrow reflow: at 320 CSS px the page remains 305/305 px with table, code, and Mermaid overflow contained internally; the table alone scrolls 280 px inside a 271 px container.
+- Visual/accessibility: representative light and dark body, link, quote, code, heading, and focus colors meet the measured contrast boundary; keyboard focus exposes a solid 3 px theme-aware outline.
+- Failure resilience: aborting `/css/markdown-bytedance.css` produces `TypeError: Failed to fetch`, while the independent baseline keeps readable content and 360/360 px page geometry with 326 px contained table, code, and Mermaid regions.
+- Resources: the real mixed-content sample loads one baseline, one trusted ByteDance signature, and only the content-triggered Highlight.js and Mermaid resources; plain Markdown remains covered by a no-optional-runtime contract test.
+- PostgreSQL: no safe local `_test` instance is running; the repository CI workflow provides PostgreSQL 17 and remains the required remote gate after push.
+
+Independent review remediation:
+
+- Preset-aware technical content: the baseline now defines the complete shared canvas/text/muted/accent/link/border/quotation/table/diagram/code/focus/heading-on-accent contract plus syntax and Mermaid roles. ByteDance supplies light/dark values; Markdown no longer downloads fixed Atom One Dark CSS.
+- Adaptive runtimes: Highlight.js consumes local token-aware styles, while Mermaid reads the resolved CSS tokens at initialization, preserves diagram source, and rerenders when system appearance changes.
+- Browser readback: ByteDance Mermaid node fill/stroke/text changed from `#e8f3ff / #1677ff / #29435d` to `#1d3853 / #5ca4ff / #d8e5f3` after a live light-to-dark preference change; the diagram remained rendered and page geometry stayed contained. The network contained no highlight stylesheet request.
+- New-write consistency: admin clone resolves null, `random`, and invalid legacy Markdown values to ByteDance and writes null for non-Markdown clones.
+- Preservation coverage: the theme-only admin test now retains non-default password hash/ciphertext, protection, expiration, Favorite Share state, view count, content, title, and description; the Share API invalid-value path is covered.
+- Standards: obsolete `MARKDOWN_THEMES`/`resolveTheme` forwarding exports were removed and the new test helper uses the Share domain term.
+- Legacy compatibility follow-up: shared syntax roles are optional signature enhancements and otherwise inherit the active code foreground. GitHub, Apple, and Notion explicitly retain their existing dark text on light fenced-code surfaces in both system appearances until Issues #12/#13 migrate them; cache-busted browser readback confirmed GitHub `#24292f` on `#f6f8fa` with no fixed highlight stylesheet.
+- Final gates: independent Standards Review and Spec Review both returned 0 findings at `ae6a798`; GitHub Actions run `29935833579` passed Node 24 and PostgreSQL 17; completion evidence was attached to Issue #11 before it was closed.
+
+## Issues #12–#19 — Twelve-theme Catalog, Sampler, and release (2026-07-23)
+
+Status: Issues #12–#18 are implemented, remotely verified, and closed; Issue #19 production release gates are in progress. The disposable `prototypes/` tree remains untracked and excluded.
+
+- [x] Migrate GitHub and Apple to the shared baseline with system light/dark appearances.
+- [x] Migrate Notion and Claude, remove theme-owned remote fonts, and align real task-list output with the baseline.
+- [x] Add the fixed read-only Theme Sampler to create and admin edit flows.
+- [x] Add validated homepage-only Creator Theme Preference; admin edit remains driven by the stored Share theme.
+- [x] Add Raycast, Google, Tesla, Airbnb, Bugatti, Linear, and PlayStation signatures in the formal Catalog order.
+- [x] Preserve preview/create/API/metadata/admin/public round trips, invalid-value fallback, and non-Markdown compatibility.
+- [x] Run the integrated focused suite, full suite, syntax checks, diff checks, and final real-browser matrices.
+- [x] Push the release candidate, pass Node 24 plus PostgreSQL 17 CI, and verify Vercel Preview.
+- [x] Attach evidence and close Issues #12–#18.
+- [ ] Complete Issue #19 only after production release and live verification.
+
+Integrated verification:
+
+- Catalog order is ByteDance, GitHub, Apple, Notion, Claude, Raycast, Google, Tesla, Airbnb, Bugatti, Linear, PlayStation; the browser projection carries only stable ID, label, and trusted local signature path.
+- Focused Catalog/theme/Sampler tests pass 58/58; the complete Node suite passes 237/237. Changed JavaScript syntax and `git diff --check` pass.
+- The Sampler outer-page matrix passes all 72 combinations: twelve themes × light/dark × 375/768/1440. Every combination keeps the page contained, loads the selected local signature, preserves the accessible name, and keeps the iframe outside sequential focus.
+- The representative rendered-Markdown matrix passes the same 72 combinations with bounded reading width, contained code/table/diagram surfaces, one baseline plus one signature, a non-transparent canvas, and a visible 3px focus outline.
+- Direct 375px Sampler checks pass all twelve themes in both appearances: fixed content fits the 648px frame, the diagram reflows vertically, and no page-level horizontal overflow appears. A 375px boundary is stricter than the 384 CSS px reflow equivalent of a 768px viewport at 200% zoom.
+- Real browser preference checks prove immediate switching makes zero full-preview requests and does not mutate editor content; a valid homepage preference survives reload, an invalid stored value falls back to ByteDance, and admin ignores the homepage preference while retaining the Share's stored theme.
+- Visual contact sheets for all twelve light and dark signatures were inspected from real Chromium output. They are temporary acceptance artifacts and are not part of the repository.
+- The first integrated full run reproduced the existing interrupted-request timing flake (`6 !== 7`); an isolated rerun and the unchanged second full run passed, so no unrelated performance code was modified.
+- Final Standards Review found no hard violations; its only low-priority note was deliberate helper duplication that keeps each vertical ticket independently executable. Final Spec Review returned 0 findings against the formal Catalog, baseline, Sampler, compatibility, and Prototype-exclusion requirements.
+- GitHub Actions run `29941287814` passed Node 24 and PostgreSQL 17 for candidate `dad1679`. The protected Vercel Preview was invoked through authenticated tooling: homepage, PlayStation preview API, shared baseline, PlayStation signature, and Sampler script all returned 200. Preview-only branch configuration disables auth and uses an isolated session secret; Production configuration was not changed.
+
 ## Site identity icon replacement design (2026-07-22)
 
 Status: complete; asset commit `e2e46e0` is pushed and production deployment `dpl_C9G92ugidV333Rcz2L3vxtfs4YEv` was verified on 2026-07-22.

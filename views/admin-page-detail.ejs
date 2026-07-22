@@ -149,16 +149,15 @@
             <% } %>
           </p>
         </div>
-        <div class="admin-edit-field" id="theme-field" <%= sharedPage.codeType !== 'markdown' ? 'hidden' : '' %>>
-          <label for="edit-theme">Markdown 主题</label>
-          <select id="edit-theme" name="markdownTheme">
-            <option value="bytedance" <%= !sharedPage.markdownTheme || sharedPage.markdownTheme === 'bytedance' ? 'selected' : '' %>>ByteDance</option>
-            <option value="github" <%= sharedPage.markdownTheme === 'github' ? 'selected' : '' %>>GitHub</option>
-            <option value="apple" <%= sharedPage.markdownTheme === 'apple' ? 'selected' : '' %>>Apple</option>
-            <option value="notion" <%= sharedPage.markdownTheme === 'notion' ? 'selected' : '' %>>Notion</option>
-            <option value="claude" <%= sharedPage.markdownTheme === 'claude' ? 'selected' : '' %>>Claude</option>
-          </select>
-        </div>
+        <% if (sharedPage.codeType === 'markdown') { %>
+          <%- include('partials/theme-sampler', {
+            containerId: 'theme-field',
+            containerClass: 'admin-edit-field',
+            selectId: 'edit-theme',
+            selectedThemeId: sharedPage.markdownTheme,
+            markdownThemeOptions
+          }) %>
+        <% } %>
       </div>
       <div class="admin-edit-actions">
         <button type="button" class="cyber-btn cyber-btn-secondary" id="edit-cancel">取消</button>
@@ -199,5 +198,6 @@
 <script src="/js/admin.js"></script>
 <script src="/js/admin-favorite.js"></script>
 <script src="/js/admin-time.js"></script>
+<script src="/js/theme-sampler.js"></script>
 <script src="/js/admin-detail.js"></script>
 <%- include('partials/footer', { page }) %>

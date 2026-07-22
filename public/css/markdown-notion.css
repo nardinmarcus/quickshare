@@ -1,27 +1,54 @@
-/* ===== Notion 笔记 Markdown 主题 ===== */
-.markdown-body {
-  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  font-size: 16px;
-  line-height: 1.6;
-  color: #37352f;
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 20px;
+/* Notion 笔记 signature: warm-neutral knowledge surfaces and explicit task state. */
+:root {
+  --theme-canvas: #fbfbfa;
+  --theme-text: #37352f;
+  --theme-muted: #5f5e59;
+  --theme-accent: #326b88;
+  --theme-link: #37352f;
+  --theme-border: #d9d8d4;
+  --theme-quote-surface: #f2f1ee;
+  --theme-table-surface: #ffffff;
+  --theme-diagram-surface: #f7f6f3;
+  --theme-code-text: #37352f;
+  --theme-code-surface: #f7f6f3;
+  --theme-focus: #005f87;
+  --theme-heading-on-accent: #ffffff;
+  --theme-font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Noto Sans SC", Arial, sans-serif;
+  --theme-diagram-text: #37352f;
+  --theme-diagram-node-surface: #efefed;
+  --theme-diagram-node-border: #63625d;
+  --theme-diagram-line: #5f5e59;
+  --theme-diagram-label-surface: #ffffff;
+  --theme-syntax-comment: #5c625c;
+  --theme-syntax-keyword: #7b3f95;
+  --theme-syntax-string: #246b45;
+  --theme-syntax-number: #9a481c;
+  --theme-syntax-title: #245f87;
+  --theme-syntax-meta: #765300;
+  --theme-reading-width: 900px;
+  --notion-inline-code: #b4232d;
+  --notion-inline-code-surface: #f1efed;
+  --notion-task-open: #6b6a65;
+  --notion-task-complete: #277a4b;
+  --notion-mark-surface: #f8e8e5;
 }
 
-.markdown-body h1, .markdown-body h2, .markdown-body h3,
-.markdown-body h4, .markdown-body h5, .markdown-body h6 {
-  margin-top: 1.5em;
-  margin-bottom: 0.5em;
+.markdown-body {
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.markdown-body :where(h1, h2, h3, h4, h5, h6) {
+  margin-block: 1.5em 0.5em;
+  color: var(--theme-text);
   font-weight: 600;
   line-height: 1.3;
-  color: #37352f;
 }
 
 .markdown-body h1 {
-  font-size: 1.875em;
   padding-bottom: 0.2em;
-  border-bottom: 1px solid #e3e2e0;
+  font-size: 1.875em;
+  border-bottom: 1px solid var(--theme-border);
 }
 
 .markdown-body h2 { font-size: 1.5em; }
@@ -29,128 +56,161 @@
 .markdown-body h4 { font-size: 1.125em; }
 
 .markdown-body p {
-  margin-top: 0;
-  margin-bottom: 1em;
-  line-height: 1.6;
+  margin-block: 0 1em;
 }
 
 .markdown-body blockquote {
-  margin: 0 0 1em 0;
-  padding: 16px;
-  background: #f7f6f3;
-  border-left: 3px solid #e9e9e7;
+  margin: 0 0 1em;
+  padding: 1em;
+  color: var(--theme-muted);
+  background: var(--theme-quote-surface);
+  border-left: 3px solid var(--theme-border);
   border-radius: 3px;
-  color: #37352f;
-  font-style: normal;
 }
 
-.markdown-body strong { font-weight: 600; color: #37352f; }
-.markdown-body em { font-style: italic; }
+.markdown-body strong {
+  color: var(--theme-text);
+  font-weight: 600;
+}
 
-.markdown-body pre {
-  margin-top: 0;
-  margin-bottom: 1em;
-  padding: 16px;
-  overflow: auto;
-  font-size: 14px;
-  line-height: 1.5;
-  background-color: #f7f6f3;
-  border-radius: 3px;
-  font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, Monaco, Consolas, monospace;
+.markdown-body a {
+  color: var(--theme-link);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+.markdown-body a:hover {
+  color: var(--theme-accent);
 }
 
 .markdown-body code {
-  font-size: 90%;
-  padding: 2px 4px;
-  background: #f1f1ef;
-  color: #eb5757;
+  padding: 0.12em 0.35em;
+  color: var(--notion-inline-code);
+  background: var(--notion-inline-code-surface);
   border-radius: 3px;
-  font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, Monaco, Consolas, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 90%;
+}
+
+.markdown-body pre {
+  margin-block: 0 1em;
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .markdown-body pre code {
   padding: 0;
-  background: transparent;
   color: inherit;
+  background: transparent;
   border-radius: 0;
   font-size: 100%;
 }
 
-.markdown-body a {
-  color: #37352f;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  transition: color 0.15s ease;
-}
-
-.markdown-body a:hover { color: #e16259; }
-
-.markdown-body img {
-  max-width: 100%;
-  border-radius: 3px;
-  display: block;
-  margin: 1em auto;
-}
-
 .markdown-body table {
-  width: 100%;
-  border-collapse: collapse;
   margin-bottom: 1em;
-  border: 1px solid #e3e2e0;
   border-radius: 3px;
-  overflow: hidden;
 }
 
-.markdown-body th, .markdown-body td {
-  padding: 10px 14px;
-  border: 1px solid #e3e2e0;
+.markdown-body :where(th, td) {
+  padding: 0.625em 0.875em;
   text-align: left;
 }
 
 .markdown-body th {
+  color: var(--theme-text);
+  background: var(--theme-quote-surface);
   font-weight: 600;
-  background: #f7f6f3;
-  color: #37352f;
 }
-
-.markdown-body td { color: #37352f; }
 
 .markdown-body hr {
   height: 1px;
-  padding: 0;
   margin: 1.5em 0;
-  background: #e3e2e0;
+  background: var(--theme-border);
   border: 0;
 }
 
-.markdown-body ul, .markdown-body ol {
-  margin-top: 0;
-  margin-bottom: 1em;
+.markdown-body :where(ul, ol) {
+  margin-block: 0 1em;
   padding-left: 2em;
 }
 
-.markdown-body li { margin-bottom: 0.25em; }
+.markdown-body li {
+  margin-bottom: 0.25em;
+}
 
-.markdown-body input[type="checkbox"] {
-  margin-right: 6px;
-  accent-color: #2eaadc;
+.markdown-body input[type="checkbox"]:not(:checked) {
+  accent-color: var(--notion-task-open);
+}
+
+.markdown-body input[type="checkbox"]:checked {
+  accent-color: var(--notion-task-complete);
+}
+
+.markdown-body li:has(> input[type="checkbox"]:checked) {
+  color: var(--theme-muted);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.markdown-body img {
+  margin: 1em auto;
+  border-radius: 3px;
 }
 
 .markdown-body kbd {
   display: inline-block;
-  padding: 3px 5px;
-  font-size: 11px;
-  line-height: 1.3;
-  color: #37352f;
-  background: #f7f6f3;
-  border: 1px solid #e3e2e0;
+  padding: 0.2em 0.4em;
+  color: var(--theme-text);
+  background: var(--theme-quote-surface);
+  border: 1px solid var(--theme-border);
   border-radius: 3px;
-  font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, Monaco, Consolas, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.75em;
+  line-height: 1.3;
 }
 
 .markdown-body mark {
-  background: rgba(225, 98, 89, 0.1);
-  color: #37352f;
-  padding: 0 4px;
+  padding-inline: 0.25em;
+  color: var(--theme-text);
+  background: var(--notion-mark-surface);
   border-radius: 2px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --theme-canvas: #191919;
+    --theme-text: #e8e7e3;
+    --theme-muted: #b9b7b0;
+    --theme-accent: #74b4d3;
+    --theme-link: #e8e7e3;
+    --theme-border: #4d4c48;
+    --theme-quote-surface: #272726;
+    --theme-table-surface: #222221;
+    --theme-diagram-surface: #222221;
+    --theme-code-text: #e8e7e3;
+    --theme-code-surface: #242423;
+    --theme-focus: #71c7e8;
+    --theme-heading-on-accent: #111111;
+    --theme-font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Noto Sans SC", Arial, sans-serif;
+    --theme-diagram-text: #e8e7e3;
+    --theme-diagram-node-surface: #30302e;
+    --theme-diagram-node-border: #aaa8a1;
+    --theme-diagram-line: #b9b7b0;
+    --theme-diagram-label-surface: #222221;
+    --theme-syntax-comment: #b1b7ae;
+    --theme-syntax-keyword: #d7a0ee;
+    --theme-syntax-string: #8ed3aa;
+    --theme-syntax-number: #f0ad86;
+    --theme-syntax-title: #8cc8ed;
+    --theme-syntax-meta: #dfc478;
+    --theme-reading-width: 900px;
+    --notion-inline-code: #ff9b9b;
+    --notion-inline-code-surface: #312727;
+    --notion-task-open: #aaa8a1;
+    --notion-task-complete: #75c99a;
+    --notion-mark-surface: #49312f;
+  }
 }
