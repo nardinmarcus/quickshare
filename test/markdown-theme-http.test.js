@@ -38,6 +38,7 @@ function request(route, options = {}) {
       res.on('data', chunk => { text += chunk; });
       res.on('end', () => resolve({
         status: res.statusCode,
+        headers: res.headers,
         text,
         body: res.headers['content-type']?.includes('application/json') ? JSON.parse(text) : null
       }));
@@ -55,31 +56,41 @@ function jsonRequest(route, method, value, headers = {}) {
   });
 }
 
-async function seedMarkdownPage({
+async function seedMarkdownShare({
   id,
   markdownTheme,
   title = id,
   description = 'theme boundary',
   codeType = 'markdown',
-  htmlContent = '# Theme boundary\n\n| Column | Value |\n| --- | --- |\n| Width | bounded |'
+  htmlContent = '# Theme boundary\n\n| Column | Value |\n| --- | --- |\n| Width | bounded |',
+  passwordHash = null,
+  encryptedPassword = null,
+  isProtected = false,
+  expiresAt = null,
+  isFavorite = false,
+  viewCount = 0
 }) {
   await app.locals.pageRepository.create({
     id,
     htmlContent,
     createdAt: Date.now(),
-    passwordHash: null,
-    encryptedPassword: null,
-    isProtected: false,
+    passwordHash,
+    encryptedPassword,
+    isProtected,
     codeType,
     title,
     description,
-    expiresAt: null,
+    expiresAt,
     markdownTheme
   });
+
+  const stored = await app.locals.pageRepository.getById(id);
+  stored.is_favorite = isFavorite;
+  stored.view_count = viewCount;
 }
 
 test('homepage and admin edit render the same Catalog projection', async () => {
-  await seedMarkdownPage({ id: 'catalog-admin', markdownTheme: 'github' });
+  await seedMarkdownShare({ id: 'catalog-admin', markdownTheme: 'github' });
   const [homepage, admin] = await Promise.all([
     request('/'),
     request('/admin/pages/catalog-admin')
@@ -118,8 +129,22 @@ test('preview and browser creation normalize unknown themes through ByteDance', 
   assert.equal(stored.markdown_theme, 'bytedance');
 });
 
+test('Share API normalizes an unknown Markdown theme through the same Catalog', async () => {
+  const response = await jsonRequest('/api/v1/share', 'POST', {
+    htmlContent: '# Share API fallback',
+    codeType: 'markdown',
+    markdownTheme: 'stale-browser-theme'
+  }, { 'X-API-Key': 'markdown-theme-http-key' });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.markdownTheme, 'bytedance');
+
+  const stored = await app.locals.pageRepository.getById(response.body.urlId);
+  assert.equal(stored.markdown_theme, 'bytedance');
+});
+
 test('public reads render invalid stored values through ByteDance without rewriting them', async () => {
-  await seedMarkdownPage({ id: 'legacy-invalid-theme', markdownTheme: 'legacy-invalid' });
+  await seedMarkdownShare({ id: 'legacy-invalid-theme', markdownTheme: 'legacy-invalid' });
 
   const response = await request('/view/legacy-invalid-theme');
   const stored = await app.locals.pageRepository.getById('legacy-invalid-theme');
@@ -131,11 +156,18 @@ test('public reads render invalid stored values through ByteDance without rewrit
 });
 
 test('theme-only admin updates normalize the ID and preserve unrelated Share fields', async () => {
-  await seedMarkdownPage({
+  const preservedExpiry = Date.now() + 86_400_000;
+  await seedMarkdownShare({
     id: 'theme-only-update',
     markdownTheme: 'github',
     title: 'Preserved title',
-    description: 'Preserved description'
+    description: 'Preserved description',
+    passwordHash: 'preserved-password-hash',
+    encryptedPassword: 'preserved-encrypted-password',
+    isProtected: true,
+    expiresAt: preservedExpiry,
+    isFavorite: true,
+    viewCount: 17
   });
 
   const response = await jsonRequest('/admin/pages/theme-only-update', 'PUT', {
@@ -149,12 +181,16 @@ test('theme-only admin updates normalize the ID and preserve unrelated Share fie
   assert.equal(stored.title, 'Preserved title');
   assert.equal(stored.description, 'Preserved description');
   assert.equal(stored.html_content.startsWith('# Theme boundary'), true);
-  assert.equal(stored.is_protected, 0);
-  assert.equal(stored.expires_at, null);
+  assert.equal(stored.password_hash, 'preserved-password-hash');
+  assert.equal(stored.encrypted_password, 'preserved-encrypted-password');
+  assert.equal(stored.is_protected, 1);
+  assert.equal(stored.expires_at, preservedExpiry);
+  assert.equal(stored.is_favorite, true);
+  assert.equal(stored.view_count, 17);
 });
 
 test('admin theme writes normalize an empty value to ByteDance', async () => {
-  await seedMarkdownPage({
+  await seedMarkdownShare({
     id: 'empty-theme-update',
     markdownTheme: 'github'
   });
@@ -170,7 +206,7 @@ test('admin theme writes normalize an empty value to ByteDance', async () => {
 });
 
 test('admin theme input does not add Markdown state to a non-Markdown Share', async () => {
-  await seedMarkdownPage({
+  await seedMarkdownShare({
     id: 'html-theme-boundary',
     markdownTheme: null,
     codeType: 'html',
@@ -186,4 +222,47 @@ test('admin theme input does not add Markdown state to a non-Markdown Share', as
   assert.equal(stored.code_type, 'html');
   assert.equal(stored.markdown_theme, null);
   assert.equal(stored.html_content, '<h1>HTML boundary</h1>');
+});
+
+test('cloning normalizes every legacy Markdown theme and keeps non-Markdown theme state null', async () => {
+  for (const [suffix, markdownTheme] of [
+    ['null', null],
+    ['random', 'random'],
+    ['invalid', 'legacy-invalid']
+  ]) {
+    const sourceId = `clone-${suffix}-theme`;
+    await seedMarkdownShare({ id: sourceId, markdownTheme });
+
+    const response = await request(`/admin/pages/${sourceId}/clone`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: '_csrf='
+    });
+    assert.equal(response.status, 302);
+
+    const cloneId = response.headers.location.split('/').pop();
+    const clone = await app.locals.pageRepository.getById(cloneId);
+
+    assert.equal(clone.code_type, 'markdown');
+    assert.equal(clone.markdown_theme, 'bytedance');
+  }
+
+  await seedMarkdownShare({
+    id: 'clone-html-theme',
+    markdownTheme: 'legacy-invalid',
+    codeType: 'html',
+    htmlContent: '<p>HTML clone</p>'
+  });
+  const response = await request('/admin/pages/clone-html-theme/clone', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: '_csrf='
+  });
+  assert.equal(response.status, 302);
+
+  const cloneId = response.headers.location.split('/').pop();
+  const clone = await app.locals.pageRepository.getById(cloneId);
+
+  assert.equal(clone.code_type, 'html');
+  assert.equal(clone.markdown_theme, null);
 });

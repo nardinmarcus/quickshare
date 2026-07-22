@@ -11,11 +11,24 @@
   --theme-focus: #0b6cf0;
   --theme-border: #cbd8e8;
   --theme-subtle-border: #dbe6f2;
-  --theme-surface: #ffffff;
+  --theme-table-surface: #ffffff;
+  --theme-diagram-surface: #ffffff;
   --theme-soft-surface: #eef5ff;
   --theme-quote-surface: #edf9f8;
   --theme-code-surface: #10233d;
   --theme-code-text: #eef7ff;
+  --theme-heading-on-accent: #ffffff;
+  --theme-diagram-text: #29435d;
+  --theme-diagram-node-surface: #e8f3ff;
+  --theme-diagram-node-border: #1677ff;
+  --theme-diagram-line: #5f7188;
+  --theme-diagram-label-surface: #ffffff;
+  --theme-syntax-comment: #9eb0c6;
+  --theme-syntax-keyword: #f58ac3;
+  --theme-syntax-string: #a7db78;
+  --theme-syntax-number: #d6a6ff;
+  --theme-syntax-title: #7cc7ff;
+  --theme-syntax-meta: #ffd166;
 }
 
 .markdown-body {
@@ -57,7 +70,7 @@
   width: fit-content;
   margin: 2.5em 0 1em;
   padding: 0.42em 0.9em;
-  color: #ffffff;
+  color: var(--theme-heading-on-accent);
   font-size: clamp(1.4rem, 3.4vw, 1.75rem);
   background: linear-gradient(120deg, #126ee8, #007f7b);
   border-radius: 8px 20px 8px 20px;
@@ -210,7 +223,7 @@
 .markdown-body table {
   margin: 1.5em 0;
   color: var(--theme-text);
-  background: var(--theme-surface);
+  background: var(--theme-table-surface);
   border: 1px solid var(--theme-border);
   border-radius: 9px;
 }
@@ -262,7 +275,7 @@
 
 .markdown-body .mermaid {
   color: var(--theme-text);
-  background: var(--theme-surface);
+  background: var(--theme-diagram-surface);
   border: 1px solid var(--theme-border);
 }
 
@@ -277,11 +290,18 @@
     --theme-focus: #7bb8ff;
     --theme-border: #34506d;
     --theme-subtle-border: #2b435c;
-    --theme-surface: #17263a;
+    --theme-table-surface: #17263a;
+    --theme-diagram-surface: #17263a;
     --theme-soft-surface: #1c3552;
     --theme-quote-surface: #143b3e;
     --theme-code-surface: #07111f;
     --theme-code-text: #e7f2ff;
+    --theme-heading-on-accent: #061b2d;
+    --theme-diagram-text: #d8e5f3;
+    --theme-diagram-node-surface: #1d3853;
+    --theme-diagram-node-border: #5ca4ff;
+    --theme-diagram-line: #90a8c0;
+    --theme-diagram-label-surface: #17263a;
   }
 
   .markdown-body h1 {
@@ -290,7 +310,7 @@
   }
 
   .markdown-body h2 {
-    color: #061b2d;
+    color: var(--theme-heading-on-accent);
     background: linear-gradient(120deg, #75b4ff, #57ddd5);
   }
 

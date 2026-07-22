@@ -43,7 +43,7 @@ test('renderMarkdown loads highlight assets only for non-mermaid code blocks', a
   const html = await renderMarkdown(`${fence}js\nconsole.log('hello');\n${fence}`);
 
   assert.match(html, /highlight\.min\.js/);
-  assert.match(html, /atom-one-dark\.min\.css/);
+  assert.doesNotMatch(html, /atom-one-dark\.min\.css/);
   assert.doesNotMatch(html, /mermaid\.min\.js/);
 });
 
@@ -52,6 +52,9 @@ test('renderMarkdown loads Mermaid only when a mermaid block exists', async () =
   const html = await renderMarkdown(`${fence}mermaid\ngraph TD\nA-->B\n${fence}`);
 
   assert.match(html, /mermaid\.min\.js/);
+  assert.match(html, /getPropertyValue\(name\)/);
+  assert.match(html, /--theme-diagram-node-surface/);
+  assert.match(html, /appearanceQuery\.addEventListener\('change', rerenderForAppearance\)/);
   assert.doesNotMatch(html, /highlight\.min\.js/);
 });
 

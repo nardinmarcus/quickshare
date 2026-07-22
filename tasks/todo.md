@@ -4,7 +4,7 @@ Status: Phases 0–3 deployed on 2026-07-15; the representative WP8 traffic base
 
 ## Issue #11 — Markdown Theme Catalog, shared baseline, and ByteDance tracer (2026-07-22)
 
-Status: implementation and local verification complete on `codex/markdown-theme-catalog`; independent review and remote PostgreSQL CI remain pending. Parent Issue #10 remains unreleased.
+Status: independent review findings remediated and local verification complete on `codex/markdown-theme-catalog`; post-remediation review and remote PostgreSQL CI remain pending. Parent Issue #10 remains unreleased.
 
 Confirmed boundaries:
 
@@ -38,13 +38,22 @@ Verify:
 Local verification:
 
 - TDD: the Catalog module and shared baseline each began with a failing contract; the empty admin write also failed as `null` before normalization was corrected.
-- Tests: the focused Catalog/renderer/HTTP slice passes 18/18; the complete Node suite passes 189/189; changed JavaScript syntax and `git diff --check` pass.
+- Tests: the post-review focused Catalog/renderer/HTTP slice passes 20/20; the complete Node suite passes 191/191; changed JavaScript syntax and `git diff --check` pass.
 - Browser geometry: light and dark ByteDance pass at 375, 768, and 1440 px; the reading column is bounded at 900 px and document `scrollWidth` equals `clientWidth` at every width.
 - Narrow reflow: at 320 CSS px the page remains 305/305 px with table, code, and Mermaid overflow contained internally; the table alone scrolls 280 px inside a 271 px container.
 - Visual/accessibility: representative light and dark body, link, quote, code, heading, and focus colors meet the measured contrast boundary; keyboard focus exposes a solid 3 px theme-aware outline.
 - Failure resilience: aborting `/css/markdown-bytedance.css` produces `TypeError: Failed to fetch`, while the independent baseline keeps readable content and 360/360 px page geometry with 326 px contained table, code, and Mermaid regions.
 - Resources: the real mixed-content sample loads one baseline, one trusted ByteDance signature, and only the content-triggered Highlight.js and Mermaid resources; plain Markdown remains covered by a no-optional-runtime contract test.
 - PostgreSQL: no safe local `_test` instance is running; the repository CI workflow provides PostgreSQL 17 and remains the required remote gate after push.
+
+Independent review remediation:
+
+- Preset-aware technical content: the baseline now defines the complete shared canvas/text/muted/accent/link/border/quotation/table/diagram/code/focus/heading-on-accent contract plus syntax and Mermaid roles. ByteDance supplies light/dark values; Markdown no longer downloads fixed Atom One Dark CSS.
+- Adaptive runtimes: Highlight.js consumes local token-aware styles, while Mermaid reads the resolved CSS tokens at initialization, preserves diagram source, and rerenders when system appearance changes.
+- Browser readback: ByteDance Mermaid node fill/stroke/text changed from `#e8f3ff / #1677ff / #29435d` to `#1d3853 / #5ca4ff / #d8e5f3` after a live light-to-dark preference change; the diagram remained rendered and page geometry stayed contained. The network contained no highlight stylesheet request.
+- New-write consistency: admin clone resolves null, `random`, and invalid legacy Markdown values to ByteDance and writes null for non-Markdown clones.
+- Preservation coverage: the theme-only admin test now retains non-default password hash/ciphertext, protection, expiration, Favorite Share state, view count, content, title, and description; the Share API invalid-value path is covered.
+- Standards: obsolete `MARKDOWN_THEMES`/`resolveTheme` forwarding exports were removed and the new test helper uses the Share domain term.
 
 ## Site identity icon replacement design (2026-07-22)
 

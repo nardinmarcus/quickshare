@@ -1594,7 +1594,9 @@ app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requir
       description: page.description,
       createdAt: Date.now(),
       expiresAt: null,
-      markdownTheme: page.markdown_theme
+      markdownTheme: page.code_type === 'markdown'
+        ? resolveMarkdownThemeId(page.markdown_theme)
+        : null
     });
 
     return res.redirect('/admin/pages/' + encodeURIComponent(newId));

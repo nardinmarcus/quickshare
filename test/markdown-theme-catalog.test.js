@@ -77,6 +77,31 @@ test('shared baseline owns reading containment while ByteDance owns only its sig
   assert.match(baseline, /\.markdown-body\s+:where\(pre, table, \.mermaid/);
   assert.match(baseline, /:focus-visible/);
   assert.match(baseline, /@media \(max-width:\s*480px\)/);
+  for (const token of [
+    'canvas',
+    'text',
+    'muted',
+    'accent',
+    'link',
+    'border',
+    'quote-surface',
+    'table-surface',
+    'diagram-surface',
+    'diagram-text',
+    'diagram-node-surface',
+    'diagram-node-border',
+    'diagram-line',
+    'diagram-label-surface',
+    'code-text',
+    'code-surface',
+    'focus',
+    'heading-on-accent'
+  ]) {
+    assert.match(baseline, new RegExp(`--theme-${token}:`));
+  }
+  assert.match(baseline, /@media \(prefers-color-scheme:\s*dark\)/);
+  assert.match(baseline, /\.hljs-keyword/);
+  assert.match(baseline, /\.mermaid :where\(\.node rect/);
   assert.doesNotMatch(baseline, /#1677ff|#05d4cd/);
 
   assert.match(bytedance, /--theme-accent:\s*#1677ff/i);
