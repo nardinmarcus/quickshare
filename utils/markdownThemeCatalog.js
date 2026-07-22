@@ -25,7 +25,9 @@ const MARKDOWN_THEME_CATALOG = Object.freeze([
   catalogEntry({ id: 'claude', label: 'Claude 暖调', light: '#faf7f2', dark: '#211e1a' }),
   catalogEntry({ id: 'raycast', label: 'Raycast 专注', light: '#f4f1f6', dark: '#151119' }),
   catalogEntry({ id: 'google', label: 'Google Material', light: '#f8fafd', dark: '#111318' }),
+  catalogEntry({ id: 'tesla', label: 'Tesla 黑白', light: '#ffffff', dark: '#050505' }),
   catalogEntry({ id: 'airbnb', label: 'Airbnb 暖居', light: '#fff8f2', dark: '#211a18' }),
+  catalogEntry({ id: 'bugatti', label: 'Bugatti 蓝曜', light: '#f4f8fc', dark: '#0b0e12' }),
   catalogEntry({ id: 'linear', label: 'Linear 精密', light: '#f7f8fb', dark: '#17191f' })
 ]);
 

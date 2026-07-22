@@ -19,7 +19,9 @@ const EXPECTED_THEMES = [
   ['claude', 'Claude 暖调'],
   ['raycast', 'Raycast 专注'],
   ['google', 'Google Material'],
+  ['tesla', 'Tesla 黑白'],
   ['airbnb', 'Airbnb 暖居'],
+  ['bugatti', 'Bugatti 蓝曜'],
   ['linear', 'Linear 精密']
 ];
 

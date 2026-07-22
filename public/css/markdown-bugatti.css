@@ -1,0 +1,289 @@
+/* Bugatti 蓝曜 — ice, carbon, blue, and restrained metal */
+
+:root {
+  --theme-canvas: #f4f8fc;
+  --theme-text: #171b21;
+  --theme-muted: #505b68;
+  --theme-heading: #0b0e12;
+  --theme-carbon: #0b0e12;
+  --theme-ice: #f4f8fc;
+  --theme-accent: #0057ff;
+  --theme-link: #0048bd;
+  --theme-focus: #0057ff;
+  --theme-metal: #8996a5;
+  --theme-border: #aab5c1;
+  --theme-quote-surface: #e9f0f7;
+  --theme-table-surface: #ffffff;
+  --theme-diagram-surface: #ffffff;
+  --theme-diagram-text: #171b21;
+  --theme-diagram-node-surface: #eaf2fb;
+  --theme-diagram-node-border: #0057ff;
+  --theme-diagram-line: #5b6876;
+  --theme-diagram-label-surface: #ffffff;
+  --theme-code-text: #eef5ff;
+  --theme-code-surface: #0b0e12;
+  --theme-heading-on-accent: #ffffff;
+  --theme-syntax-comment: #aeb8c5;
+  --theme-syntax-keyword: #8db8ff;
+  --theme-syntax-string: #b8d7ff;
+  --theme-syntax-number: #ffffff;
+  --theme-syntax-title: #6fa5ff;
+  --theme-syntax-meta: #d4e5ff;
+  --theme-reading-width: 900px;
+  --theme-font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Noto Sans SC", Arial, sans-serif;
+}
+
+.markdown-body {
+  color: var(--theme-text);
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Noto Sans SC", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.markdown-body :where(h1, h2, h3, h4, h5, h6) {
+  color: var(--theme-heading);
+  font-weight: 680;
+  line-height: 1.14;
+  letter-spacing: -0.012em;
+}
+
+.markdown-body h1 {
+  margin: 0 0 1em;
+  padding: 0.65em 0.78em;
+  color: var(--theme-heading-on-accent);
+  font-size: clamp(2.35rem, 5.8vw, 4.4rem);
+  font-weight: 760;
+  letter-spacing: -0.035em;
+  background: var(--theme-carbon);
+  border-left: 4px solid var(--theme-accent);
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
+}
+
+.theme-sampler .markdown-body h1,
+.markdown-theme-sampler .markdown-body h1 {
+  padding: 0.55em 0.65em;
+  font-size: clamp(1.5rem, 4vw, 2.35rem);
+}
+
+.markdown-body h2 {
+  margin: 2.35em 0 0.8em;
+  padding-bottom: 0.38em;
+  font-size: clamp(1.55rem, 3vw, 1.95rem);
+  border-bottom: 1px solid var(--theme-metal);
+}
+
+.markdown-body h3 {
+  margin: 1.95em 0 0.65em;
+  padding-left: 0.62em;
+  font-size: 1.24rem;
+  border-left: 2px solid var(--theme-accent);
+}
+
+.markdown-body :where(h4, h5, h6) {
+  margin: 1.65em 0 0.55em;
+}
+
+.markdown-body p {
+  margin: 0 0 1.15em;
+}
+
+.markdown-body a {
+  color: var(--theme-link);
+  font-weight: 650;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--theme-metal);
+}
+
+.markdown-body a:hover {
+  color: var(--theme-accent);
+  text-decoration-color: currentColor;
+}
+
+.markdown-body :where(strong, b) {
+  color: var(--theme-heading);
+  font-weight: 760;
+}
+
+.markdown-body blockquote {
+  margin: 1.5em 0;
+  padding: 0.9em 1.05em;
+  color: var(--theme-muted);
+  background: var(--theme-quote-surface);
+  border: 1px solid var(--theme-metal);
+  border-left: 3px solid var(--theme-accent);
+}
+
+.markdown-body blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body :where(ul, ol) {
+  margin: 0 0 1.2em;
+  padding-left: 1.65em;
+}
+
+.markdown-body li {
+  margin: 0.32em 0;
+}
+
+.markdown-body li::marker {
+  color: var(--theme-accent);
+  font-weight: 700;
+}
+
+.markdown-body hr {
+  height: 1px;
+  margin: 2.5em 0;
+  background: var(--theme-metal);
+  border: 0;
+}
+
+.markdown-body code {
+  padding: 0.12em 0.34em;
+  color: #003d9f;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.88em;
+  background: #e2ecf8;
+  border: 1px solid #a8b8ca;
+  border-radius: 2px;
+}
+
+.markdown-body pre {
+  margin: 1.45em 0;
+  padding: 1.15em 1.2em;
+  color: var(--theme-code-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.88rem;
+  line-height: 1.62;
+  background: var(--theme-code-surface);
+  border: 1px solid var(--theme-metal);
+  border-left: 3px solid var(--theme-accent);
+  border-radius: 2px;
+}
+
+.markdown-body pre code {
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+  background: transparent;
+  border: 0;
+}
+
+.markdown-body table {
+  margin: 1.5em 0;
+  color: var(--theme-text);
+  background: var(--theme-table-surface);
+  border: 1px solid var(--theme-metal);
+  border-radius: 0;
+}
+
+.markdown-body :where(th, td) {
+  padding: 0.64em 0.82em;
+  text-align: left;
+  border: 1px solid var(--theme-border);
+}
+
+.markdown-body th {
+  color: var(--theme-heading);
+  font-size: 0.84em;
+  font-weight: 760;
+  letter-spacing: 0.045em;
+  background: var(--theme-quote-surface);
+  border-bottom-color: var(--theme-metal);
+}
+
+.markdown-body tbody tr:nth-child(even) {
+  background: #f7faff;
+}
+
+.markdown-body img {
+  margin: 1.5em auto;
+  border: 1px solid var(--theme-metal);
+  border-radius: 0;
+}
+
+.markdown-body kbd {
+  display: inline-block;
+  padding: 0.12em 0.4em;
+  color: var(--theme-heading-on-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.82em;
+  background: var(--theme-carbon);
+  border: 1px solid var(--theme-metal);
+  border-radius: 2px;
+}
+
+.markdown-body mark {
+  padding: 0.05em 0.22em;
+  color: #061126;
+  background: #a9c9ff;
+}
+
+.markdown-body input[type="checkbox"] {
+  accent-color: var(--theme-accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --theme-canvas: #0b0e12;
+    --theme-text: #e7edf4;
+    --theme-muted: #aeb9c5;
+    --theme-heading: #f4f8fc;
+    --theme-carbon: #0b0e12;
+    --theme-ice: #f4f8fc;
+    --theme-accent: #4385ff;
+    --theme-link: #79a8ff;
+    --theme-focus: #73a4ff;
+    --theme-metal: #647180;
+    --theme-border: #46515e;
+    --theme-quote-surface: #141a21;
+    --theme-table-surface: #10151b;
+    --theme-diagram-surface: #10151b;
+    --theme-diagram-text: #e7edf4;
+    --theme-diagram-node-surface: #162236;
+    --theme-diagram-node-border: #6d9fff;
+    --theme-diagram-line: #aeb9c5;
+    --theme-diagram-label-surface: #10151b;
+    --theme-code-text: #eff5ff;
+    --theme-code-surface: #05070a;
+    --theme-heading-on-accent: #0b0e12;
+    --theme-syntax-comment: #9aa7b6;
+    --theme-syntax-keyword: #86b2ff;
+    --theme-syntax-string: #bdd7ff;
+    --theme-syntax-number: #ffffff;
+    --theme-syntax-title: #73a4ff;
+    --theme-syntax-meta: #d5e4ff;
+  }
+
+  .markdown-body h1 {
+    color: var(--theme-heading-on-accent);
+    background: var(--theme-ice);
+  }
+
+  .markdown-body code {
+    color: #a9c9ff;
+    background: #111d31;
+    border-color: #405b82;
+  }
+
+  .markdown-body tbody tr:nth-child(even) {
+    background: #141a21;
+  }
+
+  .markdown-body mark {
+    color: #061126;
+    background: #8db8ff;
+  }
+}
+
+@media (max-width: 480px) {
+  .markdown-body h1 {
+    padding: 0.58em 0.62em;
+    font-size: clamp(2rem, 11vw, 3rem);
+  }
+
+  .theme-sampler .markdown-body h1,
+  .markdown-theme-sampler .markdown-body h1 {
+    font-size: clamp(1.4rem, 7vw, 1.9rem);
+  }
+}

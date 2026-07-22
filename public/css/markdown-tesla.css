@@ -1,0 +1,270 @@
+/* Tesla 黑白 — precise monochrome Markdown signature */
+
+:root {
+  --theme-canvas: #ffffff;
+  --theme-text: #050505;
+  --theme-muted: #555555;
+  --theme-heading: #000000;
+  --theme-accent: #000000;
+  --theme-link: #111111;
+  --theme-border: #9a9a9a;
+  --theme-specification: #717171;
+  --theme-quote-surface: #f4f4f4;
+  --theme-table-surface: #ffffff;
+  --theme-diagram-surface: #ffffff;
+  --theme-diagram-text: #050505;
+  --theme-diagram-node-surface: #f4f4f4;
+  --theme-diagram-node-border: #050505;
+  --theme-diagram-line: #555555;
+  --theme-diagram-label-surface: #ffffff;
+  --theme-code-text: #f7f7f7;
+  --theme-code-surface: #080808;
+  --theme-focus: #000000;
+  --theme-heading-on-accent: #ffffff;
+  --theme-syntax-comment: #b8b8b8;
+  --theme-syntax-keyword: #ffffff;
+  --theme-syntax-string: #d4d4d4;
+  --theme-syntax-number: #efefef;
+  --theme-syntax-title: #ffffff;
+  --theme-syntax-meta: #c5c5c5;
+  --theme-reading-width: 920px;
+  --theme-font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Noto Sans SC", Arial, sans-serif;
+}
+
+.markdown-body {
+  color: var(--theme-text);
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Noto Sans SC", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.68;
+}
+
+.markdown-body :where(h1, h2, h3, h4, h5, h6) {
+  color: var(--theme-heading);
+  font-weight: 700;
+  line-height: 1.05;
+}
+
+.markdown-body h1 {
+  margin: 0 0 0.72em;
+  padding: 0.22em 0;
+  font-size: clamp(2.75rem, 7.5vw, 5.5rem);
+  font-weight: 800;
+  letter-spacing: 0.045em;
+  line-height: 0.94;
+  text-transform: uppercase;
+  border-top: 1px solid var(--theme-specification);
+  border-bottom: 1px solid var(--theme-specification);
+}
+
+.theme-sampler .markdown-body h1 {
+  font-size: clamp(1.45rem, 4vw, 2.25rem);
+  letter-spacing: 0.035em;
+  line-height: 1;
+}
+
+.markdown-theme-sampler .markdown-body h1 {
+  font-size: clamp(1.45rem, 4vw, 2.25rem);
+  letter-spacing: 0.035em;
+  line-height: 1;
+}
+
+.markdown-body h2 {
+  margin: 2.4em 0 0.8em;
+  padding-bottom: 0.35em;
+  font-size: clamp(1.55rem, 3vw, 2rem);
+  letter-spacing: 0.01em;
+  border-bottom: 1px solid var(--theme-specification);
+}
+
+.markdown-body h3 {
+  margin: 2em 0 0.65em;
+  font-size: 1.24rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.markdown-body :where(h4, h5, h6) {
+  margin: 1.7em 0 0.55em;
+  letter-spacing: 0.035em;
+}
+
+.markdown-body p {
+  margin: 0 0 1.15em;
+}
+
+.markdown-body a {
+  color: var(--theme-link);
+  font-weight: 650;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+}
+
+.markdown-body a:hover {
+  text-decoration-thickness: 2px;
+}
+
+.markdown-body :where(strong, b) {
+  color: var(--theme-heading);
+  font-weight: 800;
+}
+
+.markdown-body blockquote {
+  margin: 1.5em 0;
+  padding: 0.8em 1em;
+  color: var(--theme-muted);
+  background: var(--theme-quote-surface);
+  border: 0;
+  border-left: 2px solid var(--theme-accent);
+}
+
+.markdown-body blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body :where(ul, ol) {
+  margin: 0 0 1.2em;
+  padding-left: 1.55em;
+}
+
+.markdown-body li {
+  margin: 0.3em 0;
+}
+
+.markdown-body li::marker {
+  color: var(--theme-heading);
+  font-weight: 700;
+}
+
+.markdown-body hr {
+  height: 1px;
+  margin: 2.5em 0;
+  background: var(--theme-specification);
+  border: 0;
+}
+
+.markdown-body code {
+  padding: 0.12em 0.32em;
+  color: var(--theme-heading);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.88em;
+  background: var(--theme-quote-surface);
+  border: 1px solid var(--theme-border);
+  border-radius: 0;
+}
+
+.markdown-body pre {
+  margin: 1.45em 0;
+  padding: 1.1em 1.2em;
+  color: var(--theme-code-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.88rem;
+  line-height: 1.62;
+  background: var(--theme-code-surface);
+  border: 1px solid var(--theme-code-surface);
+  border-radius: 0;
+}
+
+.markdown-body pre code {
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+  background: transparent;
+  border: 0;
+}
+
+.markdown-body table {
+  margin: 1.5em 0;
+  color: var(--theme-text);
+  background: var(--theme-table-surface);
+  border: 1px solid var(--theme-specification);
+  border-radius: 0;
+}
+
+.markdown-body :where(th, td) {
+  padding: 0.62em 0.78em;
+  text-align: left;
+  border: 1px solid var(--theme-border);
+}
+
+.markdown-body th {
+  color: var(--theme-heading);
+  font-size: 0.78em;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--theme-quote-surface);
+}
+
+.markdown-body img {
+  margin: 1.5em auto;
+  border: 1px solid var(--theme-specification);
+  border-radius: 0;
+}
+
+.markdown-body kbd {
+  display: inline-block;
+  padding: 0.1em 0.38em;
+  color: var(--theme-heading);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.82em;
+  background: var(--theme-table-surface);
+  border: 1px solid var(--theme-heading);
+  border-radius: 0;
+}
+
+.markdown-body mark {
+  padding: 0.05em 0.2em;
+  color: var(--theme-heading-on-accent);
+  background: var(--theme-accent);
+}
+
+.markdown-body input[type="checkbox"] {
+  accent-color: var(--theme-accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --theme-canvas: #050505;
+    --theme-text: #f5f5f5;
+    --theme-muted: #b9b9b9;
+    --theme-heading: #ffffff;
+    --theme-accent: #ffffff;
+    --theme-link: #ffffff;
+    --theme-border: #666666;
+    --theme-specification: #8a8a8a;
+    --theme-quote-surface: #111111;
+    --theme-table-surface: #080808;
+    --theme-diagram-surface: #080808;
+    --theme-diagram-text: #f5f5f5;
+    --theme-diagram-node-surface: #111111;
+    --theme-diagram-node-border: #f5f5f5;
+    --theme-diagram-line: #b9b9b9;
+    --theme-diagram-label-surface: #080808;
+    --theme-code-text: #050505;
+    --theme-code-surface: #f5f5f5;
+    --theme-focus: #ffffff;
+    --theme-heading-on-accent: #050505;
+    --theme-syntax-comment: #4f4f4f;
+    --theme-syntax-keyword: #050505;
+    --theme-syntax-string: #242424;
+    --theme-syntax-number: #111111;
+    --theme-syntax-title: #000000;
+    --theme-syntax-meta: #333333;
+  }
+
+  .markdown-body code {
+    color: var(--theme-text);
+  }
+}
+
+@media (max-width: 480px) {
+  .markdown-body h1 {
+    font-size: clamp(2.1rem, 13vw, 3.15rem);
+    letter-spacing: 0.025em;
+  }
+
+  .theme-sampler .markdown-body h1,
+  .markdown-theme-sampler .markdown-body h1 {
+    font-size: clamp(1.35rem, 8vw, 1.85rem);
+  }
+}
