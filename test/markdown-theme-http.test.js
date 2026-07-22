@@ -100,10 +100,16 @@ test('homepage and admin edit render the same Catalog projection', async () => {
   assert.equal(admin.status, 200);
 
   for (const { id, label } of getMarkdownThemeOptions()) {
-    assert.match(homepage.text, new RegExp(`<option value="${id}"[^>]*>${label}</option>`));
-    assert.match(admin.text, new RegExp(`<option value="${id}"[^>]*>${label}</option>`));
+    const optionPattern = new RegExp(
+      `<option\\b(?=[^>]*value="${id}")[^>]*>${label}</option>`
+    );
+    assert.match(homepage.text, optionPattern);
+    assert.match(admin.text, optionPattern);
   }
-  assert.match(admin.text, /<option value="github" selected>GitHub 经典<\/option>/);
+  assert.match(
+    admin.text,
+    /<option\b(?=[^>]*value="github")(?=[^>]*selected)[^>]*>GitHub 经典<\/option>/
+  );
 });
 
 test('preview and browser creation normalize unknown themes through ByteDance', async () => {

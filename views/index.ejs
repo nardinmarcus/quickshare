@@ -37,17 +37,13 @@
           <p id="file-name" class="file-name-text"></p>
         </div>
 
-        <div id="markdown-theme-selector" class="markdown-theme-selector hidden">
-          <div class="theme-selector-header">
-            <i class="fas fa-palette" aria-hidden="true"></i>
-            <span class="theme-label">Markdown Theme</span>
-          </div>
-          <select id="markdown-theme" class="theme-select">
-            <% markdownThemeOptions.forEach((theme) => { %>
-              <option value="<%= theme.id %>" <%= theme.id === 'bytedance' ? 'selected' : '' %>><%= theme.label %></option>
-            <% }); %>
-          </select>
-        </div>
+        <%- include('partials/theme-sampler', {
+          containerId: 'markdown-theme-selector',
+          containerClass: 'markdown-theme-selector hidden',
+          selectId: 'markdown-theme',
+          selectedThemeId: 'bytedance',
+          markdownThemeOptions
+        }) %>
 
         <section id="publish-settings" class="publish-settings" aria-labelledby="publish-settings-title">
           <h2 id="publish-settings-title" class="publish-settings-title">发布设置</h2>
@@ -224,4 +220,5 @@
   </footer>
 </div>
 
+<script src="/js/theme-sampler.js"></script>
 <%- include('partials/footer', { page }) %>

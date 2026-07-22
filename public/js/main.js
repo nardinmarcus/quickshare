@@ -464,7 +464,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const themeSelect = document.getElementById('markdown-theme');
-    if (themeSelect) themeSelect.value = 'bytedance';
+    if (themeSelect) {
+      themeSelect.value = creatorThemePreference;
+      if (window.ThemeSampler) window.ThemeSampler.updateForSelect(themeSelect);
+    }
 
     draftVersion = 0;
     userCustomPassword = '';
@@ -634,7 +637,45 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   const markdownThemeSelect = document.getElementById('markdown-theme');
-  if (markdownThemeSelect) markdownThemeSelect.addEventListener('change', markDraftDirty);
+  const creatorThemePreferenceKey = 'quickshare:creator-markdown-theme';
+
+  function resolveCreatorThemeId(value) {
+    if (!markdownThemeSelect) return 'bytedance';
+
+    return Array.from(markdownThemeSelect.options).some(option => option.value === value)
+      ? value
+      : 'bytedance';
+  }
+
+  function readCreatorThemePreference() {
+    try {
+      return resolveCreatorThemeId(window.localStorage.getItem(creatorThemePreferenceKey));
+    } catch (error) {
+      return 'bytedance';
+    }
+  }
+
+  function writeCreatorThemePreference(value) {
+    try {
+      window.localStorage.setItem(creatorThemePreferenceKey, value);
+    } catch (error) {
+      // Browser storage is optional convenience state.
+    }
+  }
+
+  let creatorThemePreference = readCreatorThemePreference();
+
+  if (markdownThemeSelect) {
+    markdownThemeSelect.value = creatorThemePreference;
+    if (window.ThemeSampler) window.ThemeSampler.updateForSelect(markdownThemeSelect);
+
+    markdownThemeSelect.addEventListener('change', () => {
+      creatorThemePreference = resolveCreatorThemeId(markdownThemeSelect.value);
+      markdownThemeSelect.value = creatorThemePreference;
+      writeCreatorThemePreference(creatorThemePreference);
+      markDraftDirty();
+    });
+  }
 
   syncPasswordSettings();
 

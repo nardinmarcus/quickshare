@@ -21,6 +21,7 @@
   const statusDisplay = document.getElementById('status-display');
   const pageDataElement = document.getElementById('page-data');
   const renderedPreview = document.getElementById('rendered-preview');
+  const themeSelect = document.getElementById('edit-theme');
   const adminTime = window.AdminTime;
   const customPasswordPattern = /^[A-Za-z0-9!@#$%^&*()_+\-=.,?~]{4,12}$/;
   const customPasswordError = '自定义密码必须为 4–12 位，仅可包含英文字母、数字及 !@#$%^&*()_+-=.,?~';
@@ -80,6 +81,10 @@
     expiresHint.className = 'field-hint';
     resetPasswordVisibility();
     contentTextarea.value = originalData.htmlContent || '';
+    if (themeSelect) {
+      themeSelect.value = originalData.markdownTheme || 'bytedance';
+      if (window.ThemeSampler) window.ThemeSampler.updateForSelect(themeSelect);
+    }
     updateProtectionHint(Boolean(originalData.isProtected));
     updatePasswordInputVisibility();
   }
@@ -242,8 +247,6 @@
       isProtected: protectedCheckbox.checked,
       expiresAt
     };
-    const themeSelect = document.getElementById('edit-theme');
-
     if (themeSelect) payload.markdownTheme = themeSelect.value;
     if (protectedCheckbox.checked && customPassword) payload.password = customPassword;
 

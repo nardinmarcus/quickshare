@@ -47,13 +47,19 @@ test('Catalog owns the ordered existing theme identities and trusted assets', ()
   }
 });
 
-test('Catalog exposes a minimal immutable selector projection', () => {
+test('Catalog exposes an immutable safe browser projection', () => {
   const options = getMarkdownThemeOptions();
 
-  assert.deepEqual(options, EXPECTED_THEMES.map(([id, label]) => ({ id, label })));
+  assert.deepEqual(
+    options,
+    EXPECTED_THEMES.map(([id, label]) => ({
+      id,
+      label,
+      signatureHref: `/css/markdown-${id}.css`
+    }))
+  );
   assert.equal(Object.isFrozen(options), true);
   assert.equal(options.every(Object.isFrozen), true);
-  assert.equal('signatureHref' in options[0], false);
   assert.equal('appearances' in options[0], false);
 });
 

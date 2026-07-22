@@ -34,7 +34,9 @@ const MARKDOWN_THEME_CATALOG = Object.freeze([
 
 const CATALOG_BY_ID = new Map(MARKDOWN_THEME_CATALOG.map(theme => [theme.id, theme]));
 const MARKDOWN_THEME_OPTIONS = Object.freeze(
-  MARKDOWN_THEME_CATALOG.map(({ id, label }) => Object.freeze({ id, label }))
+  MARKDOWN_THEME_CATALOG.map(({ id, label, signatureHref }) => (
+    Object.freeze({ id, label, signatureHref })
+  ))
 );
 
 function resolveMarkdownThemeId(value) {

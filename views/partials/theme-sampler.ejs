@@ -1,0 +1,96 @@
+<%
+  const selectedTheme = markdownThemeOptions.find(theme => theme.id === selectedThemeId)
+    || markdownThemeOptions[0];
+  const samplerLabel = `${selectedTheme.label}主题样例`;
+%>
+<div
+  id="<%= containerId %>"
+  class="<%= containerClass %> theme-sampler-settings"
+  data-theme-sampler
+  data-select-id="<%= selectId %>"
+  role="region"
+  aria-label="<%= samplerLabel %>"
+>
+  <div class="theme-sampler-control">
+    <label for="<%= selectId %>">Markdown 主题</label>
+    <select
+      id="<%= selectId %>"
+      class="theme-select"
+      name="markdownTheme"
+      aria-controls="<%= selectId %>-sampler"
+    >
+      <% markdownThemeOptions.forEach((theme) => { %>
+        <option
+          value="<%= theme.id %>"
+          data-theme-label="<%= theme.label %>"
+          data-signature-href="<%= theme.signatureHref %>"
+          <%= theme.id === selectedTheme.id ? 'selected' : '' %>
+        ><%= theme.label %></option>
+      <% }); %>
+    </select>
+    <span class="field-hint">固定内容只用于比较视觉风格</span>
+  </div>
+
+  <div class="theme-sampler-preview">
+    <iframe
+      id="<%= selectId %>-sampler"
+      class="theme-sampler-frame"
+      data-theme-sampler-frame
+      title="<%= samplerLabel %>"
+      tabindex="-1"
+      sandbox=""
+      referrerpolicy="no-referrer"
+    ></iframe>
+
+    <template data-theme-sampler-template>
+      <article class="markdown-body theme-sampler-body">
+        <header class="theme-sampler-intro">
+          <h1 data-sample-role="heading">创作样例</h1>
+          <p data-sample-role="body">用同一段固定内容，快速比较每种主题的阅读气质。</p>
+          <p data-sample-role="emphasis"><strong>重点文字</strong> 与 <em>强调语气</em> 保持清晰层级。</p>
+        </header>
+
+        <div class="theme-sampler-grid">
+          <section>
+            <h2>内容结构</h2>
+            <p><a data-sample-role="link">主题链接样式</a></p>
+            <ul data-sample-role="list">
+              <li>紧凑的列表项目</li>
+              <li data-sample-role="task"><input type="checkbox" checked disabled tabindex="-1"> 已完成任务</li>
+            </ul>
+            <blockquote data-sample-role="quotation">让重要说明在长文中容易辨认。</blockquote>
+          </section>
+
+          <section>
+            <h2>技术内容</h2>
+            <p data-sample-role="inline-code">行内命令 <code>npm test</code></p>
+            <pre data-sample-role="fenced-code"><code>const ready = true;</code></pre>
+            <p data-sample-role="keyboard">按 <kbd>⌘</kbd> + <kbd>Enter</kbd> 继续</p>
+          </section>
+        </div>
+
+        <div class="theme-sampler-assets">
+          <table data-sample-role="table">
+            <thead><tr><th>主题</th><th>状态</th></tr></thead>
+            <tbody><tr><td>当前预设</td><td>可读</td></tr></tbody>
+          </table>
+
+          <figure data-sample-role="image" class="theme-sampler-image">
+            <svg viewBox="0 0 320 72" role="img" aria-label="响应式图片处理示例">
+              <rect x="1" y="1" width="318" height="70" rx="10" fill="var(--theme-soft-surface, var(--theme-table-surface))" stroke="var(--theme-border)" />
+              <circle cx="54" cy="36" r="16" fill="var(--theme-accent)" opacity="0.72" />
+              <path d="M88 48 122 22l31 22 34-29 48 33Z" fill="var(--theme-secondary, var(--theme-accent))" opacity="0.55" />
+            </svg>
+            <figcaption>图片会在阅读栏内自适应</figcaption>
+          </figure>
+        </div>
+
+        <hr data-sample-role="divider">
+
+        <div data-sample-role="diagram" class="theme-sampler-diagram" role="img" aria-label="静态流程图表面示例">
+          <span>构思</span><i aria-hidden="true"></i><span>发布</span>
+        </div>
+      </article>
+    </template>
+  </div>
+</div>
