@@ -2,6 +2,50 @@
 
 Status: Phases 0–3 deployed on 2026-07-15; the representative WP8 traffic baseline remains in passive collection.
 
+## Site identity icon replacement design (2026-07-22)
+
+Status: local implementation and review complete; scoped publication and production verification are in progress.
+
+- [x] Inventory the current icon assets, source references, live metadata, and prepared IconKitchen output.
+- [x] Confirm that “Figma-related elements” means the favicon and coordinated Site Identity Icon set.
+- [x] Keep functional interface icons and the in-page QuickShare wordmark outside the replacement scope.
+- [x] Keep the change asset-only; do not add a web app manifest or introduce PWA behavior.
+- [x] Reuse the new 512×512 Site Identity Icon for the existing link-preview artwork surface.
+- [x] Preserve the existing filenames, URLs, placement, dimensions, and rendering behavior; replace image content only.
+- [x] Refresh the currently unused Android and iOS image bundles to prevent stale brand assets from remaining in the repository.
+- [x] Deliver through a scoped commit, `main` push, production deployment, and live asset-hash verification.
+- [x] Record the agreed implementation and verification plan.
+- [x] Receive explicit confirmation that shared understanding has been reached and implementation may begin.
+
+Implementation:
+
+1. Replace only the 48 changed image binaries from `/Users/dapeng/Downloads/IconKitchen-Output` in the matching `public/icon/web`, `public/icon/android`, and `public/icon/ios` paths.
+2. Leave the identical README, Android XML, iOS `Contents.json`, templates, CSS, JavaScript, asset URLs, dimensions, and rendering behavior unchanged.
+3. Verify that every target image is byte-identical to its prepared source and that no old image binary remains in the three coordinated asset sets.
+4. Run the full repository test suite and inspect the scoped diff.
+5. Commit only the Site Identity Icon work, preserving the pre-existing uncommitted Wayfinder planning changes in this worktree.
+6. Push `main`, deploy to Vercel production, and verify the production alias plus SHA-256 hashes for the favicon, Apple Touch Icon, 192px icon, and 512px/OG image.
+7. Use a fresh browser session to confirm the live page still exposes the same icon URLs and the new assets, with no layout or functional-icon changes.
+
+Verify:
+
+1. Scope -> every selected identity surface maps to an explicit prepared asset.
+2. Boundary -> no functional Font Awesome icon or unrelated interface styling is included.
+3. Local assets -> all 48 target image hashes match the prepared IconKitchen output.
+4. Regression -> the full test suite passes without template or behavior changes.
+5. Git -> the scoped commit excludes the pre-existing Wayfinder planning work.
+6. Production -> Vercel serves the expected new hashes at every existing identity URL and the live document metadata remains correctly wired.
+7. Plan -> implementation does not start before the maintainer confirms shared understanding.
+
+Review:
+
+- Source equality: all 48 changed image files are byte-identical to the prepared IconKitchen output; the three complete target directories match their sources.
+- Supporting metadata: Web README, Android adaptive-icon XML, and iOS `Contents.json` remain unchanged.
+- Tests: focused resource-policy suite passes 6/6; full repository suite passes 165/165.
+- Typecheck: not applicable because this JavaScript repository defines no typecheck script and this change contains no typed source changes.
+- Code review: Standards 0 findings; Spec 0 findings.
+- Publication: commit, push, production deployment, and live hash verification remain in progress.
+
 Baseline reviewed: GitHub `main` commit `b3c15be67c93fc76e8ae047e82017f726d9cee12` and its current Vercel production deployment.
 
 ## Agreed operating rules
