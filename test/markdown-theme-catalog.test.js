@@ -18,6 +18,8 @@ const EXPECTED_THEMES = [
   ['notion', 'Notion 笔记'],
   ['claude', 'Claude 暖调'],
   ['raycast', 'Raycast 专注'],
+  ['google', 'Google Material'],
+  ['airbnb', 'Airbnb 暖居'],
   ['linear', 'Linear 精密']
 ];
 
