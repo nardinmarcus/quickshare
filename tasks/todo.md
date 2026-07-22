@@ -59,7 +59,7 @@ Independent review remediation:
 
 ## Issues #12–#19 — Twelve-theme Catalog, Sampler, and release (2026-07-23)
 
-Status: Issues #12–#18 are implemented, remotely verified, and closed; Issue #19 production release gates are in progress. The disposable `prototypes/` tree remains untracked and excluded.
+Status: complete. Issues #12–#19 and parent #10 are closed; PR #20 is merged and the reviewed revision is verified in Production. The disposable `prototypes/` tree remains untracked and excluded.
 
 - [x] Migrate GitHub and Apple to the shared baseline with system light/dark appearances.
 - [x] Migrate Notion and Claude, remove theme-owned remote fonts, and align real task-list output with the baseline.
@@ -70,7 +70,7 @@ Status: Issues #12–#18 are implemented, remotely verified, and closed; Issue #
 - [x] Run the integrated focused suite, full suite, syntax checks, diff checks, and final real-browser matrices.
 - [x] Push the release candidate, pass Node 24 plus PostgreSQL 17 CI, and verify Vercel Preview.
 - [x] Attach evidence and close Issues #12–#18.
-- [ ] Complete Issue #19 only after production release and live verification.
+- [x] Complete Issue #19 only after production release and live verification.
 
 Integrated verification:
 
@@ -83,7 +83,8 @@ Integrated verification:
 - Visual contact sheets for all twelve light and dark signatures were inspected from real Chromium output. They are temporary acceptance artifacts and are not part of the repository.
 - The first integrated full run reproduced the existing interrupted-request timing flake (`6 !== 7`); an isolated rerun and the unchanged second full run passed, so no unrelated performance code was modified.
 - Final Standards Review found no hard violations; its only low-priority note was deliberate helper duplication that keeps each vertical ticket independently executable. Final Spec Review returned 0 findings against the formal Catalog, baseline, Sampler, compatibility, and Prototype-exclusion requirements.
-- GitHub Actions run `29941287814` passed Node 24 and PostgreSQL 17 for candidate `dad1679`. The protected Vercel Preview was invoked through authenticated tooling: homepage, PlayStation preview API, shared baseline, PlayStation signature, and Sampler script all returned 200. Preview-only branch configuration disables auth and uses an isolated session secret; Production configuration was not changed.
+- GitHub Actions run `29941810378` passed Node 24 and PostgreSQL 17 for final PR head `6f3b383`. The protected Vercel Preview was invoked through authenticated tooling: homepage, PlayStation preview API, shared baseline, PlayStation signature, and Sampler script all returned 200. Preview-only branch configuration disables auth and uses an isolated session secret; Production configuration was not changed.
+- PR #20 merged as `3907217`; Vercel production deployment `dpl_7mXgb43TrzKacutqqbemEJYaB1x6` reached Ready on `quickshare.namooca.com`. The homepage and local theme assets returned 200, a real Chromium session exposed exactly twelve options and switched to PlayStation without a preview request, and an expiring production smoke Share round-tripped and publicly rendered the PlayStation ID with exactly one baseline plus one local signature.
 
 ## Site identity icon replacement design (2026-07-22)
 
