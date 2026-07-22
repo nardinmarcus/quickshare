@@ -1436,6 +1436,18 @@ body:hover::-webkit-scrollbar,
   justify-content: flex-end;
 }
 
+.admin-nav-wrap {
+  display: grid;
+  justify-items: end;
+  gap: 0.4rem;
+}
+
+.admin-time-zone-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
 .admin-nav .cyber-btn,
 .admin-header-utility .cyber-btn,
 .admin-detail-actions .cyber-btn {
@@ -2566,6 +2578,15 @@ body:hover::-webkit-scrollbar,
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     width: 100%;
+  }
+
+  .admin-nav-wrap {
+    justify-items: stretch;
+    width: 100%;
+  }
+
+  .admin-time-zone-note {
+    text-align: right;
   }
 
   .admin-nav .cyber-btn {

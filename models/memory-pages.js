@@ -1,39 +1,14 @@
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-function buildDailyStats(pages, days = 14) {
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const startAt = todayStart.getTime() - ((days - 1) * DAY_MS);
-  const counts = new Map();
-
-  for (let index = 0; index < days; index += 1) {
-    const timestamp = startAt + (index * DAY_MS);
-    counts.set(timestamp, 0);
-  }
-
-  pages.forEach((page) => {
-    const day = new Date(Number(page.created_at));
-    day.setHours(0, 0, 0, 0);
-    const dayStart = day.getTime();
-
-    if (counts.has(dayStart)) {
-      counts.set(dayStart, counts.get(dayStart) + 1);
-    }
-  });
-
-  return Array.from(counts.entries()).map(([timestamp, count]) => ({
-    date: new Date(timestamp).toISOString().slice(0, 10),
-    label: new Date(timestamp).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }),
-    count
-  }));
-}
+const {
+  buildManagementDailyStats,
+  managementDateRange
+} = require('../utils/management-time');
 
 function filterAdminPages(pages, options = {}) {
   const search = options.search || '';
   const codeType = options.codeType || '';
   const isProtected = options.isProtected;
-  const dateFrom = options.dateFrom ? new Date(options.dateFrom).getTime() : null;
-  const dateTo = options.dateTo ? new Date(options.dateTo + 'T23:59:59.999').getTime() : null;
+  const dateFrom = options.dateFrom ? managementDateRange(options.dateFrom)?.start : null;
+  const dateTo = options.dateTo ? managementDateRange(options.dateTo)?.end : null;
   let results = pages;
 
   if (search) {
@@ -305,7 +280,7 @@ class MemoryPageRepository {
       byType: Array.from(typeCounts.entries())
         .map(([codeType, count]) => ({ codeType, count }))
         .sort((left, right) => right.count - left.count || left.codeType.localeCompare(right.codeType)),
-      recentDays: buildDailyStats(pages),
+      recentDays: buildManagementDailyStats(pages.map((page) => Number(page.created_at))),
       topViewed
     };
   }

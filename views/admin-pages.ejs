@@ -165,7 +165,7 @@
                     <% } %>
                   </td>
                   <td><span class="admin-pill"><%= sharedPage.code_type || 'html' %></span></td>
-                  <td><time datetime="<%= new Date(Number(sharedPage.created_at)).toISOString() %>"><%= new Date(Number(sharedPage.created_at)).toLocaleString('zh-CN', { hour12: false }) %></time></td>
+                  <td><time datetime="<%= new Date(Number(sharedPage.created_at)).toISOString() %>"><%= formatManagementDateTime(sharedPage.created_at) %></time></td>
                   <td>
                     <% if (sharedPage.is_protected === 1) { %>
                       <span class="admin-status protected">密码保护</span>

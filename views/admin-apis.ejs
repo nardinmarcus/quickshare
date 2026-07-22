@@ -78,10 +78,10 @@
             <tr data-api-key-id="<%= apiKey.id %>">
               <td><strong><%= apiKey.name %></strong></td>
               <td><code class="api-key-prefix"><%= apiKey.key_prefix %></code></td>
-              <td><time datetime="<%= new Date(Number(apiKey.created_at)).toISOString() %>"><%= new Date(Number(apiKey.created_at)).toLocaleString('zh-CN', { hour12: false }) %></time></td>
+              <td><time datetime="<%= new Date(Number(apiKey.created_at)).toISOString() %>"><%= formatManagementDateTime(apiKey.created_at) %></time></td>
               <td>
                 <% if (apiKey.last_used_at) { %>
-                  <time datetime="<%= new Date(Number(apiKey.last_used_at)).toISOString() %>"><%= new Date(Number(apiKey.last_used_at)).toLocaleString('zh-CN', { hour12: false }) %></time>
+                  <time datetime="<%= new Date(Number(apiKey.last_used_at)).toISOString() %>"><%= formatManagementDateTime(apiKey.last_used_at) %></time>
                 <% } else { %>
                   <span class="admin-muted">从未使用</span>
                 <% } %>
@@ -139,5 +139,6 @@
 </div>
 
 <script src="/js/admin.js"></script>
+<script src="/js/admin-time.js"></script>
 <script src="/js/admin-apis.js"></script>
 <%- include('partials/footer', { page }) %>

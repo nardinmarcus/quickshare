@@ -54,7 +54,7 @@
       </div>
       <div>
         <dt>创建时间</dt>
-        <dd><time datetime="<%= new Date(Number(sharedPage.createdAt)).toISOString() %>"><%= new Date(Number(sharedPage.createdAt)).toLocaleString('zh-CN', { hour12: false }) %></time></dd>
+        <dd><time datetime="<%= new Date(Number(sharedPage.createdAt)).toISOString() %>"><%= formatManagementDateTime(sharedPage.createdAt) %></time></dd>
       </div>
       <div>
         <dt>状态</dt>
@@ -80,7 +80,7 @@
         <dt>过期时间</dt>
         <dd id="expires-display">
           <% if (sharedPage.expiresAt) { %>
-            <time datetime="<%= new Date(Number(sharedPage.expiresAt)).toISOString() %>"><%= new Date(Number(sharedPage.expiresAt)).toLocaleString('zh-CN', { hour12: false }) %></time>
+            <time datetime="<%= new Date(Number(sharedPage.expiresAt)).toISOString() %>"><%= formatManagementDateTime(sharedPage.expiresAt) %></time>
           <% } else { %>
             <span class="admin-muted">永不过期</span>
           <% } %>
@@ -103,12 +103,13 @@
           <textarea id="edit-description" name="description" rows="2" maxlength="500"><%= sharedPage.description || '' %></textarea>
         </div>
         <div class="admin-edit-field">
-          <label for="edit-expires">过期时间</label>
+          <label for="edit-expires">过期时间（北京时间）</label>
           <input
             type="datetime-local"
             id="edit-expires"
             name="expiresAt"
-            value="<%= sharedPage.expiresAt ? new Date(Number(sharedPage.expiresAt)).toISOString().slice(0, 16) : '' %>"
+            step="0.001"
+            value="<%= sharedPage.expiresAt ? toManagementDateTimeLocal(sharedPage.expiresAt) : '' %>"
           >
           <button type="button" class="admin-clear-btn" id="clear-expires">清除</button>
           <span id="edit-expires-hint" class="field-hint" aria-live="polite"></span>
@@ -197,5 +198,6 @@
 <script type="application/json" id="page-data"><%- pageDataJson %></script>
 <script src="/js/admin.js"></script>
 <script src="/js/admin-favorite.js"></script>
+<script src="/js/admin-time.js"></script>
 <script src="/js/admin-detail.js"></script>
 <%- include('partials/footer', { page }) %>

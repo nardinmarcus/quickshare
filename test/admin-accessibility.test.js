@@ -88,7 +88,8 @@ test('admin sections share a Chinese navigation with the current page identified
     ['/admin/stats', 'stats'],
     ['/admin/pages', 'pages'],
     ['/admin/apis', 'apis'],
-    ['/admin/audit', 'audit']
+    ['/admin/audit', 'audit'],
+    ['/admin/pages/admin-accessibility', 'pages']
   ];
 
   for (const [route, current] of routes) {
@@ -101,6 +102,7 @@ test('admin sections share a Chinese navigation with the current page identified
     assert.match(response.text, />API</);
     assert.match(response.text, />审计</);
     assert.match(response.text, />新建</);
+    assert.equal(response.text.match(/所有时间均为北京时间/g)?.length, 1);
   }
 });
 
@@ -232,6 +234,14 @@ test('detail editor discards hidden invalid passwords and invalidates stale prev
   assert.match(detailScript, /if \(protectedCheckbox\.checked && customPassword\) payload\.password = customPassword/);
   assert.match(detailScript, /function resetRenderedPreview\(\)/);
   assert.match(detailScript, /resetRenderedPreview\(\);/);
+});
+
+test('time-bearing admin clients load the shared Beijing time policy first', async () => {
+  const detail = await adminRequest('/admin/pages/admin-accessibility');
+  const apis = await adminRequest('/admin/apis');
+
+  assert.match(detail.text, /src="\/js\/admin-time\.js"[\s\S]+src="\/js\/admin-detail\.js"/);
+  assert.match(apis.text, /src="\/js\/admin-time\.js"[\s\S]+src="\/js\/admin-apis\.js"/);
 });
 
 test('global feedback, focus, targets, and responsive admin CSS are accessible', async () => {

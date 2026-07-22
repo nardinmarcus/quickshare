@@ -48,6 +48,54 @@ Review:
 - Production hashes: favicon `9e0f92fc040f`, Apple Touch `dfbfb4a67691`, 192px `bff1408ebda5`, 192px maskable `3741ff6033f5`, 512px/OG `60b7b9542bb4`, and 512px maskable `916f5ab41870` all match their prepared sources.
 - Browser verification: the four existing identity URLs and OG wiring are unchanged; the in-page brand pulse remains; no Manifest was added.
 
+## Management time zone design (2026-07-22)
+
+Status: implementation, review remediation, and local verification complete on `main`.
+
+Root cause:
+
+- Shares store `created_at` and `expires_at` as absolute millisecond timestamps; storage and creation-time ordering are correct.
+- Management templates and scripts format those timestamps without an explicit time zone, so output follows the Vercel function or administrator browser environment.
+- Date filters and daily statistics also derive calendar-day boundaries from the server environment.
+- The expiration editor converts an absolute timestamp through UTC for `datetime-local`, then parses it through browser-local time, so opening and saving can shift the expiry instant.
+
+Agreed decisions:
+
+- Use Beijing time (`Asia/Shanghai`, UTC+8) as the fixed Management Time Zone for every administrator and environment.
+- Apply it to all management time displays, expiration editing, date-filter boundaries, and daily statistics.
+- Keep database timestamps, JSON/API values, exports, sorting, and `<time datetime>` machine values as absolute instants; no data migration or backfill.
+- Show one shared “所有时间均为北京时间” note through the management navigation and label the editable field “过期时间（北京时间）”; do not repeat the zone after every value.
+- Keep public Share pages and the homepage outside this management-only change.
+
+Implementation plan:
+
+- [x] Add one server-side Management Time Zone utility for deterministic display formatting, Beijing calendar-day boundaries, statistics buckets, and `datetime-local` values.
+- [x] Inject the formatter into management views and replace environment-dependent formatting in sharing, detail, statistics, audit, and API management.
+- [x] Make client-rendered API and expiration timestamps explicitly use Beijing time.
+- [x] Make expiration edit/reset/validation/submission round-trip the exact underlying instant using Beijing civil time.
+- [x] Make PostgreSQL and Memory Repository date filters and daily statistics use identical Beijing day boundaries.
+- [x] Add the shared time-zone note and the explicit expiration-field label without changing table layout or public pages.
+- [x] Add regression tests that run against UTC assumptions and cover display, boundary filtering, daily bucketing, and expiration round-trips.
+- [x] Run focused tests, the full suite, inspect the scoped diff, and verify the rendered management UI before delivery.
+
+Verify:
+
+1. Display -> `2026-07-22T10:53:32.000Z` renders as `2026/7/22 18:53:32` throughout management, regardless of server or browser time zone.
+2. Filtering -> the `2026-07-22` filter includes exactly `2026-07-21T16:00:00.000Z` through `2026-07-22T15:59:59.999Z`.
+3. Statistics -> events around UTC 16:00 are assigned to the correct Beijing calendar day in both repositories.
+4. Expiration -> a stored instant renders as the matching Beijing `datetime-local` value and saves back to the identical millisecond timestamp.
+5. Contracts -> database rows, ordering, export/API timestamp values, and `<time datetime>` ISO values remain unchanged.
+6. Scope -> every management page shows one shared time-zone note; public Share and homepage behavior do not change.
+7. Regression -> focused time-zone tests and the full repository suite pass under a UTC test environment.
+
+Review:
+
+- Tests: 59 focused management-time tests pass; the full UTC suite passes 176/176.
+- Typecheck: not applicable because this JavaScript repository defines no typecheck script.
+- Runtime: with both server and browser running under UTC assumptions, the management list rendered a UTC instant at UTC+8, the shared Beijing-time note remained visible at desktop and 375px widths, and the expiration editor saved the same absolute instant.
+- Code review: the initial Standards and Spec reviews both found precision loss in non-minute expiration values; the editor and both time helpers now retain milliseconds, with regression coverage. Fixed-point review found no remaining hard or spec findings.
+- Scope: storage, API/export values, ordering, and public pages remain unchanged; the pre-existing Wayfinder task section remains outside this implementation.
+
 Baseline reviewed: GitHub `main` commit `b3c15be67c93fc76e8ae047e82017f726d9cee12` and its current Vercel production deployment.
 
 ## Agreed operating rules

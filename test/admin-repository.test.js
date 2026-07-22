@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+process.env.TZ = 'UTC';
+
 const { MemoryPageRepository } = require('../models/memory-pages');
 const { PostgresPageRepository } = require('../models/postgres-pages');
 
@@ -36,6 +38,30 @@ test('admin page listing is sorted by creation time and paginated', async () => 
   assert.deepEqual(firstPage.map(page => page.id), ['new-page', 'middle-page']);
   assert.deepEqual(secondPage.map(page => page.id), ['old-page']);
   assert.equal(await repository.countPages(), 3);
+});
+
+test('admin date filters use Beijing calendar-day boundaries', async () => {
+  const repository = new MemoryPageRepository();
+  const fixtures = [
+    ['before-beijing-day', '2026-07-21T15:59:59.999Z'],
+    ['beijing-day-start', '2026-07-21T16:00:00.000Z'],
+    ['beijing-day-end', '2026-07-22T15:59:59.999Z'],
+    ['after-beijing-day', '2026-07-22T16:00:00.000Z']
+  ];
+
+  for (const [id, instant] of fixtures) {
+    await repository.create({
+      id,
+      htmlContent: '<h1>Beijing boundary</h1>',
+      createdAt: Date.parse(instant)
+    });
+  }
+
+  const filters = { dateFrom: '2026-07-22', dateTo: '2026-07-22' };
+  const pages = await repository.listAdminPages(filters);
+
+  assert.deepEqual(pages.map((page) => page.id), ['beijing-day-end', 'beijing-day-start']);
+  assert.equal(await repository.countPages(filters), 2);
 });
 
 test('memory pages default to a non-null false favorite state', async () => {
@@ -223,6 +249,32 @@ test('admin stats aggregate totals, protection, types, and recent days', async (
   assert.equal(stats.recentDays.at(-1).count, 3);
 });
 
+test('admin stats assign UTC 16:00 activity to the next Beijing calendar day', async (t) => {
+  t.mock.timers.enable({
+    apis: ['Date'],
+    now: Date.parse('2026-07-22T16:30:00.000Z')
+  });
+  const repository = new MemoryPageRepository();
+
+  await repository.create({
+    id: 'before-beijing-midnight',
+    htmlContent: '<h1>Before Beijing midnight</h1>',
+    createdAt: Date.parse('2026-07-22T15:59:59.999Z')
+  });
+  await repository.create({
+    id: 'after-beijing-midnight',
+    htmlContent: '<h1>After Beijing midnight</h1>',
+    createdAt: Date.parse('2026-07-22T16:00:00.000Z')
+  });
+
+  const stats = await repository.getAdminStats();
+
+  assert.deepEqual(stats.recentDays.slice(-2), [
+    { date: '2026-07-22', label: '07/22', count: 1 },
+    { date: '2026-07-23', label: '07/23', count: 1 }
+  ]);
+});
+
 
 test('Postgres runtime methods never create or alter schema', async () => {
   const repository = Object.create(PostgresPageRepository.prototype);
@@ -307,6 +359,68 @@ test('Postgres admin listing supports explicit unpaginated reads for exports', a
   assert.doesNotMatch(queries[0].sql, /LIMIT \$\d+ OFFSET \$\d+/i);
   assert.deepEqual(queries[1].params, [50, 0]);
   assert.match(queries[1].sql, /LIMIT \$1 OFFSET \$2/i);
+});
+
+test('Postgres admin date filters bind Beijing calendar-day boundaries', async () => {
+  const repository = Object.create(PostgresPageRepository.prototype);
+  let query;
+
+  repository.pool = {
+    async query(sql, params) {
+      query = { sql, params };
+      return { rows: [] };
+    }
+  };
+
+  await repository.listAdminPages({
+    dateFrom: '2026-07-22',
+    dateTo: '2026-07-22',
+    limit: null
+  });
+
+  assert.deepEqual(query.params, [
+    Date.parse('2026-07-21T16:00:00.000Z'),
+    Date.parse('2026-07-22T15:59:59.999Z')
+  ]);
+  assert.match(query.sql, /created_at >= \$1/);
+  assert.match(query.sql, /created_at <= \$2/);
+});
+
+test('Postgres admin stats query and buckets start on Beijing calendar-day boundaries', async (t) => {
+  t.mock.timers.enable({
+    apis: ['Date'],
+    now: Date.parse('2026-07-22T16:30:00.000Z')
+  });
+  const repository = Object.create(PostgresPageRepository.prototype);
+  const queries = [];
+
+  repository.pool = {
+    async query(sql, params = []) {
+      queries.push({ sql, params });
+      if (/COUNT\(\*\) AS total/i.test(sql)) {
+        return { rows: [{ total: '2', protected: '0', latest_created_at: '1784736000000' }] };
+      }
+      if (/GROUP BY/i.test(sql)) return { rows: [] };
+      if (/SELECT created_at/i.test(sql)) {
+        return {
+          rows: [
+            { created_at: Date.parse('2026-07-22T15:59:59.999Z') },
+            { created_at: Date.parse('2026-07-22T16:00:00.000Z') }
+          ]
+        };
+      }
+      return { rows: [] };
+    }
+  };
+
+  const stats = await repository.getAdminStats();
+  const recentQuery = queries.find((query) => /SELECT created_at/i.test(query.sql));
+
+  assert.deepEqual(recentQuery.params, [Date.parse('2026-07-09T16:00:00.000Z')]);
+  assert.deepEqual(stats.recentDays.slice(-2), [
+    { date: '2026-07-22', label: '07/22', count: 1 },
+    { date: '2026-07-23', label: '07/23', count: 1 }
+  ]);
 });
 
 test('Postgres favorite mutation exposes the same result contract as memory storage', async () => {

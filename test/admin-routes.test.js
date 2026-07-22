@@ -8,6 +8,7 @@ process.env.AUTH_PASSWORD = 'admin123';
 process.env.ADMIN_DASHBOARD_PASSWORD = 'dashboard-secret';
 process.env.SHARE_API_KEY = 'admin-route-key';
 process.env.SESSION_SECRET = 'admin-route-secret';
+process.env.TZ = 'UTC';
 
 const app = require('../app');
 
@@ -637,6 +638,34 @@ test('admin stats render aggregate charts', async () => {
   assert.match(response.text, /内容类型/);
   assert.match(response.text, /markdown/);
   assert.doesNotMatch(response.text, /password_hash/);
+});
+
+test('admin Share list and detail render Beijing time under a UTC process', async () => {
+  const repository = app.locals.pageRepository;
+  await repository.create({
+    id: 'beijing-time-display',
+    htmlContent: '<h1>Beijing display</h1>',
+    title: 'Beijing display',
+    createdAt: Date.parse('2026-07-22T10:53:32.000Z'),
+    expiresAt: Date.parse('2026-07-23T10:30:32.123Z')
+  });
+  const cookie = await loginDashboard();
+  const list = await request('/admin/pages?search=Beijing%20display', {
+    headers: { Cookie: cookie }
+  });
+  const detail = await request('/admin/pages/beijing-time-display', {
+    headers: { Cookie: cookie }
+  });
+
+  assert.match(
+    list.text,
+    /datetime="2026-07-22T10:53:32\.000Z">2026\/7\/22 18:53:32<\/time>/
+  );
+  assert.match(
+    detail.text,
+    /datetime="2026-07-23T10:30:32\.123Z">2026\/7\/23 18:30:32<\/time>/
+  );
+  assert.match(detail.text, /value="2026-07-23T18:30:32\.123"/);
 });
 
 test('admin page detail returns 404 for missing pages', async () => {

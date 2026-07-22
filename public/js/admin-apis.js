@@ -22,7 +22,7 @@
   }
 
   function formatTime(value) {
-    return new Date(Number(value)).toLocaleString('zh-CN', { hour12: false });
+    return window.AdminTime.format(value);
   }
 
   function removeEmptyState() {

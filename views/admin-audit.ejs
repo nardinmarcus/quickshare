@@ -32,7 +32,7 @@
             <% logs.forEach((log) => { %>
               <% const isFavoriteUpdate = log.action === 'page.favorite.update'; %>
               <tr>
-                <td><time datetime="<%= new Date(log.createdAt).toISOString() %>"><%= new Date(log.createdAt).toLocaleString('zh-CN', { hour12: false }) %></time></td>
+                <td><time datetime="<%= new Date(log.createdAt).toISOString() %>"><%= formatManagementDateTime(log.createdAt) %></time></td>
                 <td><span class="admin-audit-badge <%= isFavoriteUpdate ? 'favorite-share-update' : log.action %>"><%= isFavoriteUpdate ? 'Favorite Share 状态更新' : log.action %></span></td>
                 <td>
                   <% if (log.pageId) { %>

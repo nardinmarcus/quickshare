@@ -1,22 +1,25 @@
-<nav class="admin-actions admin-nav" aria-label="管理后台">
-  <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/stats" data-nav-id="stats" <% if (current === 'stats') { %>aria-current="page"<% } %>>
-    <i class="fas fa-chart-bar" aria-hidden="true"></i>
-    <span>统计</span>
-  </a>
-  <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/pages" data-nav-id="pages" <% if (current === 'pages') { %>aria-current="page"<% } %>>
-    <i class="fas fa-table" aria-hidden="true"></i>
-    <span>分享</span>
-  </a>
-  <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/apis" data-nav-id="apis" <% if (current === 'apis') { %>aria-current="page"<% } %>>
-    <i class="fas fa-key" aria-hidden="true"></i>
-    <span>API</span>
-  </a>
-  <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/audit" data-nav-id="audit" <% if (current === 'audit') { %>aria-current="page"<% } %>>
-    <i class="fas fa-history" aria-hidden="true"></i>
-    <span>审计</span>
-  </a>
-  <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/" data-nav-id="create">
-    <i class="fas fa-plus" aria-hidden="true"></i>
-    <span>新建</span>
-  </a>
-</nav>
+<div class="admin-nav-wrap">
+  <nav class="admin-actions admin-nav" aria-label="管理后台">
+    <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/stats" data-nav-id="stats" <% if (current === 'stats') { %>aria-current="page"<% } %>>
+      <i class="fas fa-chart-bar" aria-hidden="true"></i>
+      <span>统计</span>
+    </a>
+    <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/pages" data-nav-id="pages" <% if (current === 'pages') { %>aria-current="page"<% } %>>
+      <i class="fas fa-table" aria-hidden="true"></i>
+      <span>分享</span>
+    </a>
+    <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/apis" data-nav-id="apis" <% if (current === 'apis') { %>aria-current="page"<% } %>>
+      <i class="fas fa-key" aria-hidden="true"></i>
+      <span>API</span>
+    </a>
+    <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/admin/audit" data-nav-id="audit" <% if (current === 'audit') { %>aria-current="page"<% } %>>
+      <i class="fas fa-history" aria-hidden="true"></i>
+      <span>审计</span>
+    </a>
+    <a class="cyber-btn cyber-btn-secondary admin-home-link" href="/" data-nav-id="create">
+      <i class="fas fa-plus" aria-hidden="true"></i>
+      <span>新建</span>
+    </a>
+  </nav>
+  <p class="admin-time-zone-note">所有时间均为北京时间</p>
+</div>

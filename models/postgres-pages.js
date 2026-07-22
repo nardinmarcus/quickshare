@@ -1,34 +1,9 @@
-const DAY_MS = 24 * 60 * 60 * 1000;
 const { createPostgresPool } = require('./postgres-config');
-
-function buildDailyStats(createdAtRows, days = 14) {
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const startAt = todayStart.getTime() - ((days - 1) * DAY_MS);
-  const counts = new Map();
-
-  for (let index = 0; index < days; index += 1) {
-    const timestamp = startAt + (index * DAY_MS);
-    counts.set(timestamp, 0);
-  }
-
-  createdAtRows.forEach((row) => {
-    const createdAt = Number(row.created_at);
-    const day = new Date(createdAt);
-    day.setHours(0, 0, 0, 0);
-    const dayStart = day.getTime();
-
-    if (counts.has(dayStart)) {
-      counts.set(dayStart, counts.get(dayStart) + 1);
-    }
-  });
-
-  return Array.from(counts.entries()).map(([timestamp, count]) => ({
-    date: new Date(timestamp).toISOString().slice(0, 10),
-    label: new Date(timestamp).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }),
-    count
-  }));
-}
+const {
+  buildManagementDailyStats,
+  managementDateRange,
+  managementRecentStart
+} = require('../utils/management-time');
 
 function buildAdminPageFilter(options = {}) {
   const conditions = [];
@@ -58,7 +33,7 @@ function buildAdminPageFilter(options = {}) {
   }
 
   if (options.dateFrom) {
-    const fromTime = new Date(options.dateFrom).getTime();
+    const fromTime = managementDateRange(options.dateFrom)?.start;
     if (Number.isFinite(fromTime)) {
       conditions.push(`created_at >= $${paramIndex}`);
       params.push(fromTime);
@@ -67,7 +42,7 @@ function buildAdminPageFilter(options = {}) {
   }
 
   if (options.dateTo) {
-    const toTime = new Date(options.dateTo + 'T23:59:59.999').getTime();
+    const toTime = managementDateRange(options.dateTo)?.end;
     if (Number.isFinite(toTime)) {
       conditions.push(`created_at <= $${paramIndex}`);
       params.push(toTime);
@@ -312,7 +287,8 @@ class PostgresPageRepository {
   }
 
   async getAdminStats() {
-    const since = Date.now() - (13 * DAY_MS);
+    const now = Date.now();
+    const since = managementRecentStart(14, now);
     const [summaryResult, typeResult, recentResult, topViewedResult] = await Promise.all([
       this.pool.query(`
         SELECT
@@ -352,7 +328,11 @@ class PostgresPageRepository {
         codeType: row.code_type || 'html',
         count: Number.parseInt(row.count || '0', 10)
       })),
-      recentDays: buildDailyStats(recentResult.rows),
+      recentDays: buildManagementDailyStats(
+        recentResult.rows.map((row) => Number(row.created_at)),
+        14,
+        now
+      ),
       topViewed: topViewedResult.rows.map((row) => ({
         id: row.id,
         title: row.title || row.id,

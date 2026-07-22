@@ -61,7 +61,7 @@
       <span>最近创建</span>
       <strong class="admin-metric-date">
         <% if (stats.latestCreatedAt) { %>
-          <%= new Date(Number(stats.latestCreatedAt)).toLocaleString('zh-CN', { hour12: false }) %>
+          <%= formatManagementDateTime(stats.latestCreatedAt) %>
         <% } else { %>
           暂无
         <% } %>

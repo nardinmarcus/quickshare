@@ -14,6 +14,10 @@ const { detectCodeType, extractCodeBlocks } = require('./utils/codeDetector');
 const { renderContent, escapeHtml, resolveTheme } = require('./utils/contentRenderer');
 const { derivePageTitle } = require('./utils/pageTitle');
 const {
+  formatManagementDateTime,
+  toManagementDateTimeLocal
+} = require('./utils/management-time');
+const {
   CUSTOM_PASSWORD_ERROR,
   DEFAULT_PASSWORD_LENGTH,
   createCsrfToken,
@@ -63,6 +67,8 @@ const parseShareJson = bodyParser.json({ limit: config.shareBodyLimit });
 
 app.locals.config = config;
 app.locals.pageRepository = pageRepository;
+app.locals.formatManagementDateTime = formatManagementDateTime;
+app.locals.toManagementDateTimeLocal = toManagementDateTimeLocal;
 app.locals.requestLogStream = process.stdout;
 app.locals.viewPerformanceLogger = config.env === 'test' ? { info() {} } : console;
 

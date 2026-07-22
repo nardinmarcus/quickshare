@@ -21,6 +21,7 @@
   const statusDisplay = document.getElementById('status-display');
   const pageDataElement = document.getElementById('page-data');
   const renderedPreview = document.getElementById('rendered-preview');
+  const adminTime = window.AdminTime;
   const customPasswordPattern = /^[A-Za-z0-9!@#$%^&*()_+\-=.,?~]{4,12}$/;
   const customPasswordError = '自定义密码必须为 4–12 位，仅可包含英文字母、数字及 !@#$%^&*()_+-=.,?~';
   let originalData = {};
@@ -68,7 +69,7 @@
     document.getElementById('edit-title').value = originalData.title || '';
     document.getElementById('edit-description').value = originalData.description || '';
     expiresInput.value = originalData.expiresAt
-      ? new Date(originalData.expiresAt).toISOString().slice(0, 16)
+      ? adminTime.toDateTimeLocal(originalData.expiresAt)
       : '';
     protectedCheckbox.checked = Boolean(originalData.isProtected);
     passwordInput.value = '';
@@ -134,7 +135,7 @@
       expiresDisplayRow.hidden = false;
       document.getElementById('expires-display').innerHTML =
         '<time datetime="' + date.toISOString() + '">' +
-        date.toLocaleString('zh-CN', { hour12: false }) + '</time>';
+        adminTime.format(data.expiresAt) + '</time>';
     } else {
       expiresDisplayRow.hidden = true;
       document.getElementById('expires-display').innerHTML =
@@ -184,7 +185,11 @@
   });
 
   expiresInput.addEventListener('change', function () {
-    if (expiresInput.value && new Date(expiresInput.value).getTime() < Date.now()) {
+    const expiresAt = expiresInput.value
+      ? adminTime.parseDateTimeLocal(expiresInput.value)
+      : null;
+
+    if (expiresInput.value && (!Number.isFinite(expiresAt) || expiresAt < Date.now())) {
       expiresHint.textContent = '过期时间不能早于当前时间';
       expiresHint.className = 'field-hint error';
     } else {
@@ -208,6 +213,9 @@
     const title = document.getElementById('edit-title').value.trim();
     const description = document.getElementById('edit-description').value.trim();
     const expiresAtValue = expiresInput.value;
+    const expiresAt = expiresAtValue
+      ? adminTime.parseDateTimeLocal(expiresAtValue)
+      : null;
     const customPassword = passwordInput.value;
 
     if (protectedCheckbox.checked && customPassword && !customPasswordPattern.test(customPassword)) {
@@ -219,7 +227,7 @@
       return;
     }
 
-    if (expiresAtValue && new Date(expiresAtValue).getTime() < Date.now()) {
+    if (expiresAtValue && (!Number.isFinite(expiresAt) || expiresAt < Date.now())) {
       expiresHint.textContent = '过期时间不能早于当前时间';
       expiresHint.className = 'field-hint error';
       Toast.error('请设置有效的过期时间');
@@ -232,7 +240,7 @@
       description: description || null,
       htmlContent: contentTextarea.value,
       isProtected: protectedCheckbox.checked,
-      expiresAt: expiresAtValue ? new Date(expiresAtValue).getTime() : null
+      expiresAt
     };
     const themeSelect = document.getElementById('edit-theme');
 
