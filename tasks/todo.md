@@ -4,7 +4,7 @@ Status: Phases 0–3 deployed on 2026-07-15; the representative WP8 traffic base
 
 ## Issue #11 — Markdown Theme Catalog, shared baseline, and ByteDance tracer (2026-07-22)
 
-Status: independent review findings remediated and local verification complete on `codex/markdown-theme-catalog`; post-remediation review and remote PostgreSQL CI remain pending. Parent Issue #10 remains unreleased.
+Status: complete on `codex/markdown-theme-catalog`; Issue #11 is closed after independent review and remote PostgreSQL CI. Parent Issue #10 remains unreleased.
 
 Confirmed boundaries:
 
@@ -22,8 +22,8 @@ Plan:
 - [x] Implement the Catalog module and replace duplicated server/template theme lists with its safe projection.
 - [x] Add the shared reading baseline and refactor ByteDance into a signature-only, system-font, light/dark stylesheet without malformed glyphs or broad blur.
 - [x] Run focused tests, the complete Node suite, syntax/diff checks, and real-browser ByteDance acceptance at 375/768/1440 plus a 320 CSS px reflow boundary equivalent to 640 px at 200% browser zoom.
-- [ ] Run the GitHub CI job against its isolated PostgreSQL 17 `quickshare_test` service.
-- [ ] Run Standards and Spec review, remediate findings, commit and push the #11 slice on the integration branch, attach evidence, and close #11 only after independent verification.
+- [x] Run the GitHub CI job against its isolated PostgreSQL 17 `quickshare_test` service.
+- [x] Run Standards and Spec review, remediate findings, commit and push the #11 slice on the integration branch, attach evidence, and close #11 only after independent verification.
 
 Verify:
 
@@ -55,6 +55,7 @@ Independent review remediation:
 - Preservation coverage: the theme-only admin test now retains non-default password hash/ciphertext, protection, expiration, Favorite Share state, view count, content, title, and description; the Share API invalid-value path is covered.
 - Standards: obsolete `MARKDOWN_THEMES`/`resolveTheme` forwarding exports were removed and the new test helper uses the Share domain term.
 - Legacy compatibility follow-up: shared syntax roles are optional signature enhancements and otherwise inherit the active code foreground. GitHub, Apple, and Notion explicitly retain their existing dark text on light fenced-code surfaces in both system appearances until Issues #12/#13 migrate them; cache-busted browser readback confirmed GitHub `#24292f` on `#f6f8fa` with no fixed highlight stylesheet.
+- Final gates: independent Standards Review and Spec Review both returned 0 findings at `ae6a798`; GitHub Actions run `29935833579` passed Node 24 and PostgreSQL 17; completion evidence was attached to Issue #11 before it was closed.
 
 ## Site identity icon replacement design (2026-07-22)
 
