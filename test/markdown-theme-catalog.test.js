@@ -22,7 +22,8 @@ const EXPECTED_THEMES = [
   ['tesla', 'Tesla 黑白'],
   ['airbnb', 'Airbnb 暖居'],
   ['bugatti', 'Bugatti 蓝曜'],
-  ['linear', 'Linear 精密']
+  ['linear', 'Linear 精密'],
+  ['playstation', 'PlayStation 蓝境']
 ];
 
 test('Catalog owns the ordered existing theme identities and trusted assets', () => {
