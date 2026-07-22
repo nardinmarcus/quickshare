@@ -270,7 +270,7 @@ test('Notion and Claude round-trip through preview, browser create, metadata, ad
   assert.equal(homepage.status, 200);
 
   for (const id of THEME_IDS) {
-    assert.match(homepage.text, new RegExp(`<option value="${id}"`));
+    assert.match(homepage.text, new RegExp(`<option\\b(?=[^>]*value="${id}")[^>]*>`));
 
     const preview = await jsonRequest('/api/pages/preview', {
       htmlContent: `# ${id} preview`,
@@ -301,7 +301,7 @@ test('Notion and Claude round-trip through preview, browser create, metadata, ad
     assert.equal(metadata.status, 200);
     assert.equal(metadata.body.page.markdownTheme, id);
     assert.equal(admin.status, 200);
-    assert.match(admin.text, new RegExp(`<option value="${id}" selected>`));
+    assert.match(admin.text, new RegExp(`<option\\b(?=[^>]*value="${id}")(?=[^>]*selected)[^>]*>`));
     assert.equal(publicView.status, 200);
     assert.match(publicView.text, new RegExp(`markdown-${id}\\.css`));
   }

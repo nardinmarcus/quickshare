@@ -253,7 +253,7 @@ test('Issue #15 carries both IDs through preview, browser/API persistence, metad
   assert.equal(homepage.status, 200);
 
   for (const [id, label] of TICKET_THEMES) {
-    assert.match(homepage.text, new RegExp(`<option value="${id}"[^>]*>${label}</option>`));
+    assert.match(homepage.text, new RegExp(`<option\\b(?=[^>]*value="${id}")[^>]*>\\s*${label}</option>`));
 
     const preview = await jsonRequest('/api/pages/preview', 'POST', {
       htmlContent: `# ${label} preview`,
@@ -288,7 +288,7 @@ test('Issue #15 carries both IDs through preview, browser/API persistence, metad
 
     const admin = await request(`/admin/pages/${browserCreate.body.urlId}`);
     assert.equal(admin.status, 200);
-    assert.match(admin.text, new RegExp(`<option value="${id}" selected>${label}</option>`));
+    assert.match(admin.text, new RegExp(`<option\\b(?=[^>]*value="${id}")(?=[^>]*selected)[^>]*>\\s*${label}</option>`));
 
     const update = await jsonRequest(`/admin/pages/${browserCreate.body.urlId}`, 'PUT', {
       markdownTheme: id

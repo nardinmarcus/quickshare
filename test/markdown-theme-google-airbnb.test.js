@@ -135,7 +135,8 @@ test('Issue #16 entries occupy their formal relative Catalog order with trusted 
     });
     assert.deepEqual(options.find(({ id }) => id === expected.id), {
       id: expected.id,
-      label: expected.label
+      label: expected.label,
+      signatureHref: `/css/markdown-${expected.id}.css`
     });
   }
 });
@@ -230,7 +231,7 @@ test('creator, API, metadata, admin, and public flows round-trip both stable IDs
   for (const { id, label } of ISSUE_16_THEMES) {
     const preservedExpiry = Date.now() + 86_400_000;
     const preservedPassword = id === 'google' ? 'Goo9!?' : 'Air9!?';
-    assert.match(homepage.text, new RegExp(`<option value="${id}"[^>]*>${label}</option>`));
+    assert.match(homepage.text, new RegExp(`<option\\b(?=[^>]*value="${id}")[^>]*>\\s*${label}</option>`));
 
     const preview = await jsonRequest('/api/pages/preview', 'POST', {
       htmlContent: `# ${label} preview`,

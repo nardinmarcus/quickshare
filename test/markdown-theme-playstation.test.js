@@ -96,7 +96,11 @@ test('PlayStation is the final entry in the formal Catalog order with trusted lo
   const options = getMarkdownThemeOptions();
 
   assert.equal(resolveMarkdownThemeId('playstation'), 'playstation');
-  assert.deepEqual(options.at(-1), { id: 'playstation', label: 'PlayStation 蓝境' });
+  assert.deepEqual(options.at(-1), {
+    id: 'playstation',
+    label: 'PlayStation 蓝境',
+    signatureHref: '/css/markdown-playstation.css'
+  });
   assert.equal(MARKDOWN_THEME_CATALOG.at(-1), theme);
   assert.equal(theme.signatureHref, '/css/markdown-playstation.css');
   assert.deepEqual(Object.keys(theme.appearances), ['light', 'dark']);
@@ -157,7 +161,10 @@ test('PlayStation round-trips through preview, browser/API creation, metadata, a
 
   const admin = await request(`/admin/pages/${apiCreated.body.urlId}`);
   assert.equal(admin.status, 200);
-  assert.match(admin.text, /<option value="playstation" selected>PlayStation 蓝境<\/option>/);
+  assert.match(
+    admin.text,
+    /<option\b(?=[^>]*value="playstation")(?=[^>]*selected)[^>]*>\s*PlayStation 蓝境<\/option>/
+  );
 
   const update = await jsonRequest(`/admin/pages/${apiCreated.body.urlId}`, 'PUT', {
     markdownTheme: 'playstation'
