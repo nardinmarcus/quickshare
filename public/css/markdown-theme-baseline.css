@@ -204,7 +204,7 @@ body {
   margin-inline: auto;
 }
 
-.markdown-body :where(.task-list-item) {
+.markdown-body :where(.task-list-item, li:has(> input[type="checkbox"])) {
   list-style: none;
 }
 

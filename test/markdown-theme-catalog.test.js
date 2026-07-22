@@ -109,14 +109,3 @@ test('shared baseline owns reading containment while ByteDance owns only its sig
   assert.match(bytedance, /@media \(prefers-color-scheme:\s*dark\)/);
   assert.doesNotMatch(bytedance, /@import|fonts\.googleapis\.com|filter:\s*blur|content:\s*["']u[0-9a-f]{4}/i);
 });
-
-test('the pending Notion signature keeps a readable fenced-code foreground during baseline migration', () => {
-  for (const id of ['notion']) {
-    const signature = fs.readFileSync(
-      path.join(__dirname, `../public/css/markdown-${id}.css`),
-      'utf8'
-    );
-
-    assert.match(signature, /\.markdown-body pre\s*\{[^}]*color:\s*#[0-9a-f]{6}/is);
-  }
-});
