@@ -11,7 +11,11 @@ const { performance } = require('node:perf_hooks');
 const config = require('./config');
 const { createPageRepository } = require('./models/pageRepository');
 const { detectCodeType, extractCodeBlocks } = require('./utils/codeDetector');
-const { renderContent, escapeHtml, resolveTheme } = require('./utils/contentRenderer');
+const { renderContent, escapeHtml } = require('./utils/contentRenderer');
+const {
+  getMarkdownThemeOptions,
+  resolveMarkdownThemeId
+} = require('./utils/markdownThemeCatalog');
 const { derivePageTitle } = require('./utils/pageTitle');
 const {
   formatManagementDateTime,
@@ -724,7 +728,7 @@ async function createPageFromInput(input) {
   const passwordHash = password ? await hashSecret(password) : null;
   const encryptedPassword = password ? encryptSecret(password) : null;
   const resolvedTheme = normalizedCodeType === 'markdown'
-    ? resolveTheme(markdownTheme || 'random')
+    ? resolveMarkdownThemeId(markdownTheme)
     : null;
   const id = await createPageWithRetry({
     htmlContent,
@@ -1006,7 +1010,8 @@ app.get('/', privateNoStore, requireHomepageAccess, (req, res) => {
   return res.render('index', {
     title: 'QuickShare | 粘贴代码，一键分享',
     page: 'home-page',
-    csrfToken: req.homepageAccessMode === 'locked' ? createCsrfToken(sessionToken) : ''
+    csrfToken: req.homepageAccessMode === 'locked' ? createCsrfToken(sessionToken) : '',
+    markdownThemeOptions: getMarkdownThemeOptions()
   });
 });
 
@@ -1341,7 +1346,9 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       isFavorite: sharedPage.is_favorite === true,
       password: visiblePagePassword(sharedPage),
       expiresAt: sharedPage.expires_at,
-      markdownTheme: sharedPage.markdown_theme
+      markdownTheme: sharedPage.code_type === 'markdown'
+        ? resolveMarkdownThemeId(sharedPage.markdown_theme)
+        : null
     };
     const sessionToken = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE] || '';
 
@@ -1351,7 +1358,8 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       csrfToken: config.authEnabled ? createCsrfToken(sessionToken) : '',
       sharedPage: pageData,
       pageDataJson: serializeJsonForHtml(pageData),
-      publicUrl: publicPageUrl(req, sharedPage.id)
+      publicUrl: publicPageUrl(req, sharedPage.id),
+      markdownThemeOptions: getMarkdownThemeOptions()
     });
   } catch (error) {
     console.error('Admin page detail failed:', error);
@@ -1444,8 +1452,8 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
       const parsed = Number.parseInt(expiresAt, 10);
       updateOptions.expiresAt = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
     }
-    if (markdownTheme !== undefined) {
-      updateOptions.markdownTheme = markdownTheme ? resolveTheme(markdownTheme) : null;
+    if (markdownTheme !== undefined && page.code_type === 'markdown') {
+      updateOptions.markdownTheme = resolveMarkdownThemeId(markdownTheme);
     }
 
     if (isProtected !== undefined) {

@@ -2,6 +2,50 @@
 
 Status: Phases 0–3 deployed on 2026-07-15; the representative WP8 traffic baseline remains in passive collection.
 
+## Issue #11 — Markdown Theme Catalog, shared baseline, and ByteDance tracer (2026-07-22)
+
+Status: implementation and local verification complete on `codex/markdown-theme-catalog`; independent review and remote PostgreSQL CI remain pending. Parent Issue #10 remains unreleased.
+
+Confirmed boundaries:
+
+- One server-owned Catalog is authoritative for stable IDs, labels, order, trusted local signature paths, and light/dark wrapper metadata.
+- The homepage, admin editor, request normalization, and renderer consume Catalog projections instead of maintaining option lists or asset maps.
+- One independently loaded Theme Reading Baseline owns responsive containment, focus visibility, image/task normalization, and bounded tables, code, and diagrams.
+- ByteDance is the first migrated end-to-end signature and deterministic fallback. GitHub, Apple, Notion, and Claude remain operational until Issues #12 and #13 migrate them.
+- The persisted text field and every existing API response shape remain unchanged. The disposable `prototypes/` tree is neither read nor committed.
+
+Plan:
+
+- [x] Add failing Catalog contract tests for identity, order, safe projection, local assets, paired appearance metadata, immutability, and ByteDance fallback.
+- [x] Add failing renderer tests proving baseline-before-signature loading, trusted appearance metadata, unknown-value safety, and conditional Mermaid/highlight assets.
+- [x] Add failing HTTP tests proving Catalog-driven homepage/admin options, ByteDance create/preview/public behavior, unknown normalization, and read-only fallback for invalid stored values.
+- [x] Implement the Catalog module and replace duplicated server/template theme lists with its safe projection.
+- [x] Add the shared reading baseline and refactor ByteDance into a signature-only, system-font, light/dark stylesheet without malformed glyphs or broad blur.
+- [x] Run focused tests, the complete Node suite, syntax/diff checks, and real-browser ByteDance acceptance at 375/768/1440 plus a 320 CSS px reflow boundary equivalent to 640 px at 200% browser zoom.
+- [ ] Run the GitHub CI job against its isolated PostgreSQL 17 `quickshare_test` service.
+- [ ] Run Standards and Spec review, remediate findings, commit and push the #11 slice on the integration branch, attach evidence, and close #11 only after independent verification.
+
+Verify:
+
+1. Catalog -> five existing IDs are unique and ordered, labels/assets/appearance metadata are trusted, and every invalid value resolves to ByteDance.
+2. Projection -> homepage and admin render options from the same server projection; browser strings cannot become stylesheet URLs.
+3. Renderer -> baseline loads before the resolved signature; wrapper canvas/theme-color follows trusted light/dark metadata; optional runtimes remain content-conditional.
+4. ByteDance -> create, preview, persistence, metadata, admin update, and public rendering preserve its ID and recognizable blue/teal signature.
+5. Resilience -> signature failure leaves readable contained content; invalid stored values render ByteDance without rewriting the row during a read.
+6. Compatibility -> database/API shapes and non-Markdown flows are unchanged; the four pending legacy signatures remain usable.
+7. Visual -> ByteDance light/dark has no page-level overflow, passes representative contrast/focus checks, and reflows at required widths and 200% zoom.
+
+Local verification:
+
+- TDD: the Catalog module and shared baseline each began with a failing contract; the empty admin write also failed as `null` before normalization was corrected.
+- Tests: the focused Catalog/renderer/HTTP slice passes 18/18; the complete Node suite passes 189/189; changed JavaScript syntax and `git diff --check` pass.
+- Browser geometry: light and dark ByteDance pass at 375, 768, and 1440 px; the reading column is bounded at 900 px and document `scrollWidth` equals `clientWidth` at every width.
+- Narrow reflow: at 320 CSS px the page remains 305/305 px with table, code, and Mermaid overflow contained internally; the table alone scrolls 280 px inside a 271 px container.
+- Visual/accessibility: representative light and dark body, link, quote, code, heading, and focus colors meet the measured contrast boundary; keyboard focus exposes a solid 3 px theme-aware outline.
+- Failure resilience: aborting `/css/markdown-bytedance.css` produces `TypeError: Failed to fetch`, while the independent baseline keeps readable content and 360/360 px page geometry with 326 px contained table, code, and Mermaid regions.
+- Resources: the real mixed-content sample loads one baseline, one trusted ByteDance signature, and only the content-triggered Highlight.js and Mermaid resources; plain Markdown remains covered by a no-optional-runtime contract test.
+- PostgreSQL: no safe local `_test` instance is running; the repository CI workflow provides PostgreSQL 17 and remains the required remote gate after push.
+
 ## Site identity icon replacement design (2026-07-22)
 
 Status: complete; asset commit `e2e46e0` is pushed and production deployment `dpl_C9G92ugidV333Rcz2L3vxtfs4YEv` was verified on 2026-07-22.

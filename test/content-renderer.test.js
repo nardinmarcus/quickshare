@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { renderHtml, renderMarkdown } = require('../utils/contentRenderer');
+const { resolveMarkdownTheme } = require('../utils/markdownThemeCatalog');
 
 test('renderHtml loads highlighting only for partial HTML with a preformatted code block', () => {
   const plain = renderHtml('<p>Plain partial HTML</p>');
@@ -52,4 +53,40 @@ test('renderMarkdown loads Mermaid only when a mermaid block exists', async () =
 
   assert.match(html, /mermaid\.min\.js/);
   assert.doesNotMatch(html, /highlight\.min\.js/);
+});
+
+test('renderMarkdown loads the shared baseline before one trusted signature', async () => {
+  const html = await renderMarkdown('# Catalog contract', 'github');
+  const baselinePosition = html.indexOf('/css/markdown-theme-baseline.css');
+  const signaturePosition = html.indexOf('/css/markdown-github.css');
+
+  assert.ok(baselinePosition >= 0);
+  assert.ok(signaturePosition > baselinePosition);
+  assert.equal((html.match(/markdown-theme-baseline\.css/g) || []).length, 1);
+  assert.equal((html.match(/markdown-github\.css/g) || []).length, 1);
+  assert.match(html, /<html[^>]+data-markdown-theme="github"/);
+});
+
+test('renderMarkdown derives light and dark wrapper metadata from the resolved Catalog entry', async () => {
+  const theme = resolveMarkdownTheme('bytedance');
+  const html = await renderMarkdown('# Adaptive ByteDance', 'bytedance');
+
+  assert.match(
+    html,
+    new RegExp(`<meta name="theme-color" content="${theme.appearances.light.themeColor}" media="\\(prefers-color-scheme: light\\)">`)
+  );
+  assert.match(
+    html,
+    new RegExp(`<meta name="theme-color" content="${theme.appearances.dark.themeColor}" media="\\(prefers-color-scheme: dark\\)">`)
+  );
+  assert.match(html, new RegExp(`--theme-canvas: ${theme.appearances.light.canvas}`));
+  assert.match(html, new RegExp(`--theme-canvas: ${theme.appearances.dark.canvas}`));
+});
+
+test('renderMarkdown never reflects an invalid theme into an asset URL', async () => {
+  const html = await renderMarkdown('# Safe fallback', '../../admin-secret');
+
+  assert.match(html, /data-markdown-theme="bytedance"/);
+  assert.match(html, /href="\/css\/markdown-bytedance\.css"/);
+  assert.doesNotMatch(html, /admin-secret/);
 });

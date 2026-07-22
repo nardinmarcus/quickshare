@@ -1,0 +1,157 @@
+:root {
+  color-scheme: light dark;
+  --theme-canvas: #f5f7fa;
+  --theme-text: #243147;
+  --theme-muted: #52627a;
+  --theme-link: #095fba;
+  --theme-focus: #0b6cf0;
+  --theme-reading-width: 900px;
+  --theme-reading-padding: clamp(24px, 5vw, 56px);
+}
+
+html {
+  min-width: 0;
+  background: var(--theme-canvas);
+  scroll-padding-top: 1rem;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 0;
+  min-height: 100vh;
+  margin: 0;
+  background: var(--theme-canvas);
+  color: var(--theme-text);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.markdown-body {
+  width: min(100%, var(--theme-reading-width));
+  min-width: 0;
+  margin-inline: auto;
+  padding: var(--theme-reading-padding) clamp(20px, 4vw, 48px);
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.markdown-body > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.markdown-body :where(h1, h2, h3, h4, h5, h6) {
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+.markdown-body :where(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
+  outline: 3px solid var(--theme-focus);
+  outline-offset: 3px;
+}
+
+.markdown-body a {
+  color: var(--theme-link);
+  text-underline-offset: 0.18em;
+}
+
+.markdown-body :where(img, video, canvas, iframe) {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown-body :where(svg) {
+  max-width: 100%;
+}
+
+.markdown-body :where(pre, table, .mermaid, .embedded-svg-container, .embedded-mermaid-container) {
+  min-width: 0;
+  max-width: 100%;
+  overflow: auto;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.markdown-body pre {
+  white-space: pre;
+}
+
+.markdown-body pre code {
+  overflow-wrap: normal;
+  word-break: normal;
+  white-space: inherit;
+}
+
+.markdown-body table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  border-collapse: collapse;
+}
+
+.markdown-body :where(th, td) {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.markdown-body .mermaid svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-inline: auto;
+}
+
+.markdown-body :where(.task-list-item) {
+  list-style: none;
+}
+
+.markdown-body input[type="checkbox"] {
+  inline-size: 1rem;
+  block-size: 1rem;
+  margin: 0 0.5rem 0 0;
+  vertical-align: -0.12em;
+}
+
+.markdown-body :where(p, li, blockquote, figcaption) {
+  orphans: 3;
+  widows: 3;
+}
+
+@media (max-width: 480px) {
+  :root {
+    --theme-reading-padding: 24px;
+  }
+
+  .markdown-body {
+    padding-inline: 16px;
+  }
+
+  .markdown-body :where(pre, table, .mermaid, .embedded-svg-container) {
+    scrollbar-width: thin;
+  }
+}
+
+@media (forced-colors: active) {
+  .markdown-body :where(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
+    outline-color: Highlight;
+  }
+}
+
+@media print {
+  :root {
+    --theme-canvas: #ffffff;
+  }
+
+  .markdown-body {
+    width: 100%;
+    max-width: none;
+    padding: 0;
+  }
+}

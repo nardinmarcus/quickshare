@@ -5,14 +5,16 @@
 
 const { marked } = require('marked');
 const { CODE_TYPES } = require('./codeDetector');
+const {
+  MARKDOWN_THEME_BASELINE_HREF,
+  MARKDOWN_THEME_CATALOG,
+  resolveMarkdownTheme,
+  resolveMarkdownThemeId
+} = require('./markdownThemeCatalog');
 
-const MARKDOWN_THEMES = {
-  bytedance: '/css/markdown-bytedance.css',
-  github: '/css/markdown-github.css',
-  apple: '/css/markdown-apple.css',
-  notion: '/css/markdown-notion.css',
-  claude: '/css/markdown-claude.css'
-};
+const MARKDOWN_THEMES = Object.freeze(Object.fromEntries(
+  MARKDOWN_THEME_CATALOG.map(({ id, signatureHref }) => [id, signatureHref])
+));
 
 const MERMAID_LIGHT_THEME = {
   darkMode: false,
@@ -79,7 +81,6 @@ const MERMAID_CDN = 'https://cdn.jsdelivr.net/npm/mermaid@11.6.0/dist/mermaid.mi
 const HIGHLIGHT_CSS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-dark.min.css';
 const HIGHLIGHT_JS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js';
 
-const THEME_KEYS = Object.keys(MARKDOWN_THEMES);
 const MERMAID_PATTERNS = [
   /^(graph|flowchart)\s+(TB|TD|BT|RL|LR)\b/m,
   /^sequenceDiagram\b/m,
@@ -221,8 +222,8 @@ function renderHtml(content) {
  * @returns {string} - u6e32u67d3u540eu7684HTML
  */
 async function renderMarkdown(content, theme) {
-  const resolvedTheme = resolveTheme(theme);
-  const themeCss = MARKDOWN_THEMES[resolvedTheme] || MARKDOWN_THEMES.bytedance;
+  const resolvedTheme = resolveMarkdownTheme(theme);
+  const themeCss = resolvedTheme.signatureHref;
   // 预处理内容，处理独立的 Mermaid 代码
   const processedContent = await preprocessMarkdown(content);
   
@@ -438,7 +439,7 @@ async function renderMarkdown(content, theme) {
   // 返回带有字节跳动风格的HTML
   return `
     <!DOCTYPE html>
-    <html lang="zh-CN">
+    <html lang="zh-CN" data-markdown-theme="${resolvedTheme.id}">
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -449,24 +450,24 @@ async function renderMarkdown(content, theme) {
       <link rel="apple-touch-icon" href="/icon/web/apple-touch-icon.png">
       <link rel="icon" type="image/png" sizes="192x192" href="/icon/web/icon-192.png">
       <link rel="icon" type="image/png" sizes="512x512" href="/icon/web/icon-512.png">
-      <meta name="theme-color" content="#6366f1">
+      <meta name="theme-color" content="${resolvedTheme.appearances.light.themeColor}" media="(prefers-color-scheme: light)">
+      <meta name="theme-color" content="${resolvedTheme.appearances.dark.themeColor}" media="(prefers-color-scheme: dark)">
       
       <!-- iOS 特殊设置 -->
       <meta name="apple-mobile-web-app-capable" content="yes">
       <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
       <meta name="apple-mobile-web-app-title" content="QuickShare">
       
+      <link rel="stylesheet" href="${MARKDOWN_THEME_BASELINE_HREF}">
       <link rel="stylesheet" href="${themeCss}">
       ${highlightStylesheet}
       <style>
-        body {
-          margin: 0;
-          padding: 0;
-          background-color: #f5f5f7;
+        :root {
+          --theme-canvas: ${resolvedTheme.appearances.light.canvas};
         }
         @media (prefers-color-scheme: dark) {
-          body {
-            background-color: #1a1a1a;
+          :root {
+            --theme-canvas: ${resolvedTheme.appearances.dark.canvas};
           }
         }
         ${embeddedStyles}
@@ -961,10 +962,7 @@ async function renderContent(content, contentType, theme) {
 }
 
 function resolveTheme(theme) {
-  if (!theme || theme === 'random') {
-    return 'bytedance';
-  }
-  return MARKDOWN_THEMES[theme] ? theme : 'bytedance';
+  return resolveMarkdownThemeId(theme);
 }
 
 /**
