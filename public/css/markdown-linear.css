@@ -1,0 +1,256 @@
+:root {
+  --theme-canvas: #f7f8fb;
+  --theme-text: #20232b;
+  --theme-muted: #5d6472;
+  --theme-accent: #5b6091;
+  --theme-link: #4c5f91;
+  --theme-border: #cfd5e2;
+  --theme-quote-surface: #f0f2f7;
+  --theme-table-surface: #ffffff;
+  --theme-diagram-surface: #f2f4f8;
+  --theme-diagram-text: #20232b;
+  --theme-diagram-node-surface: #eceff5;
+  --theme-diagram-node-border: #66709f;
+  --theme-diagram-line: #737b8b;
+  --theme-diagram-label-surface: #ffffff;
+  --theme-code-text: #eef0f6;
+  --theme-code-surface: #1f222b;
+  --theme-focus: #4f55a5;
+  --theme-heading-on-accent: #ffffff;
+  --theme-font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Noto Sans SC", Arial, sans-serif;
+  --theme-heading: #191c23;
+  --theme-tool-surface: #f1f3f7;
+  --theme-inline-code-surface: #eceff5;
+  --theme-inline-code-text: #454c7b;
+  --theme-strong: #171a20;
+  --theme-surface-radius: 7px;
+  --theme-surface-shadow: none;
+  --theme-body-size: 15px;
+  --theme-reading-width: 840px;
+  --theme-syntax-comment: #aab0bd;
+  --theme-syntax-keyword: #cda7ff;
+  --theme-syntax-string: #9fc6ff;
+  --theme-syntax-number: #b9afff;
+  --theme-syntax-title: #83d0c3;
+  --theme-syntax-meta: #e5b887;
+}
+
+.markdown-body {
+  font-family: var(--theme-font-family);
+  font-size: var(--theme-body-size);
+  line-height: 1.58;
+  letter-spacing: -0.003em;
+}
+
+.markdown-body :where(h1, h2, h3, h4, h5, h6) {
+  color: var(--theme-heading);
+  font-weight: 650;
+  letter-spacing: -0.022em;
+}
+
+.markdown-body h1 {
+  margin: 0 0 1em;
+  padding-bottom: 0.52em;
+  border-bottom: 1px solid var(--theme-border);
+  font-size: clamp(1.85em, 4.5vw, 2.35em);
+  line-height: 1.12;
+}
+
+.markdown-body h1::after {
+  display: block;
+  inline-size: 3.25rem;
+  block-size: 1px;
+  margin-top: 0.48em;
+  background: linear-gradient(90deg, var(--theme-accent), #607baa);
+  content: "";
+}
+
+.markdown-body h2 {
+  margin: 1.65em 0 0.52em;
+  padding-left: 0.68em;
+  border-left: 2px solid var(--theme-accent);
+  font-size: 1.38em;
+}
+
+.markdown-body h3 {
+  margin: 1.4em 0 0.42em;
+  font-size: 1.15em;
+}
+
+.markdown-body :where(h4, h5, h6) {
+  margin: 1.2em 0 0.38em;
+}
+
+.markdown-body h6 {
+  color: var(--theme-muted);
+}
+
+.markdown-body p {
+  margin: 0 0 0.82em;
+}
+
+.markdown-body a {
+  font-weight: 560;
+  text-decoration-thickness: 1px;
+}
+
+.markdown-body :where(strong, b) {
+  color: var(--theme-strong);
+  font-weight: 680;
+}
+
+.markdown-body blockquote {
+  margin: 1.15em 0;
+  padding: 0.72em 0.88em;
+  border: 1px solid var(--theme-border);
+  border-left: 2px solid var(--theme-accent);
+  border-radius: var(--theme-surface-radius);
+}
+
+.markdown-body blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body :where(ul, ol) {
+  padding-left: 1.42em;
+}
+
+.markdown-body li {
+  margin: 0.22em 0;
+}
+
+.markdown-body li::marker {
+  color: var(--theme-accent);
+}
+
+.markdown-body hr {
+  height: 1px;
+  margin: 1.7em 0;
+  background: var(--theme-border);
+  border: 0;
+}
+
+.markdown-body code {
+  padding: 0.13em 0.32em;
+  color: var(--theme-inline-code-text);
+  background: var(--theme-inline-code-surface);
+  border: 1px solid var(--theme-border);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.88em;
+}
+
+.markdown-body pre {
+  padding: 0.9em 1em;
+  border-radius: var(--theme-surface-radius);
+  line-height: 1.52;
+}
+
+.markdown-body pre code {
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.markdown-body table {
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: var(--theme-surface-radius);
+}
+
+.markdown-body :where(th, td) {
+  padding: 0.5em 0.68em;
+}
+
+.markdown-body th {
+  color: var(--theme-heading);
+  background: var(--theme-tool-surface);
+  font-size: 0.8em;
+  font-weight: 680;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.markdown-body tbody tr:nth-child(even) {
+  background: var(--theme-quote-surface);
+}
+
+.markdown-body .mermaid,
+.markdown-body .embedded-svg-container,
+.markdown-body .embedded-mermaid-container {
+  padding: 0.82em;
+  border-radius: var(--theme-surface-radius);
+}
+
+.markdown-body img {
+  border: 1px solid var(--theme-border);
+  border-radius: var(--theme-surface-radius);
+}
+
+.markdown-body kbd {
+  padding: 0.12em 0.36em;
+  color: var(--theme-text);
+  background: var(--theme-tool-surface);
+  border: 1px solid var(--theme-border);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8em;
+}
+
+.markdown-body mark {
+  padding: 0.05em 0.16em;
+  color: var(--theme-text);
+  background: #e4e6f2;
+  border-radius: 3px;
+}
+
+.markdown-body input[type="checkbox"] {
+  accent-color: var(--theme-accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --theme-canvas: #17191f;
+    --theme-text: #e8eaf0;
+    --theme-muted: #a9afbd;
+    --theme-accent: #9c96c9;
+    --theme-link: #aab7e5;
+    --theme-border: #3a3f4c;
+    --theme-quote-surface: #20232a;
+    --theme-table-surface: #1d2027;
+    --theme-diagram-surface: #1e2128;
+    --theme-diagram-text: #e8eaf0;
+    --theme-diagram-node-surface: #252933;
+    --theme-diagram-node-border: #9c96c9;
+    --theme-diagram-line: #8d94a4;
+    --theme-diagram-label-surface: #1d2027;
+    --theme-code-text: #f0f1f5;
+    --theme-code-surface: #101218;
+    --theme-focus: #a7a9e5;
+    --theme-heading-on-accent: #14161c;
+    --theme-heading: #f4f5f8;
+    --theme-tool-surface: #1e2128;
+    --theme-inline-code-surface: #252933;
+    --theme-inline-code-text: #c3c8ed;
+    --theme-strong: #ffffff;
+    --theme-syntax-comment: #969dad;
+    --theme-syntax-keyword: #c7a7f4;
+    --theme-syntax-string: #9cbef0;
+    --theme-syntax-number: #b5ace8;
+    --theme-syntax-title: #89c6bc;
+    --theme-syntax-meta: #d8ad82;
+  }
+
+  .markdown-body mark {
+    color: #eceef5;
+    background: #33364a;
+  }
+}
+
+@media (max-width: 480px) {
+  .markdown-body h1 {
+    font-size: 1.78em;
+  }
+}

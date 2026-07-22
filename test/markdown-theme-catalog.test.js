@@ -16,7 +16,9 @@ const EXPECTED_THEMES = [
   ['github', 'GitHub 经典'],
   ['apple', 'Apple 极简'],
   ['notion', 'Notion 笔记'],
-  ['claude', 'Claude 暖调']
+  ['claude', 'Claude 暖调'],
+  ['raycast', 'Raycast 专注'],
+  ['linear', 'Linear 精密']
 ];
 
 test('Catalog owns the ordered existing theme identities and trusted assets', () => {

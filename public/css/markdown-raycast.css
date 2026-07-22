@@ -1,0 +1,281 @@
+:root {
+  --theme-canvas: #f4f1f6;
+  --theme-text: #251f29;
+  --theme-muted: #625969;
+  --theme-accent: #7443a8;
+  --theme-link: #674096;
+  --theme-border: #c8becf;
+  --theme-quote-surface: #e9e0ed;
+  --theme-table-surface: #fbf9fc;
+  --theme-diagram-surface: #eee7f1;
+  --theme-diagram-text: #251f29;
+  --theme-diagram-node-surface: #e4d7e9;
+  --theme-diagram-node-border: #7443a8;
+  --theme-diagram-line: #665d6d;
+  --theme-diagram-label-surface: #fbf9fc;
+  --theme-code-text: #f8f1fb;
+  --theme-code-surface: #24192a;
+  --theme-focus: #6d3caf;
+  --theme-heading-on-accent: #ffffff;
+  --theme-font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Noto Sans SC", Arial, sans-serif;
+  --theme-heading: #211a25;
+  --theme-tool-surface: #e7ddea;
+  --theme-heading-surface: #35283b;
+  --theme-inline-code-surface: #e5daea;
+  --theme-inline-code-text: #552878;
+  --theme-strong: #301b39;
+  --theme-surface-radius: 12px;
+  --theme-surface-shadow: inset 0 1px 0 #ffffff;
+  --theme-body-size: 16px;
+  --theme-reading-width: 880px;
+  --theme-syntax-comment: #c3b4c8;
+  --theme-syntax-keyword: #ff8bd4;
+  --theme-syntax-string: #c7a2ff;
+  --theme-syntax-number: #efa8ff;
+  --theme-syntax-title: #9db7ff;
+  --theme-syntax-meta: #f3b6d5;
+}
+
+.markdown-body {
+  font-family: var(--theme-font-family);
+  font-size: var(--theme-body-size);
+  line-height: 1.68;
+  letter-spacing: -0.006em;
+}
+
+.markdown-body :where(h1, h2, h3, h4, h5, h6) {
+  color: var(--theme-heading);
+  font-weight: 680;
+  letter-spacing: -0.025em;
+}
+
+.markdown-body h1 {
+  margin: 0 0 1.15em;
+  padding: 0.9em 1em;
+  color: var(--theme-heading-on-accent);
+  background: linear-gradient(145deg, var(--theme-heading-surface), var(--theme-code-surface));
+  border: 1px solid var(--theme-border);
+  border-radius: var(--theme-surface-radius);
+  box-shadow: var(--theme-surface-shadow);
+  font-size: clamp(1.9em, 5vw, 2.55em);
+  line-height: 1.08;
+}
+
+.markdown-body h2 {
+  margin: 1.9em 0 0.7em;
+  padding-bottom: 0.38em;
+  border-bottom: 1px solid var(--theme-border);
+  font-size: 1.52em;
+}
+
+.markdown-body h2::before {
+  display: inline-block;
+  inline-size: 0.52em;
+  block-size: 0.52em;
+  margin-inline-end: 0.48em;
+  background: linear-gradient(135deg, var(--theme-accent), #b83f91);
+  border-radius: 4px;
+  content: "";
+}
+
+.markdown-body h3 {
+  margin: 1.6em 0 0.55em;
+  padding-left: 0.72em;
+  border-left: 3px solid var(--theme-accent);
+  font-size: 1.22em;
+}
+
+.markdown-body :where(h4, h5, h6) {
+  margin: 1.35em 0 0.45em;
+}
+
+.markdown-body h6 {
+  color: var(--theme-muted);
+}
+
+.markdown-body p {
+  margin: 0 0 1em;
+}
+
+.markdown-body a {
+  font-weight: 600;
+  text-decoration-thickness: 1px;
+}
+
+.markdown-body :where(strong, b) {
+  color: var(--theme-strong);
+  font-weight: 700;
+}
+
+.markdown-body blockquote {
+  padding: 1em 1.1em;
+  border: 1px solid var(--theme-border);
+  border-left: 4px solid var(--theme-accent);
+  border-radius: var(--theme-surface-radius);
+  box-shadow: var(--theme-surface-shadow);
+}
+
+.markdown-body blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body :where(ul, ol) {
+  padding-left: 1.55em;
+}
+
+.markdown-body li {
+  margin: 0.32em 0;
+}
+
+.markdown-body li::marker {
+  color: var(--theme-accent);
+  font-weight: 700;
+}
+
+.markdown-body hr {
+  height: 1px;
+  margin: 2.1em 0;
+  background: linear-gradient(90deg, transparent, var(--theme-border), var(--theme-accent), transparent);
+  border: 0;
+}
+
+.markdown-body code {
+  padding: 0.16em 0.38em;
+  color: var(--theme-inline-code-text);
+  background: var(--theme-inline-code-surface);
+  border: 1px solid var(--theme-border);
+  border-radius: 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+}
+
+.markdown-body pre {
+  padding: 1.15em 1.2em;
+  border-color: #594460;
+  border-radius: var(--theme-surface-radius);
+  box-shadow: var(--theme-surface-shadow);
+  line-height: 1.58;
+}
+
+.markdown-body pre code {
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.markdown-body table {
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: var(--theme-surface-radius);
+  box-shadow: var(--theme-surface-shadow);
+}
+
+.markdown-body :where(th, td) {
+  padding: 0.65em 0.8em;
+}
+
+.markdown-body th {
+  color: var(--theme-heading);
+  background: var(--theme-tool-surface);
+  font-size: 0.86em;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+}
+
+.markdown-body tbody tr:nth-child(even) {
+  background: var(--theme-quote-surface);
+}
+
+.markdown-body .mermaid,
+.markdown-body .embedded-svg-container,
+.markdown-body .embedded-mermaid-container {
+  padding: 1em;
+  border-radius: var(--theme-surface-radius);
+  box-shadow: var(--theme-surface-shadow);
+}
+
+.markdown-body img {
+  border: 1px solid var(--theme-border);
+  border-radius: var(--theme-surface-radius);
+  box-shadow: var(--theme-surface-shadow);
+}
+
+.markdown-body kbd {
+  padding: 0.16em 0.42em;
+  color: var(--theme-text);
+  background: var(--theme-tool-surface);
+  border: 1px solid var(--theme-border);
+  border-radius: 5px;
+  box-shadow: var(--theme-surface-shadow);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.84em;
+}
+
+.markdown-body mark {
+  padding: 0.08em 0.2em;
+  color: var(--theme-text);
+  background: #ead4ef;
+  border-radius: 4px;
+}
+
+.markdown-body input[type="checkbox"] {
+  accent-color: var(--theme-accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --theme-canvas: #151119;
+    --theme-text: #f0eaf3;
+    --theme-muted: #bdb2c2;
+    --theme-accent: #c88bea;
+    --theme-link: #d1a4f0;
+    --theme-border: #4b3c52;
+    --theme-quote-surface: #251b2b;
+    --theme-table-surface: #1d1722;
+    --theme-diagram-surface: #211925;
+    --theme-diagram-text: #f0eaf3;
+    --theme-diagram-node-surface: #2e2134;
+    --theme-diagram-node-border: #c88bea;
+    --theme-diagram-line: #a999b0;
+    --theme-diagram-label-surface: #1d1722;
+    --theme-code-text: #f6eef8;
+    --theme-code-surface: #0f0b12;
+    --theme-focus: #da9cff;
+    --theme-heading-on-accent: #ffffff;
+    --theme-heading: #fbf7fc;
+    --theme-tool-surface: #251b2b;
+    --theme-heading-surface: #3a2741;
+    --theme-inline-code-surface: #2d2034;
+    --theme-inline-code-text: #e7b9f3;
+    --theme-strong: #ffffff;
+    --theme-surface-shadow: inset 0 1px 0 #5d4865;
+    --theme-syntax-comment: #ad9eb3;
+    --theme-syntax-keyword: #ff91d8;
+    --theme-syntax-string: #c9a8ff;
+    --theme-syntax-number: #efa8ff;
+    --theme-syntax-title: #a9c1ff;
+    --theme-syntax-meta: #f3b6d5;
+  }
+
+  .markdown-body h1 {
+    border-color: #5b4663;
+  }
+
+  .markdown-body pre {
+    border-color: #4b3c52;
+  }
+
+  .markdown-body mark {
+    color: #f7eef9;
+    background: #503257;
+  }
+}
+
+@media (max-width: 480px) {
+  .markdown-body h1 {
+    padding: 0.78em 0.82em;
+    font-size: 1.82em;
+  }
+}

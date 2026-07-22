@@ -22,7 +22,9 @@ const MARKDOWN_THEME_CATALOG = Object.freeze([
   catalogEntry({ id: 'github', label: 'GitHub 经典', light: '#ffffff', dark: '#0d1117' }),
   catalogEntry({ id: 'apple', label: 'Apple 极简', light: '#ffffff', dark: '#000000' }),
   catalogEntry({ id: 'notion', label: 'Notion 笔记', light: '#fbfbfa', dark: '#191919' }),
-  catalogEntry({ id: 'claude', label: 'Claude 暖调', light: '#faf7f2', dark: '#211e1a' })
+  catalogEntry({ id: 'claude', label: 'Claude 暖调', light: '#faf7f2', dark: '#211e1a' }),
+  catalogEntry({ id: 'raycast', label: 'Raycast 专注', light: '#f4f1f6', dark: '#151119' }),
+  catalogEntry({ id: 'linear', label: 'Linear 精密', light: '#f7f8fb', dark: '#17191f' })
 ]);
 
 const CATALOG_BY_ID = new Map(MARKDOWN_THEME_CATALOG.map(theme => [theme.id, theme]));
