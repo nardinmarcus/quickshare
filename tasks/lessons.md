@@ -160,3 +160,6 @@
 
 - When a route requires a signed session, same-origin request, and CSRF token, build its regression test from the rendered page token instead of bypassing one layer of the contract.
 - A `403` from an incomplete test request is harness evidence, not a product regression; correct the request and rerun the unchanged product assertion.
+## 2026-07-23 — Bind release evidence to the candidate head
+
+- Before posting completion evidence, read the current PR head SHA and its successful CI run directly from GitHub; do not reuse a run ID from an earlier ticket, even when both runs passed the same workflow.
