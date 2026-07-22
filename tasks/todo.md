@@ -57,6 +57,32 @@ Independent review remediation:
 - Legacy compatibility follow-up: shared syntax roles are optional signature enhancements and otherwise inherit the active code foreground. GitHub, Apple, and Notion explicitly retain their existing dark text on light fenced-code surfaces in both system appearances until Issues #12/#13 migrate them; cache-busted browser readback confirmed GitHub `#24292f` on `#f6f8fa` with no fixed highlight stylesheet.
 - Final gates: independent Standards Review and Spec Review both returned 0 findings at `ae6a798`; GitHub Actions run `29935833579` passed Node 24 and PostgreSQL 17; completion evidence was attached to Issue #11 before it was closed.
 
+## Issues #12–#19 — Twelve-theme Catalog, Sampler, and release (2026-07-23)
+
+Status: Issues #12–#18 are implemented and integrated on `codex/markdown-theme-catalog`; Issue #19 release gates are in progress. The disposable `prototypes/` tree remains untracked and excluded.
+
+- [x] Migrate GitHub and Apple to the shared baseline with system light/dark appearances.
+- [x] Migrate Notion and Claude, remove theme-owned remote fonts, and align real task-list output with the baseline.
+- [x] Add the fixed read-only Theme Sampler to create and admin edit flows.
+- [x] Add validated homepage-only Creator Theme Preference; admin edit remains driven by the stored Share theme.
+- [x] Add Raycast, Google, Tesla, Airbnb, Bugatti, Linear, and PlayStation signatures in the formal Catalog order.
+- [x] Preserve preview/create/API/metadata/admin/public round trips, invalid-value fallback, and non-Markdown compatibility.
+- [x] Run the integrated focused suite, full suite, syntax checks, diff checks, and final real-browser matrices.
+- [ ] Push the release candidate, pass Node 24 plus PostgreSQL 17 CI, and verify Vercel Preview.
+- [ ] Attach evidence and close Issues #12–#18; complete Issue #19 only after production release and live verification.
+
+Integrated verification:
+
+- Catalog order is ByteDance, GitHub, Apple, Notion, Claude, Raycast, Google, Tesla, Airbnb, Bugatti, Linear, PlayStation; the browser projection carries only stable ID, label, and trusted local signature path.
+- Focused Catalog/theme/Sampler tests pass 58/58; the complete Node suite passes 237/237. Changed JavaScript syntax and `git diff --check` pass.
+- The Sampler outer-page matrix passes all 72 combinations: twelve themes × light/dark × 375/768/1440. Every combination keeps the page contained, loads the selected local signature, preserves the accessible name, and keeps the iframe outside sequential focus.
+- The representative rendered-Markdown matrix passes the same 72 combinations with bounded reading width, contained code/table/diagram surfaces, one baseline plus one signature, a non-transparent canvas, and a visible 3px focus outline.
+- Direct 375px Sampler checks pass all twelve themes in both appearances: fixed content fits the 648px frame, the diagram reflows vertically, and no page-level horizontal overflow appears. A 375px boundary is stricter than the 384 CSS px reflow equivalent of a 768px viewport at 200% zoom.
+- Real browser preference checks prove immediate switching makes zero full-preview requests and does not mutate editor content; a valid homepage preference survives reload, an invalid stored value falls back to ByteDance, and admin ignores the homepage preference while retaining the Share's stored theme.
+- Visual contact sheets for all twelve light and dark signatures were inspected from real Chromium output. They are temporary acceptance artifacts and are not part of the repository.
+- The first integrated full run reproduced the existing interrupted-request timing flake (`6 !== 7`); an isolated rerun and the unchanged second full run passed, so no unrelated performance code was modified.
+- Final Standards Review found no hard violations; its only low-priority note was deliberate helper duplication that keeps each vertical ticket independently executable. Final Spec Review returned 0 findings against the formal Catalog, baseline, Sampler, compatibility, and Prototype-exclusion requirements.
+
 ## Site identity icon replacement design (2026-07-22)
 
 Status: complete; asset commit `e2e46e0` is pushed and production deployment `dpl_C9G92ugidV333Rcz2L3vxtfs4YEv` was verified on 2026-07-22.
