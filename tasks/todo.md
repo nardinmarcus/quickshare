@@ -1,5 +1,27 @@
 # QuickShare Optimization Implementation Plan
 
+## Enterprise WeChat social-card OG image cache fix (2026-07-23)
+
+- [x] Confirm the clean isolated worktree is based on current `origin/main`, and verify the local 512 px social image hash.
+- [x] RED: add independent PNG hashing plus homepage and public-Share HTTP assertions for one absolute, content-versioned social image URL and complete image metadata.
+- [x] GREEN: compute the short SHA-256 at startup, centralize origin selection and social image URL construction, and pass the result to both rendering paths.
+- [x] Run the focused resource-policy test, complete Node suite, JavaScript syntax checks, and `git diff --check`.
+- [x] Run the required code review, remediate blocking findings, and record the review evidence below.
+- [ ] Commit, push, deploy the reviewed revision to Production, and verify the exact deployment is `READY`.
+- [ ] Verify live homepage and real public-Share HTML use the same absolute versioned OG image URL; verify versioned and unversioned image bytes both have the expected full SHA-256.
+- [ ] Hand off Enterprise WeChat HITL: resend the link to create a new card; do not claim old message snapshots refresh automatically.
+
+Verify:
+
+1. RED loop -> `NODE_ENV=test VERCEL_ENV= DATABASE_URL= POSTGRES_URL= node --test test/resource-policy.test.js` fails only because current OG image metadata is relative or unversioned/incomplete.
+2. Local image -> `public/icon/web/icon-512.png` hashes to `60b7b9542bb42100e4a090b0da98a2d7724ced25b6026bee20f14112bb51167a`; emitted query version is `60b7b9542bb4`.
+3. URL origin -> `shareBaseUrl` wins over `baseUrl`, which wins over the request origin; both homepage and public Share consume the same centralized result.
+4. Scope -> favicon, functional icons, identity filenames, Manifest behavior, and rendered page visuals remain unchanged.
+5. Production -> deployment is `READY`; homepage and `https://quickshare.namooca.com/view/PiTpTWr-sDUu` expose identical absolute versioned `og:image` plus PNG type, 512x512 dimensions, and alt metadata.
+6. Asset bytes -> production image responses with and without the version query both match the complete expected SHA-256.
+
+Review: RED reproduced the exact relative/unversioned OG URL failure. The focused resource-policy suite passes 7/7 and the complete Node suite passes 242/242; changed JavaScript syntax and `git diff --check` pass. Standards and Spec reviews each returned 0 findings. Commit, push, Production deployment, live HTML/hash evidence, and Enterprise WeChat HITL remain pending.
+
 ## Markdown Theme Sampler layout implementation (2026-07-23)
 
 - [x] RED/GREEN: render the confirmed five-part fixed Theme Sampler without full-document test elements.
