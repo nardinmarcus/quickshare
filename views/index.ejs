@@ -14,123 +14,129 @@
           <span>处理中...</span>
         </div>
 
-        <div id="code-input-container" role="tabpanel">
-          <div class="content-input-toolbar">
-            <label for="html-input" class="content-label">分享内容</label>
-            <div class="content-input-actions">
-              <div id="code-type-indicator" class="code-type-indicator html-type">
-                <i class="fas fa-code" aria-hidden="true"></i>
-                <span id="code-type-text">HTML</span>
-              </div>
-              <label id="upload-file-trigger" for="html-file" class="upload-file-trigger micro-interaction" aria-label="上传文件">
-                <i class="fas fa-file-upload" aria-hidden="true"></i>
-                <span>上传文件</span>
-                <span class="upload-file-badge" aria-hidden="true">常用</span>
-              </label>
-            </div>
-          </div>
-          <textarea id="html-input" class="cyber-input" placeholder="在这里粘贴你的 HTML / Markdown / SVG / Mermaid 代码..."></textarea>
-        </div>
-
-        <div class="hidden">
-          <input id="html-file" type="file" class="hidden" accept=".html,.htm,.md,.markdown,.svg,.mmd,.mermaid" aria-label="上传文件" />
-          <p id="file-name" class="file-name-text"></p>
-        </div>
-
-        <%- include('partials/theme-sampler', {
-          containerId: 'markdown-theme-selector',
-          containerClass: 'markdown-theme-selector hidden',
-          selectId: 'markdown-theme',
-          selectedThemeId: 'bytedance',
-          markdownThemeOptions
-        }) %>
-
-        <section id="publish-settings" class="publish-settings" aria-labelledby="publish-settings-title">
-          <h2 id="publish-settings-title" class="publish-settings-title">发布设置</h2>
-
-          <div class="publish-settings-grid">
-            <div class="publish-field">
-              <label for="share-title">标题（可选）</label>
-              <input type="text" id="share-title" maxlength="160" placeholder="留空时自动提取标题">
-            </div>
-            <div class="publish-field">
-              <label for="share-description">描述（可选）</label>
-              <textarea id="share-description" rows="2" maxlength="500" placeholder="用于分享摘要"></textarea>
-            </div>
-            <div class="publish-field">
-              <label for="share-expires">到期日期（可选）</label>
-              <input type="date" id="share-expires" aria-describedby="share-expires-hint">
-              <span id="share-expires-hint" class="field-hint">将在所选日期结束后到期</span>
-            </div>
-          </div>
-
-          <fieldset class="access-policy">
-            <legend>访问方式</legend>
-            <div class="access-mode-options">
-              <label class="access-mode-option" for="access-link">
-                <input type="radio" id="access-link" name="access-mode" value="link" checked>
-                <span>
-                  <strong>持有链接可访问</strong>
-                  <small>任何拿到链接的人都可以查看</small>
-                </span>
-              </label>
-              <label class="access-mode-option" for="password-toggle">
-                <input type="radio" id="password-toggle" name="access-mode" value="password">
-                <span>
-                  <strong>密码保护</strong>
-                  <small>查看前需要输入访问密码</small>
-                </span>
-              </label>
-            </div>
-
-            <div id="password-settings" class="password-settings hidden">
-              <div id="password-default-mode" class="password-default-mode">
-                <span id="password-mode-summary" aria-live="polite">自动生成 6 位数字密码</span>
-                <button type="button" id="use-custom-password-btn" class="mode-switch-btn">改用自定义密码</button>
-              </div>
-
-              <div id="password-custom-mode" class="password-custom-mode hidden">
-                <label for="custom-password-input">自定义密码</label>
-                <div class="custom-password-row">
-                  <input
-                    type="password"
-                    id="custom-password-input"
-                    class="custom-password-input"
-                    placeholder="4–12 位"
-                    minlength="4"
-                    maxlength="12"
-                    autocomplete="new-password"
-                    aria-describedby="custom-password-hint"
-                    aria-invalid="false"
-                  >
-                  <button type="button" id="toggle-custom-password" class="toggle-password-btn" aria-label="显示密码">
-                    <i class="fas fa-eye" aria-hidden="true"></i>
-                  </button>
-                  <button type="button" id="confirm-custom-password" class="confirm-btn">使用此密码</button>
-                  <button type="button" id="cancel-custom-password" class="mode-switch-btn">使用自动密码</button>
+        <div id="publishing-workbench" class="publishing-workbench">
+          <div class="publishing-editor">
+            <div id="code-input-container" role="tabpanel">
+              <div class="content-input-toolbar">
+                <label for="html-input" class="content-label">分享内容</label>
+                <div class="content-input-actions">
+                  <div id="code-type-indicator" class="code-type-indicator html-type">
+                    <i class="fas fa-code" aria-hidden="true"></i>
+                    <span id="code-type-text">HTML</span>
+                  </div>
+                  <label id="upload-file-trigger" for="html-file" class="upload-file-trigger micro-interaction" aria-label="上传文件">
+                    <i class="fas fa-file-upload" aria-hidden="true"></i>
+                    <span>上传文件</span>
+                    <span class="upload-file-badge" aria-hidden="true">常用</span>
+                  </label>
                 </div>
-                <span id="custom-password-hint" class="field-hint" aria-live="polite">仅限英文字母、数字及 !@#$%^&amp;*()_+-=.,?~</span>
+              </div>
+              <textarea id="html-input" class="cyber-input" placeholder="在这里粘贴你的 HTML / Markdown / SVG / Mermaid 代码..."></textarea>
+            </div>
+
+            <div class="hidden">
+              <input id="html-file" type="file" class="hidden" accept=".html,.htm,.md,.markdown,.svg,.mmd,.mermaid" aria-label="上传文件" />
+              <p id="file-name" class="file-name-text"></p>
+            </div>
+          </div>
+
+          <%- include('partials/theme-sampler', {
+            containerId: 'markdown-theme-selector',
+            containerClass: 'markdown-theme-selector hidden',
+            selectId: 'markdown-theme',
+            selectedThemeId: 'bytedance',
+            markdownThemeOptions
+          }) %>
+
+          <div class="publishing-controls">
+            <section id="publish-settings" class="publish-settings" aria-labelledby="publish-settings-title">
+              <h2 id="publish-settings-title" class="publish-settings-title">发布设置</h2>
+
+              <div class="publish-settings-grid">
+                <div class="publish-field">
+                  <label for="share-title">标题（可选）</label>
+                  <input type="text" id="share-title" maxlength="160" placeholder="留空时自动提取标题">
+                </div>
+                <div class="publish-field">
+                  <label for="share-description">描述（可选）</label>
+                  <textarea id="share-description" rows="2" maxlength="500" placeholder="用于分享摘要"></textarea>
+                </div>
+                <div class="publish-field">
+                  <label for="share-expires">到期日期（可选）</label>
+                  <input type="date" id="share-expires" aria-describedby="share-expires-hint">
+                  <span id="share-expires-hint" class="field-hint">将在所选日期结束后到期</span>
+                </div>
+              </div>
+
+              <fieldset class="access-policy">
+                <legend>访问方式</legend>
+                <div class="access-mode-options">
+                  <label class="access-mode-option" for="access-link">
+                    <input type="radio" id="access-link" name="access-mode" value="link" checked>
+                    <span>
+                      <strong>持有链接可访问</strong>
+                      <small>任何拿到链接的人都可以查看</small>
+                    </span>
+                  </label>
+                  <label class="access-mode-option" for="password-toggle">
+                    <input type="radio" id="password-toggle" name="access-mode" value="password">
+                    <span>
+                      <strong>密码保护</strong>
+                      <small>查看前需要输入访问密码</small>
+                    </span>
+                  </label>
+                </div>
+
+                <div id="password-settings" class="password-settings hidden">
+                  <div id="password-default-mode" class="password-default-mode">
+                    <span id="password-mode-summary" aria-live="polite">自动生成 6 位数字密码</span>
+                    <button type="button" id="use-custom-password-btn" class="mode-switch-btn">改用自定义密码</button>
+                  </div>
+
+                  <div id="password-custom-mode" class="password-custom-mode hidden">
+                    <label for="custom-password-input">自定义密码</label>
+                    <div class="custom-password-row">
+                      <input
+                        type="password"
+                        id="custom-password-input"
+                        class="custom-password-input"
+                        placeholder="4–12 位"
+                        minlength="4"
+                        maxlength="12"
+                        autocomplete="new-password"
+                        aria-describedby="custom-password-hint"
+                        aria-invalid="false"
+                      >
+                      <button type="button" id="toggle-custom-password" class="toggle-password-btn" aria-label="显示密码">
+                        <i class="fas fa-eye" aria-hidden="true"></i>
+                      </button>
+                      <button type="button" id="confirm-custom-password" class="confirm-btn">使用此密码</button>
+                      <button type="button" id="cancel-custom-password" class="mode-switch-btn">使用自动密码</button>
+                    </div>
+                    <span id="custom-password-hint" class="field-hint" aria-live="polite">仅限英文字母、数字及 !@#$%^&amp;*()_+-=.,?~</span>
+                  </div>
+                </div>
+              </fieldset>
+            </section>
+
+            <div class="button-row">
+              <div class="button-group">
+                <button id="clear-button" class="cyber-btn cyber-btn-secondary tooltip micro-interaction" data-tooltip="清空内容" aria-label="清空内容">
+                  <i class="fas fa-eraser mr-1" aria-hidden="true"></i>清除
+                </button>
+                <button id="prepublish-preview-button" class="cyber-btn cyber-btn-secondary micro-interaction" type="button" aria-busy="false">
+                  <i class="fas fa-eye mr-1" aria-hidden="true"></i>安全预览
+                </button>
+                <button id="generate-button" class="cyber-btn cyber-btn-primary tooltip micro-interaction" data-tooltip="发布并生成链接" aria-label="发布并生成链接" aria-busy="false">
+                  <i class="fas fa-link mr-1" aria-hidden="true"></i>发布并生成链接
+                </button>
               </div>
             </div>
-          </fieldset>
-        </section>
 
-        <div class="button-row">
-          <div class="button-group">
-            <button id="clear-button" class="cyber-btn cyber-btn-secondary tooltip micro-interaction" data-tooltip="清空内容" aria-label="清空内容">
-              <i class="fas fa-eraser mr-1" aria-hidden="true"></i>清除
-            </button>
-            <button id="prepublish-preview-button" class="cyber-btn cyber-btn-secondary micro-interaction" type="button" aria-busy="false">
-              <i class="fas fa-eye mr-1" aria-hidden="true"></i>安全预览
-            </button>
-            <button id="generate-button" class="cyber-btn cyber-btn-primary tooltip micro-interaction" data-tooltip="发布并生成链接" aria-label="发布并生成链接" aria-busy="false">
-              <i class="fas fa-link mr-1" aria-hidden="true"></i>发布并生成链接
-            </button>
+            <p id="publish-status" class="publish-status" role="status" aria-live="polite" aria-atomic="true" data-state="idle">准备发布</p>
+            <p id="publish-error" class="publish-error hidden" role="alert" tabindex="-1"></p>
           </div>
         </div>
-
-        <p id="publish-status" class="publish-status" role="status" aria-live="polite" aria-atomic="true" data-state="idle">准备发布</p>
-        <p id="publish-error" class="publish-error hidden" role="alert" tabindex="-1"></p>
       </div>
     </div>
 

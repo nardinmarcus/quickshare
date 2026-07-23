@@ -41,8 +41,8 @@ The reading-first limit that keeps Markdown Theme Presets static and restrained 
 _Avoid_: Immersive landing page, animated theme, decorative spectacle
 
 **Theme Sampler**:
-A compact preview beside the Markdown Theme Catalog control that immediately demonstrates the currently selected Preset through one fixed representative Markdown sample. The same single-preview interaction is available when creating or administratively editing a Markdown Share, while actual Share content remains the responsibility of the full Share preview.
-_Avoid_: Theme gallery, theme card grid, full Share preview
+A fixed representative Markdown sample that immediately demonstrates the currently selected Preset for comparison without displaying actual Share content. The interface names this concept “主题样例” to distinguish it from the full Share preview.
+_Avoid_: Theme preview, preview panel, theme gallery, theme card grid, full Share preview
 
 **Creator Theme Preference**:
 The most recently selected Markdown Theme Preset remembered by one browser for the next new Markdown Share. It does not change the Catalog fallback or override the Preset already stored on an existing Share.

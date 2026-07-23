@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
+const vm = require('node:vm');
 
 process.env.NODE_ENV = 'test';
 process.env.AUTH_ENABLED = 'false';
@@ -84,36 +85,54 @@ test('homepage projects every Catalog option into one labeled fixed Sampler', as
   }
 });
 
-test('the fixed sample covers the agreed roles without editable or runtime content', () => {
+test('homepage renders the fixed Theme Sampler as a compact five-part identification sample', async () => {
+  const homepage = await request('/');
+  const statusTag = homepage.text.match(/<p[^>]*data-theme-sampler-status[^>]*>/)[0];
+  const frameTag = homepage.text.match(/<iframe[^>]*data-theme-sampler-frame[^>]*>/)[0];
+
+  assert.equal(homepage.status, 200);
+  assert.match(homepage.text, />主题样例</);
+  assert.doesNotMatch(statusTag, /\bhidden\b/);
+  assert.match(frameTag, /\bhidden\b/);
+
+  for (const role of ['heading', 'body', 'link', 'quotation', 'fenced-code', 'table']) {
+    assert.match(homepage.text, new RegExp(`data-sample-role="${role}"`));
+  }
+
+  for (const removedRole of ['emphasis', 'list', 'inline-code', 'task', 'keyboard', 'image', 'divider', 'diagram']) {
+    assert.doesNotMatch(homepage.text, new RegExp(`data-sample-role="${removedRole}"`));
+  }
+});
+
+test('homepage groups editing, theme choice, and publishing controls into one ordered workbench', async () => {
+  const homepage = await request('/');
+  const workbenchStart = homepage.text.indexOf('id="publishing-workbench"');
+  const editorPosition = homepage.text.indexOf('class="publishing-editor"');
+  const samplerPosition = homepage.text.indexOf('id="markdown-theme-selector"');
+  const controlsPosition = homepage.text.indexOf('class="publishing-controls"');
+  const settingsPosition = homepage.text.indexOf('id="publish-settings"');
+  const publishPosition = homepage.text.indexOf('id="generate-button"');
+
+  assert.equal(homepage.status, 200);
+  assert.ok(workbenchStart >= 0);
+  assert.ok(workbenchStart < editorPosition);
+  assert.ok(editorPosition < samplerPosition);
+  assert.ok(samplerPosition < controlsPosition);
+  assert.ok(controlsPosition < settingsPosition);
+  assert.ok(settingsPosition < publishPosition);
+});
+
+test('the fixed sample remains read-only and runtime-free', () => {
   const sampler = fs.readFileSync(
     path.join(__dirname, '../views/partials/theme-sampler.ejs'),
     'utf8'
   );
 
-  for (const role of [
-    'heading',
-    'body',
-    'emphasis',
-    'link',
-    'list',
-    'quotation',
-    'inline-code',
-    'fenced-code',
-    'table',
-    'task',
-    'keyboard',
-    'image',
-    'divider',
-    'diagram'
-  ]) {
-    assert.match(sampler, new RegExp(`data-sample-role="${role}"`));
-  }
-
   assert.doesNotMatch(sampler, /textarea|contenteditable|html-input|rendered-preview/i);
   assert.doesNotMatch(sampler, /https?:\/\/|mermaid(?:\.min)?\.js|highlight(?:\.min)?\.js/i);
 });
 
-test('Sampler controller swaps only trusted local styles and never requests full preview', () => {
+test('Sampler controller validates only trusted local styles and never requests full preview', () => {
   const script = fs.readFileSync(
     path.join(__dirname, '../public/js/theme-sampler.js'),
     'utf8'
@@ -122,9 +141,10 @@ test('Sampler controller swaps only trusted local styles and never requests full
   assert.match(script, /selectedOptions\[0\]/);
   assert.match(script, /dataset\.signatureHref/);
   assert.match(script, /\/css\/markdown-theme-baseline\.css/);
+  assert.match(script, /fetch\(href/);
   assert.match(script, /frame\.srcdoc/);
   assert.match(script, /frame\.title/);
-  assert.doesNotMatch(script, /fetch\s*\(|\/api\/pages\/preview|html-input|content-textarea/i);
+  assert.doesNotMatch(script, /\/api\/pages\/preview|html-input|content-textarea/i);
   assert.doesNotMatch(script, /https?:\/\/|mermaid|hljs|highlight\.js/i);
 
   const claudeSignature = fs.readFileSync(
@@ -132,6 +152,70 @@ test('Sampler controller swaps only trusted local styles and never requests full
     'utf8'
   );
   assert.doesNotMatch(claudeSignature, /@import|https?:\/\//i);
+});
+
+test('Sampler rendering failure exposes an inline status without disabling theme choice', async () => {
+  const homepage = await request('/');
+  const script = fs.readFileSync(
+    path.join(__dirname, '../public/js/theme-sampler.js'),
+    'utf8'
+  );
+  const status = { hidden: false, textContent: '样例暂不可用' };
+  let srcdocWrites = 0;
+  const frame = {
+    hidden: true,
+    title: '',
+    set srcdoc(value) {
+      srcdocWrites += value.length > 0 ? 1 : 0;
+    }
+  };
+  const template = { innerHTML: '<p>fixed sample</p>' };
+  const option = {
+    dataset: {
+      themeLabel: 'ByteDance 蓝绿',
+      signatureHref: '/css/markdown-bytedance.css'
+    },
+    textContent: 'ByteDance 蓝绿'
+  };
+  const select = { id: 'markdown-theme', selectedOptions: [option], disabled: false };
+  const root = {
+    dataset: { selectId: select.id },
+    setAttribute() {},
+    querySelector(selector) {
+      if (selector === '[data-theme-sampler-frame]') return frame;
+      if (selector === '[data-theme-sampler-template]') return template;
+      if (selector === '[data-theme-sampler-status]') return status;
+      return null;
+    }
+  };
+  let exposeRoot = false;
+  const document = {
+    getElementById(id) {
+      return id === select.id ? select : null;
+    },
+    querySelectorAll() {
+      return exposeRoot ? [root] : [];
+    }
+  };
+  const window = {};
+  const fetch = async () => ({ ok: false, status: 404, text: async () => '' });
+
+  assert.match(homepage.text, /data-theme-sampler-status[^>]+role="status"[^>]*>样例暂不可用</);
+  vm.runInNewContext(script, { document, fetch, window });
+  exposeRoot = true;
+  const updatePromise = window.ThemeSampler.updateForSelect(select);
+
+  assert.equal(status.hidden, true);
+  assert.equal(frame.hidden, false);
+  assert.equal(srcdocWrites, 1);
+
+  await updatePromise;
+
+  assert.equal(status.hidden, false);
+  assert.equal(status.textContent, '样例暂不可用');
+  assert.equal(frame.hidden, true);
+  assert.equal(select.disabled, false);
+  assert.equal(srcdocWrites, 1);
 });
 
 test('homepage preference is validated against Catalog options and storage failures are silent', () => {
@@ -167,8 +251,9 @@ test('admin Markdown edit uses stored theme and Sampler without Creator Theme Pr
   assert.doesNotMatch(adminScript, /localStorage|quickshare:creator-markdown-theme/);
 });
 
-test('site CSS keeps the sampler compact, focused, and vertically stacked at 375 px', () => {
+test('site CSS keeps the sampler compact and focused at 375 px', () => {
   const css = fs.readFileSync(path.join(__dirname, '../public/css/styles.css'), 'utf8');
+  const script = fs.readFileSync(path.join(__dirname, '../public/js/theme-sampler.js'), 'utf8');
 
   assert.match(css, /\.theme-sampler-settings\s*\{[^}]*display:\s*grid/s);
   assert.match(css, /\.theme-sampler-settings\.hidden\s*\{[^}]*display:\s*none/s);
@@ -180,7 +265,26 @@ test('site CSS keeps the sampler compact, focused, and vertically stacked at 375
     /@media \(max-width:\s*480px\)[\s\S]*?\.theme-sampler-settings\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s
   );
   assert.match(
-    fs.readFileSync(path.join(__dirname, '../public/js/theme-sampler.js'), 'utf8'),
-    /@media \(max-width:\s*420px\)[\s\S]*?\.theme-sampler-diagram\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s
+    script,
+    /\.markdown-body\.theme-sampler-body\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/s
   );
+  assert.doesNotMatch(script, /theme-sampler-(?:diagram|image|assets|grid)/);
+});
+
+test('homepage CSS gives the visible Theme Sampler a bounded 1024 px workbench column', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../public/css/styles.css'), 'utf8');
+
+  assert.match(
+    css,
+    /@media \(min-width:\s*1024px\)[\s\S]*?\.publishing-workbench:has\(\.markdown-theme-selector:not\(\.hidden\)\)\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) minmax\(300px,\s*320px\)/s
+  );
+  assert.match(
+    css,
+    /@media \(min-width:\s*1024px\)[\s\S]*?\.markdown-theme-selector\s*\{[^}]*position:\s*sticky[^}]*max-width:\s*340px/s
+  );
+  assert.match(
+    css,
+    /\[data-page="home-page"\] \.markdown-theme-selector \.theme-sampler-frame\s*\{[^}]*height:\s*200px/s
+  );
+  assert.doesNotMatch(css, /\.theme-sampler-frame\s*\{[^}]*height:\s*(?:440|650)px/s);
 });
