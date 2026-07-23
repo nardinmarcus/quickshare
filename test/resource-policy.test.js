@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
@@ -119,6 +120,35 @@ function assertHasUmamiTracker(html) {
     /<script defer src="https:\/\/umami\.namooca\.com\/script\.js" data-website-id="c5b79d49-f1e7-46c1-87c7-b2965383c820"><\/script>/
   );
 }
+
+function assertSocialImageMetadata(html, expectedUrl) {
+  const imageUrls = Array.from(
+    html.matchAll(/<meta property="og:image" content="([^"]+)">/g),
+    (match) => match[1]
+  );
+
+  assert.deepEqual(imageUrls, [expectedUrl]);
+  assert.match(html, /<meta property="og:image:type" content="image\/png">/);
+  assert.match(html, /<meta property="og:image:width" content="512">/);
+  assert.match(html, /<meta property="og:image:height" content="512">/);
+  assert.match(html, /<meta property="og:image:alt" content="QuickShare Site Identity Icon">/);
+}
+
+test('homepage and public Share expose one absolute content-versioned social image', async () => {
+  const imageBytes = fs.readFileSync(path.join(__dirname, '../public/icon/web/icon-512.png'));
+  const imageHash = crypto.createHash('sha256').update(imageBytes).digest('hex');
+  const expectedUrl = `${baseUrl}/icon/web/icon-512.png?v=${imageHash.slice(0, 12)}`;
+  const [homepage, sharePage] = await Promise.all([
+    request('/', { headers: { Cookie: homeCookie } }),
+    request('/view/resource-public')
+  ]);
+
+  assert.equal(homepage.status, 200);
+  assert.equal(sharePage.status, 200);
+  assert.equal(imageHash, '60b7b9542bb42100e4a090b0da98a2d7724ced25b6026bee20f14112bb51167a');
+  assertSocialImageMetadata(homepage.text, expectedUrl);
+  assertSocialImageMetadata(sharePage.text, expectedUrl);
+});
 
 test('each trusted route loads only the scripts it uses', async () => {
   const [homepage, loginPage, passwordPage, errorPage, statsPage, auditPage, apiPage] = await Promise.all([

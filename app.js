@@ -1,6 +1,8 @@
 require('dotenv').config();
 
 const express = require('express');
+const { createHash, randomBytes, timingSafeEqual } = require('node:crypto');
+const fs = require('node:fs');
 const path = require('path');
 const bodyParser = require('body-parser');
 const morgan = require('morgan');
@@ -46,6 +48,11 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const FAVICON_PATH = path.join(PUBLIC_DIR, 'icon/web/favicon.ico');
 const STATIC_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 const STATIC_CACHE_CONTROL = 'public, max-age=300, must-revalidate';
+const SOCIAL_IMAGE_PATH = '/icon/web/icon-512.png';
+const SOCIAL_IMAGE_VERSION = createHash('sha256')
+  .update(fs.readFileSync(path.join(PUBLIC_DIR, SOCIAL_IMAGE_PATH)))
+  .digest('hex')
+  .slice(0, 12);
 const EMBEDDABLE_UI_CSP = [
   "default-src 'self'",
   "base-uri 'none'",
@@ -60,7 +67,6 @@ const EMBEDDABLE_UI_CSP = [
   "frame-src 'self'"
 ].join('; ');
 const TRUSTED_UI_CSP = `${EMBEDDABLE_UI_CSP}; frame-ancestors 'none'`;
-const { randomBytes, timingSafeEqual } = require('crypto');
 let nextViewRequestIsColdStart = true;
 
 const app = express();
@@ -117,6 +123,10 @@ app.use(express.static(PUBLIC_DIR, {
   etag: true,
   setHeaders: setStaticCacheHeaders
 }));
+app.use((req, res, next) => {
+  res.locals.socialImageUrl = socialImageUrl(req);
+  return next();
+});
 
 function setPrivateNoStore(res) {
   res.set('Cache-Control', 'private, no-store');
@@ -771,6 +781,7 @@ function renderSandboxedDocument(renderedContent, contentType, {
   title,
   description,
   pageUrl,
+  socialImageUrl,
   viewEventUrl
 } = {}) {
   const escapedContent = escapeHtml(renderedContent);
@@ -790,7 +801,11 @@ function renderSandboxedDocument(renderedContent, contentType, {
       <meta property="og:description" content="${ogDescription}">
       <meta property="og:type" content="article">
       ${ogUrl ? `<meta property="og:url" content="${ogUrl}">` : ''}
-      <meta property="og:image" content="/icon/web/icon-512.png">
+      <meta property="og:image" content="${escapeHtml(socialImageUrl)}">
+      <meta property="og:image:type" content="image/png">
+      <meta property="og:image:width" content="512">
+      <meta property="og:image:height" content="512">
+      <meta property="og:image:alt" content="QuickShare Site Identity Icon">
       <meta name="twitter:card" content="summary">
       <meta name="twitter:title" content="${pageTitle}">
       <meta name="twitter:description" content="${ogDescription}">
@@ -872,8 +887,16 @@ function buildAdminPagesUrl(filters, overrides = {}) {
 }
 
 function publicPageUrl(req, id) {
+  return `${publicOrigin(req)}/view/${encodeURIComponent(id)}`;
+}
+
+function publicOrigin(req) {
   const base = config.shareBaseUrl || config.baseUrl || `${req.protocol}://${req.get('host')}`;
-  return `${base.replace(/\/+$/, '')}/view/${encodeURIComponent(id)}`;
+  return base.replace(/\/+$/, '');
+}
+
+function socialImageUrl(req) {
+  return `${publicOrigin(req)}${SOCIAL_IMAGE_PATH}?v=${SOCIAL_IMAGE_VERSION}`;
 }
 
 function enrichAdminStats(stats) {
@@ -1011,7 +1034,8 @@ app.get('/', privateNoStore, requireHomepageAccess, (req, res) => {
     title: 'QuickShare | 粘贴代码，一键分享',
     page: 'home-page',
     csrfToken: req.homepageAccessMode === 'locked' ? createCsrfToken(sessionToken) : '',
-    markdownThemeOptions: getMarkdownThemeOptions()
+    markdownThemeOptions: getMarkdownThemeOptions(),
+    socialImageUrl: socialImageUrl(req)
   });
 });
 
@@ -1662,7 +1686,8 @@ app.post('/api/pages/preview', privateNoStore, requireBrowserPublishAccess, pars
       codeType: prepared.contentType,
       document: renderSandboxedDocument(prepared.renderedContent, prepared.contentType, {
         title: title ? String(title).trim() : null,
-        description: description ? String(description).trim() : null
+        description: description ? String(description).trim() : null,
+        socialImageUrl: socialImageUrl(req)
       })
     });
   } catch (error) {
@@ -1982,6 +2007,7 @@ app.get('/view/:id', async (req, res) => {
       title: page.title,
       description: page.description,
       pageUrl,
+      socialImageUrl: socialImageUrl(req),
       viewEventUrl
     }));
   } catch (error) {
