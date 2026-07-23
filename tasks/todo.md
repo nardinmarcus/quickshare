@@ -1,5 +1,16 @@
 # QuickShare Optimization Implementation Plan
 
+## Markdown Theme Sampler layout implementation (2026-07-23)
+
+- [x] RED/GREEN: render the confirmed five-part fixed Theme Sampler without full-document test elements.
+- [x] RED/GREEN: place the homepage publishing flow and Theme Sampler in the confirmed desktop workbench layout while preserving admin placement.
+- [x] RED/GREEN: provide non-blocking Sampler failure feedback through the browser interface.
+- [x] Verify focused tests, full Node suite, browser geometry matrix, accessibility, and no console errors (241/241 tests; 375–1440 px browser matrix).
+- [x] Run two-axis code review against `origin/main` and the confirmed design spec; remediate findings.
+- [x] Commit the reviewed implementation on `codex/markdown-theme-sampler-layout`.
+
+Review: Standards and Spec reviewers each returned 0 findings after remediation. The Sampler now starts from a safe fallback, shows the sample synchronously during trusted local CSS validation, and restores the non-blocking fallback on a real resource failure. Focused tests pass 10/10, the complete Node suite passes 241/241, and both normal and CSS-abort browser paths pass.
+
 Status: Phases 0–3 deployed on 2026-07-15; the representative WP8 traffic baseline remains in passive collection.
 
 ## Issue #11 — Markdown Theme Catalog, shared baseline, and ByteDance tracer (2026-07-22)

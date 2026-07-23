@@ -302,6 +302,16 @@ body {
   min-height: auto;
 }
 
+[data-page="home-page"] .input-section {
+  overflow: visible;
+}
+
+[data-page="home-page"] .publishing-workbench,
+[data-page="home-page"] .publishing-editor,
+[data-page="home-page"] .publishing-controls {
+  min-width: 0;
+}
+
 [data-page="home-page"] .publish-settings {
   margin-top: var(--home-section-gap);
   padding-top: var(--home-section-gap);
@@ -4890,14 +4900,39 @@ body:hover::-webkit-scrollbar,
   min-width: 0;
 }
 
+.theme-sampler-heading {
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.theme-sampler-status {
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
 .theme-sampler-frame {
   display: block;
   width: 100%;
   min-width: 0;
-  height: 440px;
+  height: 240px;
   border: 1px solid var(--border-color);
   border-radius: 10px;
   background: #ffffff;
+}
+
+[data-page="home-page"] .markdown-theme-selector {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+[data-page="home-page"] .markdown-theme-selector .theme-sampler-frame {
+  height: 200px;
 }
 
 #theme-field {
@@ -4910,7 +4945,43 @@ body:hover::-webkit-scrollbar,
   }
 
   .theme-sampler-frame {
-    height: 650px;
+    height: 220px;
+  }
+}
+
+@media (min-width: 1024px) {
+  [data-page="home-page"] .publishing-workbench:has(.markdown-theme-selector:not(.hidden)) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 320px);
+    grid-template-areas:
+      "editor sampler"
+      "controls sampler";
+    column-gap: 1rem;
+    align-items: start;
+  }
+
+  [data-page="home-page"] .publishing-editor {
+    grid-area: editor;
+  }
+
+  [data-page="home-page"] .publishing-controls {
+    grid-area: controls;
+  }
+
+  [data-page="home-page"] .markdown-theme-selector {
+    grid-area: sampler;
+    position: sticky;
+    top: 1rem;
+    width: 100%;
+    max-width: 340px;
+    margin-top: 0;
+    padding: 0 0 0 1rem;
+    border-top: 0;
+    border-left: 1px solid var(--divider-color);
+  }
+
+  [data-page="home-page"] .markdown-theme-selector .theme-sampler-frame {
+    height: 220px;
   }
 }
 

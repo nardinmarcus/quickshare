@@ -2,79 +2,51 @@
   const baselineHref = '/css/markdown-theme-baseline.css';
   const fallbackSignatureHref = '/css/markdown-bytedance.css';
   const trustedSignaturePattern = /^\/css\/markdown-[a-z]+\.css$/;
+  const stylesheetCache = new Map();
+  const renderVersions = new WeakMap();
   const compactStyles = `
     :root { --theme-reading-padding: 14px; }
     html, body { min-height: 0; }
     body { overflow-x: hidden; }
     .markdown-body.theme-sampler-body {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px 8px;
       width: 100%;
       max-width: none;
-      padding: 14px;
-      font-size: 12px;
-      line-height: 1.45;
+      padding: 10px;
+      overflow: hidden;
+      font-size: 11px;
+      line-height: 1.3;
     }
-    .theme-sampler-body :where(h1, h2, p, ul, blockquote, pre, table, figure, hr) {
-      margin-top: 0;
-      margin-bottom: 8px;
+    .theme-sampler-intro,
+    .theme-sampler-body table {
+      grid-column: 1 / -1;
+    }
+    .theme-sampler-intro {
+      display: grid;
+      gap: 4px;
+    }
+    .markdown-body.theme-sampler-body :where(h1, p, blockquote, pre, table) {
+      margin: 0;
     }
     .theme-sampler-body h1 {
       max-width: 100%;
-      margin: 0 0 10px;
-      padding: 8px 12px;
-      font-size: 20px;
-      line-height: 1.2;
+      padding: 4px 8px;
+      font-size: 17px;
+      line-height: 1.15;
       text-align: left;
     }
-    .theme-sampler-body h2 {
-      max-width: 100%;
-      margin: 0 0 7px;
-      padding: 5px 8px;
-      font-size: 15px;
-      line-height: 1.25;
-    }
-    .theme-sampler-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
-    }
-    .theme-sampler-body :where(ul, ol) { padding-left: 20px; }
-    .theme-sampler-body blockquote { padding: 7px 9px 7px 14px; }
-    .theme-sampler-body pre { padding: 8px; font-size: 11px; }
-    .theme-sampler-body table { width: 100%; }
-    .theme-sampler-body :where(th, td) { padding: 5px 7px; }
-    .theme-sampler-assets {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
-      align-items: start;
-    }
-    .theme-sampler-image { display: grid; gap: 3px; }
-    .theme-sampler-image svg { width: 100%; height: 54px; }
-    .theme-sampler-image figcaption { color: var(--theme-muted); font-size: 11px; }
-    .theme-sampler-diagram {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1fr);
-      align-items: center;
-      gap: 6px;
-      padding: 8px;
-      overflow: hidden;
-      color: var(--theme-diagram-text);
-      background: var(--theme-diagram-surface);
-      border: 1px solid var(--theme-border);
-      border-radius: 8px;
-    }
-    .theme-sampler-diagram span {
+    .theme-sampler-body blockquote { padding: 5px 8px; }
+    .theme-sampler-body pre {
+      min-width: 0;
       padding: 6px;
-      text-align: center;
-      background: var(--theme-diagram-node-surface);
-      border: 1px solid var(--theme-diagram-node-border);
-      border-radius: 6px;
+      overflow: hidden;
+      font-size: 10px;
+      white-space: pre-wrap;
     }
-    .theme-sampler-diagram i { height: 2px; background: var(--theme-diagram-line); }
-    @media (max-width: 420px) {
-      .theme-sampler-diagram { grid-template-columns: minmax(0, 1fr); }
-      .theme-sampler-diagram i { width: 2px; height: 14px; margin-inline: auto; }
-    }
+    .theme-sampler-body table { width: 100%; }
+    .theme-sampler-body :where(th, td) { padding: 3px 5px; }
   `;
 
   function trustedSignatureHref(option) {
@@ -96,21 +68,67 @@
       </html>`;
   }
 
-  function update(root) {
+  function loadStylesheet(href) {
+    if (stylesheetCache.has(href)) return stylesheetCache.get(href);
+
+    const request = fetch(href, { credentials: 'same-origin' })
+      .then(async response => {
+        if (!response.ok) throw new Error(`Stylesheet request failed: ${response.status}`);
+        return response.text();
+      })
+      .catch(error => {
+        stylesheetCache.delete(href);
+        throw error;
+      });
+    stylesheetCache.set(href, request);
+    return request;
+  }
+
+  function showUnavailable(frame, status) {
+    if (frame) frame.hidden = true;
+    if (status) {
+      status.textContent = '样例暂不可用';
+      status.hidden = false;
+    }
+  }
+
+  async function update(root) {
     if (!root) return;
+
+    const renderVersion = (renderVersions.get(root) || 0) + 1;
+    renderVersions.set(root, renderVersion);
 
     const select = document.getElementById(root.dataset.selectId);
     const frame = root.querySelector('[data-theme-sampler-frame]');
     const template = root.querySelector('[data-theme-sampler-template]');
+    const status = root.querySelector('[data-theme-sampler-status]');
     const option = select && select.selectedOptions[0];
 
-    if (!select || !frame || !template || !option) return;
+    if (!select || !frame || !template || !option) {
+      showUnavailable(frame, status);
+      return;
+    }
 
     const label = option.dataset.themeLabel || option.textContent.trim();
     const accessibleName = `${label}主题样例`;
     root.setAttribute('aria-label', accessibleName);
     frame.title = accessibleName;
-    frame.srcdoc = samplerDocument(template.innerHTML.trim(), trustedSignatureHref(option));
+
+    try {
+      const signatureHref = trustedSignatureHref(option);
+      frame.srcdoc = samplerDocument(template.innerHTML.trim(), signatureHref);
+      frame.hidden = false;
+      if (status) status.hidden = true;
+
+      await Promise.all([
+        loadStylesheet(baselineHref),
+        loadStylesheet(signatureHref)
+      ]);
+      if (renderVersions.get(root) !== renderVersion) return;
+    } catch (error) {
+      if (renderVersions.get(root) !== renderVersion) return;
+      showUnavailable(frame, status);
+    }
   }
 
   function bind(root) {
@@ -125,7 +143,7 @@
     if (!select) return;
     const root = Array.from(document.querySelectorAll('[data-theme-sampler]'))
       .find(candidate => candidate.dataset.selectId === select.id);
-    update(root);
+    return update(root);
   }
 
   Array.from(document.querySelectorAll('[data-theme-sampler]')).forEach(bind);
