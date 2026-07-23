@@ -7,9 +7,9 @@
 - [x] GREEN: compute the short SHA-256 at startup, centralize origin selection and social image URL construction, and pass the result to both rendering paths.
 - [x] Run the focused resource-policy test, complete Node suite, JavaScript syntax checks, and `git diff --check`.
 - [x] Run the required code review, remediate blocking findings, and record the review evidence below.
-- [ ] Commit, push, deploy the reviewed revision to Production, and verify the exact deployment is `READY`.
-- [ ] Verify live homepage and real public-Share HTML use the same absolute versioned OG image URL; verify versioned and unversioned image bytes both have the expected full SHA-256.
-- [ ] Hand off Enterprise WeChat HITL: resend the link to create a new card; do not claim old message snapshots refresh automatically.
+- [x] Commit, push, deploy the reviewed revision to Production, and verify the exact deployment is `READY`.
+- [x] Verify live homepage and real public-Share HTML use the same absolute versioned OG image URL; verify versioned and unversioned image bytes both have the expected full SHA-256.
+- [x] Hand off Enterprise WeChat HITL: resend the link to create a new card; do not claim old message snapshots refresh automatically.
 
 Verify:
 
@@ -20,7 +20,7 @@ Verify:
 5. Production -> deployment is `READY`; homepage and `https://quickshare.namooca.com/view/PiTpTWr-sDUu` expose identical absolute versioned `og:image` plus PNG type, 512x512 dimensions, and alt metadata.
 6. Asset bytes -> production image responses with and without the version query both match the complete expected SHA-256.
 
-Review: RED reproduced the exact relative/unversioned OG URL failure. The focused resource-policy suite passes 7/7 and the complete Node suite passes 242/242; changed JavaScript syntax and `git diff --check` pass. Standards and Spec reviews each returned 0 findings. Commit, push, Production deployment, live HTML/hash evidence, and Enterprise WeChat HITL remain pending.
+Review: RED reproduced the exact relative/unversioned OG URL failure. The focused resource-policy suite passes 7/7 and the complete Node suite passes 242/242; changed JavaScript syntax and `git diff --check` pass. Standards and Spec reviews each returned 0 findings. Implementation commit `def15b9` is pushed. Production deployment `dpl_GRUZoCtXW3YfJR27zgYehbJ7W4AE` reached READY and was aliased to `quickshare.namooca.com`. Browser and Enterprise WeChat user agents both received the same complete OG image metadata on the homepage and real public Share. Versioned and unversioned image responses were both 48,799-byte PNG files with SHA-256 `60b7b9542bb42100e4a090b0da98a2d7724ced25b6026bee20f14112bb51167a`. Enterprise WeChat still requires a newly sent link for human verification; old message snapshots are not expected to refresh.
 
 ## Markdown Theme Sampler layout implementation (2026-07-23)
 
