@@ -12,6 +12,7 @@ process.env.SESSION_SECRET = 'markdown-theme-ticket-15-secret';
 const app = require('../app');
 const { renderMarkdown } = require('../utils/contentRenderer');
 const {
+  MARKDOWN_CANVAS,
   MARKDOWN_THEME_CATALOG,
   resolveMarkdownTheme
 } = require('../utils/markdownThemeCatalog');
@@ -67,7 +68,6 @@ function jsonRequest(route, method, value, headers = {}) {
 }
 
 const SEMANTIC_TOKENS = [
-  'canvas',
   'text',
   'muted',
   'accent',
@@ -166,14 +166,19 @@ test('Issue #15 signatures provide complete light and dark semantic token sets w
   for (const [id] of TICKET_THEMES) {
     const css = readSignature(id);
 
-    for (const declarations of [rootDeclarations(css), darkDeclarations(css)]) {
+    for (const [appearance, declarations] of [['light', rootDeclarations(css)], ['dark', darkDeclarations(css)]]) {
       for (const token of SEMANTIC_TOKENS) {
         assert.match(tokenValue(declarations, token), /^#[0-9a-f]{6}$/i);
       }
 
+      // 页面底色由共享 baseline 提供（中性色），对比度按实际页面底色校验
+      const roleValue = (token) => token === 'canvas'
+        ? MARKDOWN_CANVAS[appearance]
+        : tokenValue(declarations, token);
+
       for (const [foreground, background, minimum] of contrastPairs) {
         assert.ok(
-          contrast(tokenValue(declarations, foreground), tokenValue(declarations, background)) >= minimum,
+          contrast(roleValue(foreground), roleValue(background)) >= minimum,
           `${id} ${foreground}/${background} contrast must be at least ${minimum}:1`
         );
       }
@@ -208,8 +213,8 @@ test('Issue #15 keeps Raycast deeper and more plum-tonal while Linear stays flat
     'Raycast accent must be more saturated than Linear accent'
   );
   assert.ok(
-    Math.abs(relativeLuminance(tokenValue(raycastLight, 'tool-surface')) - relativeLuminance(tokenValue(raycastLight, 'canvas')))
-      > Math.abs(relativeLuminance(tokenValue(linearLight, 'tool-surface')) - relativeLuminance(tokenValue(linearLight, 'canvas'))),
+    Math.abs(relativeLuminance(tokenValue(raycastLight, 'tool-surface')) - relativeLuminance(MARKDOWN_CANVAS.light))
+      > Math.abs(relativeLuminance(tokenValue(linearLight, 'tool-surface')) - relativeLuminance(MARKDOWN_CANVAS.light)),
     'Raycast tool surface must have more tonal depth than Linear tool surface'
   );
   assert.match(raycast, /box-shadow:\s*var\(--theme-surface-shadow\)/);

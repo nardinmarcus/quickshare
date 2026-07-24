@@ -11,25 +11,24 @@ process.env.SESSION_SECRET = 'markdown-theme-signatures-12-secret';
 
 const app = require('../app');
 const { renderMarkdown } = require('../utils/contentRenderer');
-const { resolveMarkdownTheme } = require('../utils/markdownThemeCatalog');
+const { MARKDOWN_CANVAS, resolveMarkdownTheme } = require('../utils/markdownThemeCatalog');
 
 const PRESETS = Object.freeze([
   {
     id: 'github',
-    lightCanvas: '#ffffff',
-    darkCanvas: '#0d1117',
+    lightCanvas: MARKDOWN_CANVAS.light,
+    darkCanvas: MARKDOWN_CANVAS.dark,
     source: fs.readFileSync(path.join(__dirname, '../public/css/markdown-github.css'), 'utf8')
   },
   {
     id: 'apple',
-    lightCanvas: '#ffffff',
-    darkCanvas: '#000000',
+    lightCanvas: MARKDOWN_CANVAS.light,
+    darkCanvas: MARKDOWN_CANVAS.dark,
     source: fs.readFileSync(path.join(__dirname, '../public/css/markdown-apple.css'), 'utf8')
   }
 ]);
 
 const SHARED_THEME_TOKENS = Object.freeze([
-  'canvas',
   'text',
   'muted',
   'accent',

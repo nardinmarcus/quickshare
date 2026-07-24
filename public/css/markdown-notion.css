@@ -1,6 +1,5 @@
 /* Notion 笔记 signature: warm-neutral knowledge surfaces and explicit task state. */
 :root {
-  --theme-canvas: #fbfbfa;
   --theme-text: #37352f;
   --theme-muted: #5f5e59;
   --theme-accent: #326b88;
@@ -181,7 +180,6 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --theme-canvas: #191919;
     --theme-text: #e8e7e3;
     --theme-muted: #b9b7b0;
     --theme-accent: #74b4d3;

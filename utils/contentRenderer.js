@@ -494,16 +494,7 @@ async function renderMarkdown(content, theme) {
       
       <link rel="stylesheet" href="${MARKDOWN_THEME_BASELINE_HREF}">
       <link rel="stylesheet" href="${themeCss}">
-      <style>
-        :root {
-          --theme-canvas: ${resolvedTheme.appearances.light.canvas};
-        }
-        @media (prefers-color-scheme: dark) {
-          :root {
-            --theme-canvas: ${resolvedTheme.appearances.dark.canvas};
-          }
-        }
-        ${embeddedStyles}
+      <style>${embeddedStyles}
       </style>
       ${mermaidAssets}
     </head>

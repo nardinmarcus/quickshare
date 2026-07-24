@@ -1,6 +1,5 @@
 /* Claude 暖调 signature: warm editorial paper, system serif, and terracotta. */
 :root {
-  --theme-canvas: #faf7f2;
   --theme-text: #3d392f;
   --theme-muted: #686056;
   --theme-accent: #984b32;
@@ -195,7 +194,6 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --theme-canvas: #211e1a;
     --theme-text: #f1e8dc;
     --theme-muted: #c1b3a4;
     --theme-accent: #e39a79;

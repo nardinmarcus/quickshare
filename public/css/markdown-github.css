@@ -1,7 +1,6 @@
 /* GitHub 经典 — QuickShare brand-inspired Markdown signature */
 
 :root {
-  --theme-canvas: #ffffff;
   --theme-text: #1f2328;
   --theme-muted: #59636e;
   --theme-accent: #0969da;
@@ -196,7 +195,6 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --theme-canvas: #0d1117;
     --theme-text: #e6edf3;
     --theme-muted: #9da7b3;
     --theme-accent: #58a6ff;

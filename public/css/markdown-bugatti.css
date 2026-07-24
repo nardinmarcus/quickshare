@@ -1,7 +1,6 @@
 /* Bugatti 蓝曜 — ice, carbon, blue, and restrained metal */
 
 :root {
-  --theme-canvas: #f4f8fc;
   --theme-text: #171b21;
   --theme-muted: #505b68;
   --theme-heading: #0b0e12;
@@ -225,7 +224,6 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --theme-canvas: #0b0e12;
     --theme-text: #e7edf4;
     --theme-muted: #aeb9c5;
     --theme-heading: #f4f8fc;

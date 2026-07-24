@@ -5,6 +5,7 @@ const path = require('node:path');
 
 const {
   DEFAULT_MARKDOWN_THEME_ID,
+  MARKDOWN_CANVAS,
   MARKDOWN_THEME_CATALOG,
   getMarkdownThemeOptions,
   resolveMarkdownTheme,
@@ -44,6 +45,33 @@ test('Catalog owns the ordered existing theme identities and trusted assets', ()
       assert.match(appearance.canvas, /^#[0-9a-f]{6}$/i);
       assert.match(appearance.themeColor, /^#[0-9a-f]{6}$/i);
     }
+  }
+});
+
+test('Every theme shares the neutral baseline canvas instead of a tinted page background', () => {
+  const baseline = fs.readFileSync(
+    path.join(__dirname, '../public/css/markdown-theme-baseline.css'),
+    'utf8'
+  );
+
+  assert.match(baseline, new RegExp(`--theme-canvas:\\s*${MARKDOWN_CANVAS.light}`, 'i'));
+  assert.match(baseline, new RegExp(`--theme-canvas:\\s*${MARKDOWN_CANVAS.dark}`, 'i'));
+
+  for (const theme of MARKDOWN_THEME_CATALOG) {
+    assert.equal(theme.appearances.light.canvas, MARKDOWN_CANVAS.light);
+    assert.equal(theme.appearances.light.themeColor, MARKDOWN_CANVAS.light);
+    assert.equal(theme.appearances.dark.canvas, MARKDOWN_CANVAS.dark);
+    assert.equal(theme.appearances.dark.themeColor, MARKDOWN_CANVAS.dark);
+
+    const signature = fs.readFileSync(
+      path.join(__dirname, `../public/css/markdown-${theme.id}.css`),
+      'utf8'
+    );
+    assert.doesNotMatch(
+      signature,
+      /--theme-canvas\s*:/,
+      `${theme.id} must not override the shared neutral page canvas`
+    );
   }
 });
 

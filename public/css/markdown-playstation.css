@@ -2,7 +2,6 @@
 
 :root {
   --theme-reading-width: 880px;
-  --theme-canvas: #f1f7ff;
   --theme-text: #18304f;
   --theme-muted: #536b87;
   --theme-heading: #102b4d;
@@ -247,7 +246,6 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --theme-canvas: #071629;
     --theme-text: #e8f3ff;
     --theme-muted: #a8bfd8;
     --theme-heading: #f1f7ff;

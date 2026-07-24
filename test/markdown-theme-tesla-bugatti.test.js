@@ -12,6 +12,7 @@ process.env.SESSION_SECRET = 'tesla-bugatti-theme-secret';
 const app = require('../app');
 const { renderMarkdown } = require('../utils/contentRenderer');
 const {
+  MARKDOWN_CANVAS,
   MARKDOWN_THEME_CATALOG,
   getMarkdownThemeOptions,
   resolveMarkdownTheme
@@ -21,14 +22,14 @@ const THEMES = [
   {
     id: 'tesla',
     label: 'Tesla 黑白',
-    light: '#ffffff',
-    dark: '#050505'
+    light: MARKDOWN_CANVAS.light,
+    dark: MARKDOWN_CANVAS.dark
   },
   {
     id: 'bugatti',
     label: 'Bugatti 蓝曜',
-    light: '#f4f8fc',
-    dark: '#0b0e12'
+    light: MARKDOWN_CANVAS.light,
+    dark: MARKDOWN_CANVAS.dark
   }
 ];
 
@@ -126,8 +127,10 @@ test('Tesla and Bugatti render only their trusted local signatures after the sha
     assert.ok(baselinePosition >= 0);
     assert.ok(signaturePosition > baselinePosition);
     assert.match(html, new RegExp(`data-markdown-theme="${id}"`));
-    assert.match(html, new RegExp(`--theme-canvas: ${light}`));
-    assert.match(html, new RegExp(`--theme-canvas: ${dark}`));
+    assert.match(html, new RegExp(`<meta name="theme-color" content="${light}" media="\\(prefers-color-scheme: light\\)">`));
+    assert.match(html, new RegExp(`<meta name="theme-color" content="${dark}" media="\\(prefers-color-scheme: dark\\)">`));
+    // 页面底色由共享 baseline 提供（中性色），渲染器不再注入每主题的画布覆盖
+    assert.doesNotMatch(html, /--theme-canvas:/);
     assert.doesNotMatch(html, /fonts\.googleapis\.com|https?:\/\/[^"']+\.(?:css|woff2?|png|jpe?g|webp|svg)/i);
   }
 });
@@ -137,7 +140,7 @@ test('Tesla signature keeps hard monochrome hierarchy and a smaller compact Samp
   const longForm = css.match(/\.markdown-body h1\s*\{[^}]*font-size:\s*clamp\([^,]+,[^,]+,\s*([0-9.]+)rem\)/s);
   const sampler = css.match(/\.theme-sampler \.markdown-body h1\s*\{[^}]*font-size:\s*clamp\([^,]+,[^,]+,\s*([0-9.]+)rem\)/s);
 
-  assert.match(css, /--theme-canvas:\s*#ffffff/i);
+  assert.doesNotMatch(css, /--theme-canvas\s*:/i);
   assert.match(css, /--theme-text:\s*#050505/i);
   assert.match(css, /\.markdown-body h1\s*\{[^}]*text-transform:\s*uppercase/s);
   assert.match(css, /\.markdown-body h1\s*\{[^}]*border-(?:top|block-start):\s*1px solid/s);
@@ -151,7 +154,7 @@ test('Tesla signature keeps hard monochrome hierarchy and a smaller compact Samp
 test('Bugatti signature uses ice/carbon polarity, vivid blue focus, metallic rules, and one restrained facet', () => {
   const css = readSignature('bugatti');
 
-  assert.match(css, /--theme-canvas:\s*#f4f8fc/i);
+  assert.doesNotMatch(css, /--theme-canvas\s*:/i);
   assert.match(css, /--theme-carbon:\s*#0b0e12/i);
   assert.match(css, /--theme-focus:\s*#0057ff/i);
   assert.match(css, /--theme-metal:/i);

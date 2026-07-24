@@ -82,8 +82,8 @@ test('renderMarkdown derives light and dark wrapper metadata from the resolved C
     html,
     new RegExp(`<meta name="theme-color" content="${theme.appearances.dark.themeColor}" media="\\(prefers-color-scheme: dark\\)">`)
   );
-  assert.match(html, new RegExp(`--theme-canvas: ${theme.appearances.light.canvas}`));
-  assert.match(html, new RegExp(`--theme-canvas: ${theme.appearances.dark.canvas}`));
+  // 页面底色由共享 baseline 统一提供（中性色），渲染器不再注入每主题的画布覆盖
+  assert.doesNotMatch(html, /--theme-canvas:/);
 });
 
 test('renderMarkdown never reflects an invalid theme into an asset URL', async () => {

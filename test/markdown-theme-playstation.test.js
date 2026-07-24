@@ -12,6 +12,7 @@ process.env.SESSION_SECRET = 'playstation-theme-secret';
 const app = require('../app');
 const { renderMarkdown } = require('../utils/contentRenderer');
 const {
+  MARKDOWN_CANVAS,
   MARKDOWN_THEME_CATALOG,
   getMarkdownThemeOptions,
   resolveMarkdownTheme,
@@ -105,8 +106,8 @@ test('PlayStation is the final entry in the formal Catalog order with trusted lo
   assert.equal(theme.signatureHref, '/css/markdown-playstation.css');
   assert.deepEqual(Object.keys(theme.appearances), ['light', 'dark']);
   assert.notEqual(theme.appearances.light.canvas, theme.appearances.dark.canvas);
-  assert.equal(theme.appearances.light.canvas, '#f1f7ff');
-  assert.equal(theme.appearances.dark.canvas, '#071629');
+  assert.equal(theme.appearances.light.canvas, MARKDOWN_CANVAS.light);
+  assert.equal(theme.appearances.dark.canvas, MARKDOWN_CANVAS.dark);
 });
 
 test('PlayStation renderer uses the shared baseline, one trusted signature, and no optional runtime for plain Markdown', async () => {
@@ -117,8 +118,8 @@ test('PlayStation renderer uses the shared baseline, one trusted signature, and 
   assert.ok(baselinePosition >= 0);
   assert.ok(signaturePosition > baselinePosition);
   assert.match(html, /<html[^>]+data-markdown-theme="playstation"/);
-  assert.match(html, /<meta name="theme-color" content="#f1f7ff" media="\(prefers-color-scheme: light\)">/);
-  assert.match(html, /<meta name="theme-color" content="#071629" media="\(prefers-color-scheme: dark\)">/);
+  assert.match(html, new RegExp(`<meta name="theme-color" content="${MARKDOWN_CANVAS.light}" media="\\(prefers-color-scheme: light\\)">`));
+  assert.match(html, new RegExp(`<meta name="theme-color" content="${MARKDOWN_CANVAS.dark}" media="\\(prefers-color-scheme: dark\\)">`));
   assert.doesNotMatch(html, /mermaid\.min\.js|highlight\.min\.js|fonts\.googleapis\.com/);
 });
 
@@ -203,6 +204,9 @@ test('PlayStation light and dark roles meet contrast requirements including the 
 
   const light = parseTokens(css.slice(0, darkMatch.index));
   const dark = parseTokens(darkMatch[1]);
+  // 页面底色由共享 baseline 提供（中性色），对比度按实际页面底色校验
+  light.canvas = MARKDOWN_CANVAS.light;
+  dark.canvas = MARKDOWN_CANVAS.dark;
   const textPairs = [
     ['text', 'canvas'],
     ['muted', 'canvas'],

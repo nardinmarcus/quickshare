@@ -1,7 +1,6 @@
 /* Airbnb 暖居 — warm, hospitable Markdown signature */
 
 :root {
-  --theme-canvas: #fff8f2;
   --theme-text: #3e302c;
   --theme-muted: #6f5a54;
   --theme-heading: #2d211e;
@@ -231,7 +230,6 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --theme-canvas: #211a18;
     --theme-text: #f2e6df;
     --theme-muted: #c4aea4;
     --theme-heading: #fff8f2;

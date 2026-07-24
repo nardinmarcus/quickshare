@@ -1,7 +1,6 @@
 /* Apple 极简 — QuickShare brand-inspired Markdown signature */
 
 :root {
-  --theme-canvas: #ffffff;
   --theme-text: #1d1d1f;
   --theme-muted: #515154;
   --theme-accent: #0066cc;
@@ -196,7 +195,6 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --theme-canvas: #000000;
     --theme-text: #f5f5f7;
     --theme-muted: #a1a1a6;
     --theme-accent: #2997ff;

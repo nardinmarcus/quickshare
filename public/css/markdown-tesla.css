@@ -1,7 +1,6 @@
 /* Tesla 黑白 — precise monochrome Markdown signature */
 
 :root {
-  --theme-canvas: #ffffff;
   --theme-text: #050505;
   --theme-muted: #555555;
   --theme-heading: #000000;
@@ -224,7 +223,6 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --theme-canvas: #050505;
     --theme-text: #f5f5f5;
     --theme-muted: #b9b9b9;
     --theme-heading: #ffffff;

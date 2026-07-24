@@ -1,5 +1,4 @@
 :root {
-  --theme-canvas: #f4f1f6;
   --theme-text: #251f29;
   --theme-muted: #625969;
   --theme-accent: #7443a8;
@@ -226,7 +225,6 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --theme-canvas: #151119;
     --theme-text: #f0eaf3;
     --theme-muted: #bdb2c2;
     --theme-accent: #c88bea;

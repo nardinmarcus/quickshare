@@ -11,11 +11,10 @@ process.env.SESSION_SECRET = 'markdown-theme-issue13-secret';
 
 const app = require('../app');
 const { renderMarkdown } = require('../utils/contentRenderer');
-const { resolveMarkdownTheme } = require('../utils/markdownThemeCatalog');
+const { MARKDOWN_CANVAS, resolveMarkdownTheme } = require('../utils/markdownThemeCatalog');
 
 const THEME_IDS = ['notion', 'claude'];
 const REQUIRED_TOKENS = [
-  'canvas',
   'text',
   'muted',
   'accent',
@@ -137,6 +136,8 @@ test('Issue #13 signatures expose complete light and dark shared-token contracts
 
     for (const appearance of ['light', 'dark']) {
       const tokens = tokensFor(css, appearance);
+      // 页面底色由共享 baseline 提供（中性色），对比度按实际页面底色校验
+      tokens.set('theme-canvas', MARKDOWN_CANVAS[appearance]);
       for (const token of REQUIRED_TOKENS) {
         assert.ok(tokens.has(`theme-${token}`), `${id} ${appearance} is missing --theme-${token}`);
       }
@@ -157,20 +158,18 @@ test('Issue #13 signatures expose complete light and dark shared-token contracts
   }
 });
 
-test('Notion and Claude Catalog canvas metadata matches both signature appearances', async () => {
+test('Notion and Claude share the neutral baseline canvas instead of a tinted page background', async () => {
   for (const id of THEME_IDS) {
     const css = readSignature(id);
     const theme = resolveMarkdownTheme(id);
-    const lightCanvas = tokensFor(css, 'light').get('theme-canvas');
-    const darkCanvas = tokensFor(css, 'dark').get('theme-canvas');
     const html = await renderMarkdown(`# ${id} appearance`, id);
 
-    assert.equal(theme.appearances.light.canvas, lightCanvas);
-    assert.equal(theme.appearances.light.themeColor, lightCanvas);
-    assert.equal(theme.appearances.dark.canvas, darkCanvas);
-    assert.equal(theme.appearances.dark.themeColor, darkCanvas);
-    assert.match(html, new RegExp(`--theme-canvas: ${lightCanvas}`));
-    assert.match(html, new RegExp(`--theme-canvas: ${darkCanvas}`));
+    assert.equal(theme.appearances.light.canvas, MARKDOWN_CANVAS.light);
+    assert.equal(theme.appearances.light.themeColor, MARKDOWN_CANVAS.light);
+    assert.equal(theme.appearances.dark.canvas, MARKDOWN_CANVAS.dark);
+    assert.equal(theme.appearances.dark.themeColor, MARKDOWN_CANVAS.dark);
+    assert.doesNotMatch(css, /--theme-canvas\s*:/);
+    assert.doesNotMatch(html, /--theme-canvas:/);
   }
 });
 

@@ -1,7 +1,6 @@
 /* Google Material — tonal, reading-first Markdown signature */
 
 :root {
-  --theme-canvas: #f8fafd;
   --theme-text: #1f1f1f;
   --theme-muted: #5f6368;
   --theme-heading: #1f1f1f;
@@ -234,7 +233,6 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --theme-canvas: #111318;
     --theme-text: #e3e2e6;
     --theme-muted: #b9c0cc;
     --theme-heading: #f1f0f4;

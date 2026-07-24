@@ -12,6 +12,7 @@ process.env.SESSION_SECRET = 'issue-16-theme-secret';
 const app = require('../app');
 const { renderMarkdown } = require('../utils/contentRenderer');
 const {
+  MARKDOWN_CANVAS,
   MARKDOWN_THEME_CATALOG,
   getMarkdownThemeOptions,
   resolveMarkdownTheme
@@ -21,14 +22,14 @@ const ISSUE_16_THEMES = [
   {
     id: 'google',
     label: 'Google Material',
-    light: '#f8fafd',
-    dark: '#111318'
+    light: MARKDOWN_CANVAS.light,
+    dark: MARKDOWN_CANVAS.dark
   },
   {
     id: 'airbnb',
     label: 'Airbnb 暖居',
-    light: '#fff8f2',
-    dark: '#211a18'
+    light: MARKDOWN_CANVAS.light,
+    dark: MARKDOWN_CANVAS.dark
   }
 ];
 
@@ -209,6 +210,8 @@ test('both light and dark palettes meet contrast contracts for every representat
     const tokensByAppearance = appearanceTokens(fs.readFileSync(signaturePath(id), 'utf8'));
 
     for (const [appearance, tokens] of Object.entries(tokensByAppearance)) {
+      // 页面底色由共享 baseline 提供（中性色），对比度按实际页面底色校验
+      tokens['theme-canvas'] = MARKDOWN_CANVAS[appearance];
       for (const [foregroundName, backgroundName] of textPairs) {
         const ratio = contrastRatio(tokens[foregroundName], tokens[backgroundName]);
         assert.ok(
