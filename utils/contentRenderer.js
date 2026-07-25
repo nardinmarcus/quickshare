@@ -5,6 +5,7 @@
 
 const { marked } = require('marked');
 const { CODE_TYPES } = require('./codeDetector');
+const { FAVICON_VERSION } = require('./faviconVersion');
 const {
   MARKDOWN_THEME_BASELINE_HREF,
   resolveMarkdownTheme
@@ -133,10 +134,10 @@ function renderHtml(content) {
       <title>QuickShare 查看器</title>
       
       <!-- 网站图标 -->
-      <link rel="icon" href="/icon/web/favicon.ico" sizes="any">
-      <link rel="apple-touch-icon" href="/icon/web/apple-touch-icon.png">
-      <link rel="icon" type="image/png" sizes="192x192" href="/icon/web/icon-192.png">
-      <link rel="icon" type="image/png" sizes="512x512" href="/icon/web/icon-512.png">
+      <link rel="icon" href="/icon/web/favicon.ico?v=${FAVICON_VERSION}" sizes="any">
+      <link rel="apple-touch-icon" href="/icon/web/apple-touch-icon.png?v=${FAVICON_VERSION}">
+      <link rel="icon" type="image/png" sizes="192x192" href="/icon/web/icon-192.png?v=${FAVICON_VERSION}">
+      <link rel="icon" type="image/png" sizes="512x512" href="/icon/web/icon-512.png?v=${FAVICON_VERSION}">
       <meta name="theme-color" content="#6366f1">
       
       <!-- iOS 特殊设置 -->
@@ -480,10 +481,10 @@ async function renderMarkdown(content, theme) {
       <title>QuickShare Markdown查看器</title>
       
       <!-- 网站图标 -->
-      <link rel="icon" href="/icon/web/favicon.ico" sizes="any">
-      <link rel="apple-touch-icon" href="/icon/web/apple-touch-icon.png">
-      <link rel="icon" type="image/png" sizes="192x192" href="/icon/web/icon-192.png">
-      <link rel="icon" type="image/png" sizes="512x512" href="/icon/web/icon-512.png">
+      <link rel="icon" href="/icon/web/favicon.ico?v=${FAVICON_VERSION}" sizes="any">
+      <link rel="apple-touch-icon" href="/icon/web/apple-touch-icon.png?v=${FAVICON_VERSION}">
+      <link rel="icon" type="image/png" sizes="192x192" href="/icon/web/icon-192.png?v=${FAVICON_VERSION}">
+      <link rel="icon" type="image/png" sizes="512x512" href="/icon/web/icon-512.png?v=${FAVICON_VERSION}">
       <meta name="theme-color" content="${resolvedTheme.appearances.light.themeColor}" media="(prefers-color-scheme: light)">
       <meta name="theme-color" content="${resolvedTheme.appearances.dark.themeColor}" media="(prefers-color-scheme: dark)">
       
@@ -524,10 +525,10 @@ function renderSvg(content) {
       <title>QuickShare SVG查看器</title>
       
       <!-- 网站图标 -->
-      <link rel="icon" href="/icon/web/favicon.ico" sizes="any">
-      <link rel="apple-touch-icon" href="/icon/web/apple-touch-icon.png">
-      <link rel="icon" type="image/png" sizes="192x192" href="/icon/web/icon-192.png">
-      <link rel="icon" type="image/png" sizes="512x512" href="/icon/web/icon-512.png">
+      <link rel="icon" href="/icon/web/favicon.ico?v=${FAVICON_VERSION}" sizes="any">
+      <link rel="apple-touch-icon" href="/icon/web/apple-touch-icon.png?v=${FAVICON_VERSION}">
+      <link rel="icon" type="image/png" sizes="192x192" href="/icon/web/icon-192.png?v=${FAVICON_VERSION}">
+      <link rel="icon" type="image/png" sizes="512x512" href="/icon/web/icon-512.png?v=${FAVICON_VERSION}">
       <meta name="theme-color" content="#6366f1">
       
       <!-- iOS 特殊设置 -->
@@ -656,10 +657,10 @@ async function renderMermaid(content) {
         <title>QuickShare Mermaid查看器</title>
         
         <!-- 网站图标 -->
-        <link rel="icon" href="/icon/web/favicon.ico" sizes="any">
-        <link rel="apple-touch-icon" href="/icon/web/apple-touch-icon.png">
-        <link rel="icon" type="image/png" sizes="192x192" href="/icon/web/icon-192.png">
-        <link rel="icon" type="image/png" sizes="512x512" href="/icon/web/icon-512.png">
+        <link rel="icon" href="/icon/web/favicon.ico?v=${FAVICON_VERSION}" sizes="any">
+        <link rel="apple-touch-icon" href="/icon/web/apple-touch-icon.png?v=${FAVICON_VERSION}">
+        <link rel="icon" type="image/png" sizes="192x192" href="/icon/web/icon-192.png?v=${FAVICON_VERSION}">
+        <link rel="icon" type="image/png" sizes="512x512" href="/icon/web/icon-512.png?v=${FAVICON_VERSION}">
         <meta name="theme-color" content="#6366f1">
         
         <!-- iOS 特殊设置 -->

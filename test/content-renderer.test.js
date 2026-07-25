@@ -1,7 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { renderHtml, renderMarkdown } = require('../utils/contentRenderer');
+const { renderHtml, renderMarkdown, renderSvg, renderMermaid } = require('../utils/contentRenderer');
+const { FAVICON_VERSION } = require('../utils/faviconVersion');
 const { resolveMarkdownTheme } = require('../utils/markdownThemeCatalog');
 
 test('renderHtml loads highlighting only for partial HTML with a preformatted code block', () => {
@@ -92,4 +93,26 @@ test('renderMarkdown never reflects an invalid theme into an asset URL', async (
   assert.match(html, /data-markdown-theme="bytedance"/);
   assert.match(html, /href="\/css\/markdown-bytedance\.css"/);
   assert.doesNotMatch(html, /admin-secret/);
+});
+
+test('every share viewer links content-versioned site icons', async () => {
+  assert.match(FAVICON_VERSION, /^[0-9a-f]{12}$/);
+  const expectedLinks = [
+    `<link rel="icon" href="/icon/web/favicon.ico?v=${FAVICON_VERSION}" sizes="any">`,
+    `<link rel="apple-touch-icon" href="/icon/web/apple-touch-icon.png?v=${FAVICON_VERSION}">`,
+    `<link rel="icon" type="image/png" sizes="192x192" href="/icon/web/icon-192.png?v=${FAVICON_VERSION}">`,
+    `<link rel="icon" type="image/png" sizes="512x512" href="/icon/web/icon-512.png?v=${FAVICON_VERSION}">`
+  ];
+  const viewers = [
+    renderHtml('<p>partial html</p>'),
+    await renderMarkdown('# Icon links'),
+    renderSvg('<svg viewBox="0 0 1 1"></svg>'),
+    await renderMermaid('graph TD\nA-->B')
+  ];
+
+  for (const html of viewers) {
+    for (const link of expectedLinks) {
+      assert.ok(html.includes(link), link);
+    }
+  }
 });

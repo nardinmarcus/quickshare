@@ -12,6 +12,7 @@ process.env.ADMIN_DASHBOARD_PASSWORD = 'resource-admin-access';
 process.env.SESSION_SECRET = 'resource-policy-session-secret';
 
 const app = require('../app');
+const { FAVICON_VERSION } = require('../utils/faviconVersion');
 const { encryptSecret, hashSecret } = require('../utils/security');
 
 let server;
@@ -148,6 +149,29 @@ test('homepage and public Share expose one absolute content-versioned social ima
   assert.equal(imageHash, '60b7b9542bb42100e4a090b0da98a2d7724ced25b6026bee20f14112bb51167a');
   assertSocialImageMetadata(homepage.text, expectedUrl);
   assertSocialImageMetadata(sharePage.text, expectedUrl);
+});
+
+test('trusted pages and share viewers link one content-versioned favicon set', async () => {
+  assert.match(FAVICON_VERSION, /^[0-9a-f]{12}$/);
+  const expectedLinks = [
+    `<link rel="icon" href="/icon/web/favicon.ico?v=${FAVICON_VERSION}" sizes="any">`,
+    `<link rel="apple-touch-icon" href="/icon/web/apple-touch-icon.png?v=${FAVICON_VERSION}">`,
+    `<link rel="icon" type="image/png" sizes="192x192" href="/icon/web/icon-192.png?v=${FAVICON_VERSION}">`,
+    `<link rel="icon" type="image/png" sizes="512x512" href="/icon/web/icon-512.png?v=${FAVICON_VERSION}">`
+  ];
+  const [homepage, sharePage] = await Promise.all([
+    request('/', { headers: { Cookie: homeCookie } }),
+    request('/view/resource-public')
+  ]);
+
+  assert.equal(homepage.status, 200);
+  assert.equal(sharePage.status, 200);
+
+  for (const response of [homepage, sharePage]) {
+    for (const link of expectedLinks) {
+      assert.ok(response.text.includes(link), link);
+    }
+  }
 });
 
 test('each trusted route loads only the scripts it uses', async () => {

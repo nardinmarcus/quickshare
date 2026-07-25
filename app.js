@@ -14,6 +14,7 @@ const config = require('./config');
 const { createPageRepository } = require('./models/pageRepository');
 const { detectCodeType, extractCodeBlocks } = require('./utils/codeDetector');
 const { renderContent, escapeHtml } = require('./utils/contentRenderer');
+const { FAVICON_VERSION } = require('./utils/faviconVersion');
 const {
   getMarkdownThemeOptions,
   resolveMarkdownThemeId
@@ -125,6 +126,7 @@ app.use(express.static(PUBLIC_DIR, {
 }));
 app.use((req, res, next) => {
   res.locals.socialImageUrl = socialImageUrl(req);
+  res.locals.faviconVersion = FAVICON_VERSION;
   return next();
 });
 
@@ -797,6 +799,10 @@ function renderSandboxedDocument(renderedContent, contentType, {
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <meta name="code-type" content="${escapeHtml(contentType)}">
       <title>${pageTitle}</title>
+      <link rel="icon" href="/icon/web/favicon.ico?v=${FAVICON_VERSION}" sizes="any">
+      <link rel="apple-touch-icon" href="/icon/web/apple-touch-icon.png?v=${FAVICON_VERSION}">
+      <link rel="icon" type="image/png" sizes="192x192" href="/icon/web/icon-192.png?v=${FAVICON_VERSION}">
+      <link rel="icon" type="image/png" sizes="512x512" href="/icon/web/icon-512.png?v=${FAVICON_VERSION}">
       <meta property="og:title" content="${pageTitle}">
       <meta property="og:description" content="${ogDescription}">
       <meta property="og:type" content="article">
