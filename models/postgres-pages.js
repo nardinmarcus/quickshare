@@ -169,6 +169,11 @@ class PostgresPageRepository {
     return result.rows[0] || null;
   }
 
+  async getProtectionBaseline(id) {
+    const result = await this.pool.query('SELECT access_revision FROM pages WHERE id = $1 LIMIT 1', [id]);
+    return result.rows[0] ? { accessRevision: result.rows[0].access_revision } : null;
+  }
+
   async getPublicById(id, now = Date.now()) {
     const result = await this.pool.query(
       `

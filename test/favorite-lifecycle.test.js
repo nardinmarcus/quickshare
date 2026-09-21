@@ -361,6 +361,9 @@ test('public routes, recent data, view events, and statistics never expose Favor
   const accessCookie = passwordResponse.headers['set-cookie']
     ?.find(value => value.startsWith(`page_access_${sharedPage.urlId}=`))
     ?.split(';')[0];
+  const unlockedMetadataResponse = await request(`/api/pages/${sharedPage.urlId}`, {
+    headers: { Cookie: accessCookie }
+  });
   const publicView = await request(`/view/${sharedPage.urlId}`, {
     headers: { Cookie: accessCookie }
   });
@@ -375,7 +378,7 @@ test('public routes, recent data, view events, and statistics never expose Favor
     headers: { Cookie: dashboardCookie }
   });
   const storedAfterView = await app.locals.pageRepository.getById(sharedPage.urlId);
-  const metadata = JSON.parse(metadataResponse.text);
+  const metadata = JSON.parse(unlockedMetadataResponse.text);
   const recent = JSON.parse(recentResponse.text).pages.find(page => page.id === sharedPage.urlId);
   const password = JSON.parse(passwordResponse.text);
   const favoriteFieldPattern = /isFavorite|is_favorite|data-favorite-toggle|admin-favorite/;
@@ -384,7 +387,11 @@ test('public routes, recent data, view events, and statistics never expose Favor
   assert.equal(new URL(sharedPage.url).pathname, `/view/${sharedPage.urlId}`);
   assert.equal(passwordGate.status, 200);
   assert.doesNotMatch(passwordGate.text, favoriteFieldPattern);
-  assert.equal(metadataResponse.status, 200);
+  assert.equal(metadataResponse.status, 403);
+  assert.doesNotMatch(metadataResponse.text, /Public boundary content/);
+  assert.doesNotMatch(metadataResponse.text, favoriteFieldPattern);
+  assert.equal(unlockedMetadataResponse.status, 200);
+  assert.equal(metadata.page.title, 'Public boundary content');
   assert.equal(Object.hasOwn(metadata.page, 'isFavorite'), false);
   assert.equal(Object.hasOwn(metadata.page, 'is_favorite'), false);
   assert.ok(recent);

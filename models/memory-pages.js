@@ -171,6 +171,11 @@ class MemoryPageRepository {
     return this.pages.get(id) || null;
   }
 
+  async getProtectionBaseline(id) {
+    const page = this.pages.get(id);
+    return page ? { accessRevision: page.access_revision } : null;
+  }
+
   async getPublicById(id, now = Date.now()) {
     const page = this.pages.get(id);
 

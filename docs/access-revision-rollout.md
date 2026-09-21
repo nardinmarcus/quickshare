@@ -1,4 +1,4 @@
-# Share access revision rollout (#25)
+# Share access revision rollout (#25 / #26)
 
 ## Contract
 
@@ -6,11 +6,12 @@
 - New signed `page_access_<id>` cookies bind both Share ID and access revision; TTL remains 24 hours. Legacy cookies and cookies from an earlier revision require another password unlock. A password form may return HTTP 200: successful revocation means no protected body and no view increment, not necessarily a GET 403.
 - Password setting/replacement/removal, changed expiry and explicit owner revocation advance the revision atomically with the update. Unchanged policy, content-only and Favorite Share updates do not advance it. Explicit password setting counts as a policy change even when the plaintext is the same.
 - Owner detail embeds its read baseline. Combined content/policy saves and the revoke button send `expectedAccessRevision`; they must not fetch a newer baseline automatically. A failed save keeps the draft. Revocation is disabled during editing so it cannot silently advance that draft's baseline.
-- Existing `POST /api/pages/:id/protect` callers must first retain the revision from their displayed/read `GET /api/pages/:id` response and send that exact string. Metadata is private/no-store. A successful protection update returns its committed `accessRevision`, not a later concurrent writer's revision. Authentication and CSRF requirements are unchanged.
+- Existing `POST /api/pages/:id/protect` callers must first retain the `accessRevision` from their explicitly authenticated `GET /api/pages/:id/protect` response (`{ success: true, accessRevision: "1" }`) and send that exact string as `expectedAccessRevision`. This private/no-store baseline read uses the same frontend owner session authorization as the protection write; it returns no title, description, source, password or other Share metadata, and remains available for expired Shares. Anonymous visitors, visitor unlock cookies and create-only API Keys do not authorize it. Dashboard detail continues to embed its own baseline. Do not silently fetch a new baseline to retry a stale save. A successful protection update returns its committed revision, not a later concurrent writer's revision. Write authentication and CSRF requirements are unchanged.
+- Public `GET /api/pages/:id` and `GET /view/:id` share one projection: missing is 404, expired is 410, locked metadata is 403 and the locked view is a neutral password form. Errors and locked HTML source/OG use no content-derived metadata; the site identity icon remains the generic cover. Only a valid current-version visitor unlock permits protected public metadata/content. Owner sessions and API Keys are not visitor unlocks; visitor unlocks do not authorize management. Ordinary public Share titles/descriptions remain intact. All these responses are private/no-store; third-party cached cards cannot be recalled.
 - Missing policy precondition returns 428 (`ACCESS_PRECONDITION_REQUIRED`); malformed/noncanonical/out-of-range revision returns 400 (`INVALID_ACCESS_REVISION`); stale baseline returns 412 (`ACCESS_REVISION_CONFLICT`). A rejected combined save changes neither content nor policy. Content-only updates remain supported without an access condition.
 - The password verifier captures the revision with the hash before asynchronous verification. It never signs a subsequently fetched revision. `GET /view/:id` remains read-only. View-event success is one conditional UPDATE, checking current expiry/protection/revision without rereading the body.
 
-This slice does **not** introduce content Revisions, publishing state, grants, maintenance mode or protected-metadata neutralization (#26). Shared deployment/backup documentation is owned by #27.
+These slices do **not** introduce content Revisions, publishing state, grants or maintenance mode. Shared deployment/backup documentation is owned by #27.
 
 ## Separately authorized deployment procedure
 

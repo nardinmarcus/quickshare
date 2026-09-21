@@ -139,14 +139,19 @@ test('browser create stores all publish settings atomically', async () => {
   assert.equal(decryptSecret(page.encrypted_password), 'Ab9!_?~');
 
   const metadataResponse = await request(`/api/pages/${response.body.urlId}`);
-  assert.equal(metadataResponse.body.page.expiresAt, expiresAt);
-  assert.equal(metadataResponse.body.page.markdownTheme, 'github');
+  assert.equal(metadataResponse.status, 403);
+  assert.doesNotMatch(metadataResponse.text, /Atomic title|Atomic description/);
 
   const unlockResponse = await jsonRequest(`/view/${response.body.urlId}/password`, 'POST', {
     password: 'Ab9!_?~'
   });
   assert.equal(unlockResponse.status, 200);
   assert.equal(unlockResponse.body.valid, true);
+  const unlockedMetadata = await request(`/api/pages/${response.body.urlId}`, {
+    headers: { Cookie: unlockResponse.headers['set-cookie'][0].split(';')[0] }
+  });
+  assert.equal(unlockedMetadata.body.page.expiresAt, expiresAt);
+  assert.equal(unlockedMetadata.body.page.markdownTheme, 'github');
 });
 
 test('share API stores all publish settings and preserves its existing response fields', async () => {

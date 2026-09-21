@@ -12,6 +12,7 @@ const { performance } = require('node:perf_hooks');
 
 const config = require('./config');
 const { isAccessRevision, requireAccessRevision } = require('./utils/shareAccess');
+const { publicShareProjection } = require('./utils/publicShareProjection');
 const { createPageRepository } = require('./models/pageRepository');
 const { detectCodeType, extractCodeBlocks } = require('./utils/codeDetector');
 const { renderContent, escapeHtml } = require('./utils/contentRenderer');
@@ -1781,25 +1782,11 @@ app.get('/api/pages/:id', privateNoStore, async (req, res) => {
   try {
     const publicPage = await pageRepository.getPublicById(req.params.id, Date.now());
 
-    if (!publicPage) {
-      return res.status(404).json({
-        success: false,
-        error: '页面不存在'
-      });
+    const projection = publicShareProjection(publicPage, pageAccessRevision(req, req.params.id));
+    if (projection.state !== 'readable') {
+      return res.status(projection.status).json({ success: false, error: projection.error });
     }
-
-    if (publicPage.expired) {
-      return res.status(410).json({
-        success: false,
-        error: '此分享已失效'
-      });
-    }
-
-    const { page } = publicPage;
-
-    if (page.is_protected === 1) {
-      setPrivateNoStore(res);
-    }
+    const { page } = projection;
 
     return res.json({
       success: true,
@@ -1821,6 +1808,18 @@ app.get('/api/pages/:id', privateNoStore, async (req, res) => {
       success: false,
       error: '服务器错误'
     });
+  }
+});
+
+// Read baseline for the existing protection operation, not a content-management API.
+app.get('/api/pages/:id/protect', privateNoStore, requireApiAdmin, async (req, res) => {
+  try {
+    const baseline = await pageRepository.getProtectionBaseline(req.params.id);
+    if (!baseline) return res.status(404).json({ success: false, error: '页面不存在' });
+    return res.json({ success: true, accessRevision: baseline.accessRevision });
+  } catch (error) {
+    console.error('Get protection baseline failed:', { name: error?.name || 'Error', code: safeErrorCode(error) });
+    return res.status(500).json({ success: false, error: '服务器错误' });
   }
 });
 
@@ -1978,41 +1977,33 @@ app.get('/view/:id', async (req, res) => {
 
     metrics.phase = 'routing';
 
-    if (!publicPage) {
-      metrics.outcome = 'not_found';
+    const projection = publicShareProjection(publicPage, pageAccessRevision(req, req.params.id));
+    if (publicPage) {
+      metrics.contentType = safeContentType(publicPage.page.code_type);
+      metrics.protected = publicPage.page.is_protected === 1;
+    }
+    if (projection.state === 'missing' || projection.state === 'expired') {
+      metrics.outcome = projection.state === 'missing' ? 'not_found' : 'expired';
       setTrustedUiCsp(res, { allowFraming: true });
-      return res.status(404).render('error', {
-        title: '页面未找到',
+      return res.status(projection.status).render('error', {
+        title: projection.title,
         page: 'error-page',
-        message: '您请求的页面不存在或已被删除'
+        message: projection.message
       });
     }
 
-    const { page } = publicPage;
-    metrics.contentType = safeContentType(page.code_type);
-    metrics.protected = page.is_protected === 1;
-
-    if (publicPage.expired) {
-      metrics.outcome = 'expired';
-      setTrustedUiCsp(res, { allowFraming: true });
-      return res.status(410).render('error', {
-        title: '分享已失效',
-        page: 'error-page',
-        message: '此分享已失效，无法继续访问'
-      });
-    }
-
-    if (page.is_protected === 1 && pageAccessRevision(req, req.params.id) !== page.access_revision) {
+    if (projection.state === 'locked') {
       metrics.outcome = 'password_required';
       setTrustedUiCsp(res, { allowFraming: true });
       return res.render('password', {
-        title: 'QuickShare | 密码保护',
+        title: projection.title,
         page: 'password-page',
         id: req.params.id,
         error: req.cookies?.[pageAccessCookieName(req.params.id)] ? '访问凭证已失效，请重新输入密码解锁。' : null
       });
     }
 
+    const { page } = projection;
     metrics.phase = 'render';
     const renderStartedAt = performance.now();
     let prepared;

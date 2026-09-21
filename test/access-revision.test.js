@@ -136,9 +136,9 @@ test('revocation completes during password verification without upgrading its un
 
 test('existing protection API reads its baseline then returns only the committed access revision', async () => {
   const id = await create();
-  const metadata = await (await request(`/api/pages/${id}`)).json();
-  assert.equal(metadata.page.accessRevision, '1');
-  const res = await request(`/api/pages/${id}/protect`, 'POST', { isProtected: false, expectedAccessRevision: metadata.page.accessRevision });
+  const baseline = await (await request(`/api/pages/${id}/protect`)).json();
+  assert.equal(baseline.accessRevision, '1');
+  const res = await request(`/api/pages/${id}/protect`, 'POST', { isProtected: false, expectedAccessRevision: baseline.accessRevision });
   assert.equal(res.status, 200);
   assert.equal((await res.json()).accessRevision, '2');
 });

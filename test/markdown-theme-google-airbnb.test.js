@@ -257,14 +257,22 @@ test('creator, API, metadata, admin, and public flows round-trip both stable IDs
     assert.equal(created.body.markdownTheme, id);
 
     const metadata = await request(`/api/pages/${created.body.urlId}`);
-    assert.equal(metadata.status, 200);
-    assert.equal(metadata.body.page.markdownTheme, id);
+    assert.equal(metadata.status, 403);
+    assert.equal(Object.hasOwn(metadata.body, 'page'), false);
+    assert.ok(!metadata.text.includes(`${label} creator`));
+    assert.ok(!metadata.text.includes(`${label} preserved description`));
 
     const unlock = await jsonRequest(`/view/${created.body.urlId}/password`, 'POST', {
       password: preservedPassword
     });
     assert.equal(unlock.status, 200);
     const accessCookie = unlock.headers['set-cookie'].map(value => value.split(';')[0]).join('; ');
+    const unlockedMetadata = await request(`/api/pages/${created.body.urlId}`, {
+      headers: { Cookie: accessCookie }
+    });
+    assert.equal(unlockedMetadata.status, 200);
+    assert.equal(unlockedMetadata.body.page.markdownTheme, id);
+    assert.equal(unlockedMetadata.body.page.description, `${label} preserved description`);
     const publicView = await request(`/view/${created.body.urlId}`, {
       headers: { Cookie: accessCookie }
     });
@@ -281,11 +289,16 @@ test('creator, API, metadata, admin, and public flows round-trip both stable IDs
     assert.equal(apiCreated.body.markdownTheme, id);
 
     await app.locals.pageRepository.setFavorite(created.body.urlId, true);
-    await app.locals.pageRepository.recordViewEvent(created.body.urlId, Date.now(), true);
+    const viewEvent = await request(`/view/${created.body.urlId}/view-event`, {
+      method: 'POST',
+      headers: { Cookie: accessCookie, Origin: baseUrl }
+    });
+    assert.equal(viewEvent.status, 204);
     const beforeUpdate = await app.locals.pageRepository.getById(created.body.urlId);
     const preservedPasswordHash = beforeUpdate.password_hash;
     const preservedEncryptedPassword = beforeUpdate.encrypted_password;
     const preservedViewCount = beforeUpdate.view_count;
+    assert.equal(preservedViewCount, 1, 'valid visitor event creates a nonzero preservation baseline');
 
     const updated = await jsonRequest(`/admin/pages/${created.body.urlId}`, 'PUT', {
       markdownTheme: id === 'google' ? 'airbnb' : 'google'
