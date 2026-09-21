@@ -1,0 +1,628 @@
+#!/usr/bin/env node
+'use strict';
+
+/*
+ * Post-restore verification for QuickShare native backups.
+ *
+ * Connects to the source and restored databases with two independent
+ * connections and verifies that the restore actually preserved:
+ * content hashes, page IDs, full page rows, Markdown themes, Favorite Share
+ * state, password hash verification AND decrypt/display ability, expiry,
+ * managed API keys, audit logs, site settings and the migration ledger.
+ *
+ * Fail-closed semantics:
+ * - The report always marks the restored database `safeToServe: false` and
+ *   `offline-by-default`; this script never "re-enables" anything.
+ * - Revocation/purge audit events recorded after the backup snapshot point
+ *   leave reconciliation `unreconciled` and exit code 2 until the operator
+ *   passes `--reconciled` after a manual owner review.
+ * - Any data mismatch exits 1.
+ *
+ * Secrets: pass only synthetic fixture secrets in tests. Real secrets and
+ * encryption material stay private and never enter manifests, logs or issues.
+ */
+
+const fs = require('fs');
+
+const { createPostgresPool } = require('../models/postgres-config');
+const { loadMigrations } = require('../models/postgres-migrations');
+const { decryptSecret, verifySecret } = require('../utils/security');
+
+const {
+  assertTestDatabaseUrl,
+  localPoolEnv,
+  parseCliArgs,
+  redactUrl
+} = require('./backup-db');
+
+const HARD_REVOCATION_AUDIT_ACTIONS = new Set([
+  'page.delete',
+  'page.delete.batch',
+  'api_key.delete'
+]);
+
+// Policy-relevant field names emitted in page.update audit details as
+// `JSON.stringify({ fields: Object.keys(updateOptions) })` (app.js). Password
+// and protection changes are the main post-snapshot revocation vector; a
+// forward-compatible `revokeAccess` field name is included for later tickets.
+const POLICY_FIELD_NAMES = new Set([
+  'isProtected',
+  'passwordHash',
+  'encryptedPassword',
+  'expiresAt',
+  'revokeAccess'
+]);
+
+const COVERED_OBJECTS = [
+  'page-content-hashes',
+  'page-ids',
+  'page-full-rows',
+  'markdown-themes',
+  'favorite-share',
+  'password-verify-and-decrypt',
+  'expiry',
+  'managed-api-keys',
+  'audit-logs',
+  'site-settings',
+  'migration-ledger'
+];
+
+function sha256Hex(value) {
+  return require('crypto').createHash('sha256').update(String(value), 'utf8').digest('hex');
+}
+
+function valuesEqual(left, right) {
+  return left === right || (left === null && right === null) || (left === undefined && right === undefined);
+}
+
+/**
+ * Compares every page column between source and restored rows, keyed by ID.
+ * Content drift is reported with per-side SHA-256 digests so the failure
+ * message itself is evidence. comparedColumns is emitted so a future schema
+ * extension (e.g. a new persistent column from a later migration) is covered
+ * explicitly by full-row comparison instead of silently ignored.
+ */
+function comparePageInventory(sourceRows, restoreRows) {
+  const sourceById = new Map(sourceRows.map(row => [row.id, row]));
+  const restoreById = new Map(restoreRows.map(row => [row.id, row]));
+  const issues = [];
+  const contentHashes = new Map();
+
+  for (const row of sourceRows) {
+    if (!restoreById.has(row.id)) {
+      issues.push({ field: 'id', pageId: row.id, message: `missing page ${row.id} on restore side` });
+    }
+  }
+  for (const row of restoreRows) {
+    if (!sourceById.has(row.id)) {
+      issues.push({ field: 'id', pageId: row.id, message: `unexpected page ${row.id} on restore side` });
+    }
+  }
+
+  const comparedColumns = [...new Set([
+    ...Object.keys(sourceRows[0] || {}),
+    ...Object.keys(restoreRows[0] || {})
+  ])].sort();
+
+  for (const [id, sourceRow] of sourceById) {
+    const restoreRow = restoreById.get(id);
+
+    if (!restoreRow) {
+      continue;
+    }
+
+    for (const column of comparedColumns) {
+      if (valuesEqual(sourceRow[column], restoreRow[column])) {
+        continue;
+      }
+
+      if (column === 'html_content') {
+        const sourceSha = sha256Hex(sourceRow[column] ?? '');
+        const restoreSha = sha256Hex(restoreRow[column] ?? '');
+        issues.push({
+          field: column,
+          pageId: id,
+          message: `html_content sha256 drift for ${id}: source ${sourceSha}, restore ${restoreSha}`
+        });
+      } else {
+        issues.push({
+          field: column,
+          pageId: id,
+          message: `${column} drift for ${id}: source ${JSON.stringify(sourceRow[column])}, restore ${JSON.stringify(restoreRow[column])}`
+        });
+      }
+    }
+
+    contentHashes.set(id, sha256Hex(restoreRow.html_content ?? ''));
+  }
+
+  return {
+    ok: issues.length === 0,
+    issues,
+    contentHashes,
+    comparedColumns
+  };
+}
+
+function verifyMigrationLedger(appliedRows, localMigrations) {
+  const appliedByVersion = new Map(appliedRows.map(row => [row.version, row]));
+  const localByVersion = new Map(localMigrations.map(migration => [migration.version, migration]));
+  const issues = [];
+
+  for (const migration of localMigrations) {
+    const applied = appliedByVersion.get(migration.version);
+
+    if (!applied) {
+      issues.push({ field: 'version', message: `missing migration ${migration.version} in restored ledger` });
+      continue;
+    }
+
+    if (applied.checksum !== migration.checksum) {
+      issues.push({ field: 'checksum', message: `checksum mismatch for migration ${migration.version}: ` +
+        `expected ${migration.checksum}, found ${applied.checksum}` });
+    }
+  }
+
+  for (const applied of appliedRows) {
+    if (!localByVersion.has(applied.version)) {
+      issues.push({ field: 'version', message: `unknown applied migration ${applied.version} ` +
+        'not present in db/migrations; extend the verification fixture before trusting this restore' });
+    }
+  }
+
+  return { ok: issues.length === 0, issues };
+}
+
+function parseAuditFields(details) {
+  try {
+    const parsed = JSON.parse(details || 'null');
+    return Array.isArray(parsed?.fields) ? parsed.fields.filter(name => typeof name === 'string') : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * Detects revocation-relevant audit events recorded AFTER the snapshot point,
+ * using the vocabulary the application actually emits: hard purges plus
+ * `page.update` entries whose `details.fields` touch password, protection,
+ * expiry or revocation state. Events at or before the snapshot are part of the
+ * backed-up history and never reported. Returning an empty list is NOT proof
+ * that nothing happened (some policy routes emit no audit rows) — coverage
+ * classification in buildVerificationReport handles that honestly.
+ */
+function findPostSnapshotRevocations(auditRows, snapshotAt) {
+  const events = [];
+
+  for (const row of auditRows) {
+    if (Number(row.created_at) <= Number(snapshotAt)) {
+      continue;
+    }
+
+    if (HARD_REVOCATION_AUDIT_ACTIONS.has(row.action)) {
+      events.push({ action: row.action, pageId: row.page_id || null, fields: null, createdAt: Number(row.created_at) });
+      continue;
+    }
+
+    if (row.action === 'page.update') {
+      const fields = parseAuditFields(row.details);
+
+      if (!fields) {
+        continue;
+      }
+
+      const policyFields = fields.filter(name => POLICY_FIELD_NAMES.has(name));
+
+      if (policyFields.length > 0) {
+        events.push({ action: row.action, pageId: row.page_id || null, fields: policyFields, createdAt: Number(row.created_at) });
+      }
+    }
+  }
+
+  return events;
+}
+
+/**
+ * Classifies reconciliation need. There is deliberately no 'not-required'
+ * outcome: absence of matching audit rows is not proof of absence of policy
+ * changes (legacy routes emit no records), so a clean-looking history still
+ * requires explicit owner review before anything restored is reused.
+ */
+function classifyRevocationCoverage(postSnapshotEvents) {
+  if (postSnapshotEvents.length > 0) {
+    return {
+      status: 'unreconciled',
+      reason: 'revocations or purges were recorded after the snapshot point; the owner must reconcile them ' +
+        'before any restored credential or public content may be considered — the restored database stays offline'
+    };
+  }
+
+  return {
+    status: 'owner-review-required',
+    reason: 'no post-snapshot revocation events were found in the audit log, but audit history cannot prove ' +
+      'their absence (some policy-change routes emit no audit records); owner review is required ' +
+      'before any restored credential or public content is reused'
+  };
+}
+
+function buildVerificationReport({
+  checks,
+  durationsMs,
+  postSnapshotRevocations,
+  manifest,
+  target
+}) {
+  const revocations = postSnapshotRevocations || [];
+  const allChecksOk = (checks || []).every(check => check.ok === true);
+
+  return {
+    generatedAt: Date.now(),
+    // `ok` reports data-level verification only; the reconciliation gate is a
+    // separate, always-present decision (see reconciliationExitCode).
+    ok: allChecksOk,
+    safeToServe: false,
+    isolation: 'offline-by-default',
+    reconciliation: classifyRevocationCoverage(revocations),
+    checks: checks || [],
+    durationsMs: durationsMs || {},
+    postSnapshotRevocations: revocations,
+    coveredObjects: COVERED_OBJECTS,
+    manifest: {
+      snapshotAt: manifest?.snapshotAt ?? null,
+      snapshotWalLsn: manifest?.snapshotWalLsn ?? null,
+      database: manifest?.database ?? null,
+      dumpSha256: manifest?.dumpSha256 ?? null
+    },
+    target: target || {}
+  };
+}
+
+function reconciliationExitCode(report, { reconciled = false } = {}) {
+  if (report.checks.some(check => check.ok === false)) {
+    return 1;
+  }
+
+  // Both reconciliation outcomes fail closed until the operator explicitly
+  // acknowledges an owner review with --reconciled.
+  if (!reconciled) {
+    return 2;
+  }
+
+  return 0;
+}
+
+function auditProjection(rows) {
+  return rows
+    .map(row => JSON.stringify([row.action, row.page_id, row.details, row.ip, String(row.created_at)]))
+    .sort();
+}
+
+function rowsEqual(leftRows, rightRows) {
+  return JSON.stringify(leftRows) === JSON.stringify(rightRows);
+}
+
+/**
+ * Plans and executes the password-side functional verification on restored
+ * rows. Protected rows WITHOUT matching fixture material produce an explicit
+ * incomplete-coverage issue instead of being silently skipped — the check
+ * never reports success for rows it could not actually exercise.
+ */
+async function planCredentialVerification({ restoredPages, fixture, verifyHash, decrypt }) {
+  const issues = [];
+  const entriesById = new Map((fixture.protectedPages || []).map(entry => [entry.id, entry]));
+  // Verification targets are rows the application treats as protected. Rows
+  // WITHOUT the flag that still carry credential material are reported as a
+  // restore anomaly by the loop below, not silently skipped.
+  const protectedRows = restoredPages.filter(row => Number(row.is_protected) === 1);
+  const protectedIds = new Set(protectedRows.map(row => row.id));
+  let fixtureCovered = 0;
+
+  for (const row of protectedRows) {
+    const entry = entriesById.get(row.id);
+
+    if (!entry) {
+      issues.push({
+        field: 'password',
+        pageId: row.id,
+        message: `protected page ${row.id}: incomplete fixture coverage; password verify/decrypt check was NOT performed for this row`
+      });
+      continue;
+    }
+
+    fixtureCovered += 1;
+
+    if (!await verifyHash(entry.password, row.password_hash)) {
+      issues.push({ field: 'password', pageId: row.id, message: `password hash does not verify for ${row.id} after restore` });
+    }
+
+    if (decrypt(row.encrypted_password) !== entry.password) {
+      issues.push({
+        field: 'password',
+        pageId: row.id,
+        message: `encrypted password does not decrypt for ${row.id} ` +
+          '(dashboard display ability lost or SESSION_SECRET mismatch)'
+      });
+    }
+  }
+
+  for (const row of restoredPages) {
+    if (protectedIds.has(row.id)) {
+      continue;
+    }
+
+    if (row.password_hash !== null || row.encrypted_password !== null) {
+      issues.push({
+        field: 'password',
+        pageId: row.id,
+        message: `unprotected page ${row.id} carries credential material after restore`
+      });
+    }
+  }
+
+  return {
+    ok: issues.length === 0,
+    issues,
+    details: { protectedPages: protectedRows.length, fixtureCovered }
+  };
+}
+
+/**
+ * API-key counterpart of planCredentialVerification: every restored managed
+ * key must either be exercised against fixture material or reported as an
+ * explicit coverage gap.
+ */
+async function planApiKeyVerification({ restoredKeys, fixture, verifyHash }) {
+  const issues = [];
+  const entriesById = new Map((fixture.apiKeys || []).map(entry => [entry.id, entry]));
+  let fixtureCovered = 0;
+
+  for (const key of restoredKeys) {
+    const entry = entriesById.get(key.id);
+
+    if (!entry) {
+      issues.push({
+        field: 'api_keys',
+        keyId: key.id,
+        message: `managed key ${key.id}: incomplete fixture coverage; secret verification was NOT performed for this row`
+      });
+      continue;
+    }
+
+    fixtureCovered += 1;
+
+    if (!await verifyHash(entry.secret, key.key_hash)) {
+      issues.push({ field: 'api_keys', keyId: key.id, message: `managed key ${key.id} secret does not verify after restore` });
+    }
+  }
+
+  return {
+    ok: issues.length === 0,
+    issues,
+    details: { keys: restoredKeys.length, fixtureCovered }
+  };
+}
+
+/**
+ * Live verification against two independent database connections.
+ * `fixture` carries synthetic-only secrets: { apiKeys: [{id, secret}],
+ * protectedPages: [{id, password}] }. SESSION_SECRET must already be set to
+ * the synthetic fixture secret so decrypt/display ability can be exercised.
+ */
+async function runVerification({
+  sourceUrl,
+  restoreUrl,
+  manifest,
+  fixture = {},
+  allowNonTest
+}) {
+  assertTestDatabaseUrl(sourceUrl, { allowNonTest });
+  assertTestDatabaseUrl(restoreUrl, { allowNonTest });
+
+  const sourcePool = createPostgresPool(sourceUrl, { env: localPoolEnv(sourceUrl), max: 2 });
+  const restorePool = createPostgresPool(restoreUrl, { env: localPoolEnv(restoreUrl), max: 2 });
+  const checks = [];
+  const started = Date.now();
+
+  try {
+    // Two independent connections, queried concurrently.
+    const [sourcePages, restorePages, sourceAudit, restoreAudit, sourceKeys, restoreKeys, sourceSettings, restoreSettings, sourceLedger, restoreLedger] =
+      await Promise.all([
+        sourcePool.query('SELECT * FROM pages ORDER BY id ASC'),
+        restorePool.query('SELECT * FROM pages ORDER BY id ASC'),
+        sourcePool.query('SELECT action, page_id, details, ip, created_at FROM audit_logs ORDER BY id ASC'),
+        restorePool.query('SELECT action, page_id, details, ip, created_at FROM audit_logs ORDER BY id ASC'),
+        sourcePool.query('SELECT id, name, key_hash, key_prefix, created_at, last_used_at FROM api_keys ORDER BY id ASC'),
+        restorePool.query('SELECT id, name, key_hash, key_prefix, created_at, last_used_at FROM api_keys ORDER BY id ASC'),
+        sourcePool.query('SELECT id, homepage_password_required, updated_at FROM site_settings ORDER BY id ASC'),
+        restorePool.query('SELECT id, homepage_password_required, updated_at FROM site_settings ORDER BY id ASC'),
+        sourcePool.query('SELECT version, name, checksum, applied_at FROM quickshare_schema_migrations ORDER BY version ASC'),
+        restorePool.query('SELECT version, name, checksum, applied_at FROM quickshare_schema_migrations ORDER BY version ASC')
+      ]);
+
+    const inventory = comparePageInventory(sourcePages.rows, restorePages.rows);
+    checks.push({
+      name: 'pageInventory',
+      ok: inventory.ok,
+      issues: inventory.issues,
+      details: {
+        pageCount: sourcePages.rows.length,
+        comparedColumns: inventory.comparedColumns,
+        contentHashes: Object.fromEntries(inventory.contentHashes)
+      }
+    });
+
+    const localMigrations = loadMigrations();
+    const ledger = verifyMigrationLedger(restoreLedger.rows, localMigrations);
+    const ledgerParityIssues = rowsEqual(sourceLedger.rows, restoreLedger.rows)
+      ? []
+      : [{ field: 'ledger', message: 'migration ledger differs between source and restored databases' }];
+    checks.push({
+      name: 'migrationLedger',
+      ok: ledger.ok && ledgerParityIssues.length === 0,
+      issues: [...ledger.issues, ...ledgerParityIssues],
+      details: { applied: restoreLedger.rows.map(row => row.version) }
+    });
+
+    const snapshotAt = manifest?.snapshotAt ?? 0;
+    // The restore target mirrors the snapshot point, not the live source: source
+    // rows recorded after the snapshot are excluded from parity and handled as
+    // post-snapshot events below.
+    const sourceAuditAtSnapshot = sourceAudit.rows.filter(row => Number(row.created_at) <= Number(snapshotAt));
+    const sourceAuditAfterSnapshot = sourceAudit.rows.filter(row => Number(row.created_at) > Number(snapshotAt));
+
+    const auditIssues = [];
+    if (sourceAuditAtSnapshot.length !== restoreAudit.rows.length) {
+      auditIssues.push({
+        field: 'audit_logs',
+        message: `audit log count drift at snapshot: source ${sourceAuditAtSnapshot.length}, restore ${restoreAudit.rows.length}`
+      });
+    } else if (JSON.stringify(auditProjection(sourceAuditAtSnapshot)) !== JSON.stringify(auditProjection(restoreAudit.rows))) {
+      auditIssues.push({ field: 'audit_logs', message: 'audit log entries differ between snapshot state and restored database' });
+    }
+    checks.push({
+      name: 'auditLogs',
+      ok: auditIssues.length === 0,
+      issues: auditIssues,
+      details: { entries: restoreAudit.rows.length }
+    });
+
+    const keyRowIssues = rowsEqual(sourceKeys.rows, restoreKeys.rows)
+      ? []
+      : [{ field: 'api_keys', message: 'managed key rows differ between source and restored databases' }];
+    const keyPlan = await planApiKeyVerification({
+      restoredKeys: restoreKeys.rows,
+      fixture,
+      verifyHash: (secret, hash) => verifySecret(secret, hash)
+    });
+    checks.push({
+      name: 'managedApiKeys',
+      ok: keyRowIssues.length === 0 && keyPlan.ok,
+      issues: [...keyRowIssues, ...keyPlan.issues],
+      details: keyPlan.details
+    });
+
+    const settingsIssues = rowsEqual(sourceSettings.rows, restoreSettings.rows)
+      ? []
+      : [{ field: 'site_settings', message: 'site settings differ between source and restored databases' }];
+    checks.push({
+      name: 'siteSettings',
+      ok: settingsIssues.length === 0,
+      issues: settingsIssues,
+      details: { rows: restoreSettings.rows.length }
+    });
+
+    const restoreById = new Map(restorePages.rows.map(row => [row.id, row]));
+    const normalizeTimestamp = value => (value === null || value === undefined) ? null : String(value);
+    const expiryPairs = sourcePages.rows.map(row => ({
+      id: row.id,
+      sourceExpiresAt: normalizeTimestamp(row.expires_at),
+      restoreExpiresAt: normalizeTimestamp(restoreById.get(row.id)?.expires_at)
+    }));
+    const expiryIssues = expiryPairs
+      .filter(pair => pair.sourceExpiresAt !== pair.restoreExpiresAt)
+      .map(pair => ({ field: 'expires_at', pageId: pair.id, message: `expiry drift for ${pair.id}` }));
+    checks.push({
+      name: 'expiry',
+      ok: expiryIssues.length === 0,
+      issues: expiryIssues,
+      details: { expiring: expiryPairs.filter(pair => pair.sourceExpiresAt !== null).length }
+    });
+
+    const passwordPlan = await planCredentialVerification({
+      restoredPages: restorePages.rows,
+      fixture,
+      verifyHash: (password, hash) => verifySecret(password, hash),
+      decrypt: decryptSecret
+    });
+    checks.push({
+      name: 'passwordVerifyAndDecrypt',
+      ok: passwordPlan.ok,
+      issues: passwordPlan.issues,
+      details: passwordPlan.details
+    });
+
+    const durationsMs = { verifyMs: Date.now() - started };
+    const postSnapshotRevocations = findPostSnapshotRevocations(sourceAuditAfterSnapshot, snapshotAt);
+
+    return buildVerificationReport({
+      checks,
+      durationsMs,
+      postSnapshotRevocations,
+      manifest,
+      target: {
+        database: new URL(restoreUrl).pathname.replace(/^\//, ''),
+        host: new URL(restoreUrl).hostname
+      }
+    });
+  } finally {
+    await Promise.allSettled([sourcePool.end(), restorePool.end()]);
+  }
+}
+
+async function main() {
+  const args = parseCliArgs(process.argv.slice(2));
+  const sourceUrl = args.sourceUrl || process.env.BACKUP_DATABASE_URL;
+  const restoreUrl = args.restoreUrl || process.env.RESTORE_DATABASE_URL;
+  const sessionSecret = args.sessionSecret;
+
+  if (!sourceUrl || !restoreUrl) {
+    throw new Error('--source-url and --restore-url are required');
+  }
+
+  if (!args.manifest) {
+    throw new Error('--manifest <backup manifest path> is required');
+  }
+
+  if (sessionSecret) {
+    // Must be set before any encrypt/decrypt helper runs. Synthetic values only.
+    process.env.SESSION_SECRET = sessionSecret;
+  }
+
+  const manifest = JSON.parse(fs.readFileSync(args.manifest, 'utf8'));
+  const fixture = args.fixture ? JSON.parse(fs.readFileSync(args.fixture, 'utf8')) : {};
+
+  const report = await runVerification({
+    sourceUrl,
+    restoreUrl,
+    manifest,
+    fixture,
+    allowNonTest: args.allowNonTest === true
+  });
+
+  const defaultOutput = args.manifest.endsWith('.manifest.json')
+    ? args.manifest.replace(/\.manifest\.json$/, '.verification.json')
+    : `${args.manifest}.verification.json`;
+  const output = args.output || defaultOutput;
+  fs.writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`);
+
+  console.log(`[verify:backup] checks: ${report.checks.map(check => `${check.name}=${check.ok ? 'ok' : 'FAIL'}`).join(', ')}`);
+  console.log(`[verify:backup] reconciliation: ${report.reconciliation.status}`);
+  console.log(`[verify:backup] safeToServe: ${report.safeToServe} (restored databases stay offline)`);
+  console.log(`[verify:backup] durations: ${JSON.stringify(report.durationsMs)}`);
+  console.log(`[verify:backup] report: ${output}`);
+
+  process.exitCode = reconciliationExitCode(report, { reconciled: args.reconciled === true });
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`[verify:backup] failed: ${error.message}`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  COVERED_OBJECTS,
+  HARD_REVOCATION_AUDIT_ACTIONS,
+  POLICY_FIELD_NAMES,
+  buildVerificationReport,
+  classifyRevocationCoverage,
+  comparePageInventory,
+  findPostSnapshotRevocations,
+  planApiKeyVerification,
+  planCredentialVerification,
+  reconciliationExitCode,
+  runVerification,
+  sha256Hex,
+  verifyMigrationLedger
+};

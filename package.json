@@ -8,10 +8,15 @@
     "dev": "NODE_ENV=development nodemon server.js",
     "test": "NODE_ENV=test VERCEL_ENV= DATABASE_URL= POSTGRES_URL= node --test test/*.test.js",
     "test:postgres": "NODE_ENV=test node --test test/integration/postgres-migrations.test.js",
+    "test:postgres:backup": "NODE_ENV=test node --test test/integration/postgres-backup.test.js",
     "prod": "NODE_ENV=production node --max-old-space-size=1024 server.js",
     "db:migrate": "node scripts/migrate.js",
     "hash-password": "node scripts/hash-password.js",
-    "backfill-titles": "node scripts/backfill-page-titles.js"
+    "backfill-titles": "node scripts/backfill-page-titles.js",
+    "backup:db": "node scripts/backup-db.js",
+    "restore:db": "node scripts/restore-db.js",
+    "verify:backup": "node scripts/verify-backup.js",
+    "backup:check": "node scripts/backup-restore-check.js"
   },
   "keywords": [
     "html",
