@@ -9,12 +9,15 @@ function maintenanceError() {
 
 function createPublishing(repository) {
   return {
-    run(operation, { allowPaused = false } = {}) {
+    run(operation, { allowPaused = false, apiKeyIdentity } = {}) {
       return repository.withPublishingTransaction(async transaction => {
         // The adapter has already acquired the maintenance lock. Check the
         // live setting on that same transaction, never a process-local cache.
         transaction.publishingWritesPaused = await transaction.getPublishingWritesPaused();
         if (transaction.publishingWritesPaused && !allowPaused) throw maintenanceError();
+        if (apiKeyIdentity?.credentialKind === 'managed') {
+          await transaction.verifyApiKeyForWrite(apiKeyIdentity);
+        }
         return operation(transaction);
       });
     }
@@ -22,6 +25,10 @@ function createPublishing(repository) {
 }
 
 function sendPublishingError(res, error) {
+  if (error.code === 'INVALID_API_KEY') {
+    res.status(401).json({ success: false, code: error.code, error: 'Invalid API key' });
+    return true;
+  }
   if (error.code === 'PUBLISHING_MAINTENANCE') {
     res.status(503).json({ success: false, code: error.code, maintenance: true, retryable: true, error: error.message });
     return true;

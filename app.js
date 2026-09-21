@@ -11,6 +11,9 @@ const cookieParser = require('cookie-parser');
 const { performance } = require('node:perf_hooks');
 
 const config = require('./config');
+const { managedIdentity } = require('./utils/apiKeyIdentity');
+const { CONTENT_TYPES, CREATE_SHARE, apiCapabilities } = require('./utils/apiCapabilities');
+const capabilities = apiCapabilities(config);
 const { isAccessRevision, requireAccessRevision } = require('./utils/shareAccess');
 const { publicShareProjection } = require('./utils/publicShareProjection');
 const { createPageRepository } = require('./models/pageRepository');
@@ -47,7 +50,7 @@ const ADMIN_COOKIE = 'admin_session';
 const DASHBOARD_ADMIN_COOKIE = 'dashboard_admin_session';
 const ADMIN_TTL_MS = 24 * 60 * 60 * 1000;
 const PAGE_ACCESS_TTL_MS = 24 * 60 * 60 * 1000;
-const VALID_CODE_TYPES = new Set(['html', 'markdown', 'svg', 'mermaid']);
+const VALID_CODE_TYPES = new Set(CONTENT_TYPES);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const FAVICON_PATH = path.join(PUBLIC_DIR, 'icon/web/favicon.ico');
 const STATIC_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
@@ -76,9 +79,9 @@ let nextViewRequestIsColdStart = true;
 const app = express();
 const pageRepository = createPageRepository();
 const publishing = createPublishing(pageRepository);
-const parseSmallJson = bodyParser.json({ limit: config.smallBodyLimit });
-const parseSmallForm = bodyParser.urlencoded({ extended: true, limit: config.smallBodyLimit });
-const parseShareJson = bodyParser.json({ limit: config.shareBodyLimit });
+const parseSmallJson = bodyParser.json({ limit: capabilities.limits.smallRequestBodyBytes });
+const parseSmallForm = bodyParser.urlencoded({ extended: true, limit: capabilities.limits.smallRequestBodyBytes });
+const parseShareJson = bodyParser.json({ limit: capabilities.limits.shareRequestBodyBytes });
 
 app.locals.config = config;
 app.locals.pageRepository = pageRepository;
@@ -511,6 +514,7 @@ async function requireApiKey(req, res, next) {
     const provided = Buffer.from(key);
 
     if (expected.length === provided.length && timingSafeEqual(expected, provided)) {
+      req.apiKeyIdentity = Object.freeze({ credentialKind: 'legacy' });
       return next();
     }
   }
@@ -523,16 +527,15 @@ async function requireApiKey(req, res, next) {
 
   try {
     const apiKey = await pageRepository.getApiKeyById(match[1]);
+    // Capture the version paired with the FIRST hash read, before async scrypt.
+    const identity = apiKey ? managedIdentity(apiKey) : null;
     const isValid = apiKey && await verifySecret(match[2], apiKey.key_hash);
 
     if (!isValid) {
       return res.status(401).json({ success: false, error: 'Invalid API key' });
     }
 
-    req.managedApiKey = {
-      id: apiKey.id,
-      name: apiKey.name
-    };
+    req.apiKeyIdentity = identity;
 
     pageRepository.touchApiKey(apiKey.id).catch((error) => {
       console.error('API key usage update failed:', error);
@@ -1067,6 +1070,7 @@ app.get('/admin/apis', requireDashboardAdmin, async (req, res) => {
       title: 'QuickShare | API 管理',
       page: 'admin-apis',
       apiKeys,
+      capabilities,
       legacyApiKeyConfigured: Boolean(config.shareApiKey),
       csrfToken: config.authEnabled ? createCsrfToken(sessionToken) : ''
     });
@@ -1117,6 +1121,7 @@ app.post('/admin/apis/keys', requireDashboardAdmin, parseSmallJson, requireDashb
           key_prefix: apiKey.key_prefix,
           created_at: apiKey.created_at,
           last_used_at: apiKey.last_used_at,
+          credential_version: apiKey.credential_version,
           secret: `qs.${id}.${secret}`
         }
       });
@@ -1129,6 +1134,27 @@ app.post('/admin/apis/keys', requireDashboardAdmin, parseSmallJson, requireDashb
       success: false,
       error: 'Failed to create API key'
     });
+  }
+});
+
+app.post('/admin/apis/keys/:id/rotate', privateNoStore, requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
+  try {
+    const respond = await publishing.run(async (repository) => {
+      const secret = randomBytes(32).toString('base64url');
+      const apiKey = await repository.rotateApiKey(req.params.id, await hashSecret(secret));
+      if (!apiKey) return res => res.status(404).json({ success: false, error: 'API key not found' });
+      await repository.createAuditLog({
+        action: 'api_key.rotate', pageId: null,
+        details: JSON.stringify({ apiKeyId: apiKey.id, credentialVersion: apiKey.credential_version }),
+        ip: req.ip
+      });
+      return res => res.json({ success: true, apiKey: { ...apiKey, secret: `qs.${apiKey.id}.${secret}` } });
+    });
+    return respond(res);
+  } catch (error) {
+    if (sendPublishingError(res, error)) return;
+    console.error('Rotate API key failed:', { name: error?.name, code: safeErrorCode(error) });
+    return res.status(500).json({ success: false, error: 'Failed to rotate API key' });
   }
 });
 
@@ -1755,7 +1781,16 @@ app.post('/api/pages/preview', privateNoStore, requireBrowserPublishAccess, pars
   }
 });
 
-app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (req, res) => {
+app.get('/api/v1/me', privateNoStore, requireApiKey, (req, res) => {
+  const origin = new URL(config.baseUrl || `${req.protocol}://${req.get('host')}`).origin;
+  return res.json({ success: true, origin, ...req.apiKeyIdentity });
+});
+
+app.get('/api/v1/capabilities', privateNoStore, requireApiKey, (req, res) => {
+  return res.json({ success: true, ...capabilities });
+});
+
+app.post(CREATE_SHARE.path, privateNoStore, requireApiKey, parseShareJson, async (req, res) => {
   try {
     const respond = await publishing.run(async (repository) => {
       const result = await createPageFromInput(req.body, repository);
@@ -1786,7 +1821,7 @@ app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (
         expiresAt: result.expiresAt,
         markdownTheme: result.markdownTheme
       });
-    });
+    }, { apiKeyIdentity: req.apiKeyIdentity });
     return respond(res);
   } catch (error) {
     if (sendPublishingError(res, error)) return;

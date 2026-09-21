@@ -1,0 +1,19 @@
+# Share API identity and capabilities
+
+`GET /api/v1/me` and `GET /api/v1/capabilities` require `X-API-Key`. Dashboard/login/access cookies never substitute for a Key. Missing or invalid Keys return 401; database authentication failure returns 503. Responses are private/no-store. Discovery remains available during publishing maintenance; best-effort usage timestamps neither authorize writes nor delay discovery.
+
+`/me` returns `success`, canonical instance `origin` (the origin of `BASE_URL`, otherwise the request origin) and `credentialKind` (`legacy` or `managed`). Managed identities additionally expose `id`, `name`, and decimal-string `credentialVersion`. No secret, hash, grants or other resources are returned. A Key identifies a credential, not Share ownership.
+
+`/capabilities` returns `success`, `protocolVersion`, `contentTypes`, `markdownThemePresets`, `limits`, and `operations`. **The executable definition is `utils/apiCapabilities.js`**, shared by the Express content-type validation, request parsers, create route, discovery response and rendered `/admin/apis` documentation. The Preset IDs come directly from `utils/markdownThemeCatalog.js`; there is no independent documentation catalog to maintain. Query the instance for its current values rather than copying an older list.
+
+- Both credential kinds remain create-only: the only Share operation is `share:create` (`POST /api/v1/share`). Identity/capability reads are connection diagnostics, not permission to read or manage existing Shares. No scope/grant, conditional update, history or idempotency protocol is implemented here.
+- `shareRequestBodyBytes` and `smallRequestBodyBytes` report actual configured parser limits (default 2mb and 16kb). These count the decoded HTTP request body including JSON structure, metadata and escape sequences. `rawContentBytes: null` means no separate fixed raw-content capacity is advertised. Transport/proxy limits may be lower. Exceeding the application parser limit returns 413.
+- The legacy create endpoint retains status 200 and existing `success`, `url`, `urlId`, `password`, `isProtected`, `codeType`, `title`, `description`, `expiresAt`, `markdownTheme` fields. It does not expose Favorite Share state.
+
+## Managed Key rotation
+
+The owner uses `/admin/apis` or `POST /admin/apis/keys/:id/rotate` with a dashboard session and CSRF token. Successful rotation preserves ID/name/created time/prefix, replaces the secret hash and increments BIGINT `credential_version`. The receipt's `apiKey.credential_version` is a decimal string and `apiKey.secret` contains the new full Key. Only a committed successful receipt discloses it; reload/listing cannot recover it. Creation and deletion remain supported. Legacy environment Keys cannot be rotated through this endpoint.
+
+Share authentication captures the version paired with the first verified hash. Inside the existing publishing transaction, lock order is maintenance gate → Key row → Share write/audit. Rotation UPDATE and deletion DELETE take that same Key row lock. If rotation/deletion commits first, the old request returns 401 without creating a Share. If the legitimate write takes the lock first, it may commit before rotation; revocation does not undo already committed work. SQL/audit/COMMIT failures roll back the transaction and never return a successful credential receipt.
+
+Migration `006` adds the positive BIGINT version with default 1, preserving existing IDs and hashes. Follow the maintenance and rollback instructions in [deployment](deployment.md); never roll back to a credential-version-ignorant writer. Native backups compare the version explicitly and treat post-snapshot `api_key.rotate` as revocation evidence.

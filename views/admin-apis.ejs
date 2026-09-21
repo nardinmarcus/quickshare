@@ -87,6 +87,10 @@
                 <% } %>
               </td>
               <td class="admin-actions-col">
+                <button type="button" class="admin-icon-link api-key-rotate-btn" data-api-key-id="<%= apiKey.id %>" data-api-key-name="<%= apiKey.name %>" aria-label="轮换 API 密钥 <%= apiKey.name %>">
+                  <i class="fas fa-sync-alt" aria-hidden="true"></i>
+                  <span class="sr-only">轮换</span>
+                </button>
                 <button type="button" class="admin-delete-btn api-key-delete-btn" data-api-key-id="<%= apiKey.id %>" data-api-key-name="<%= apiKey.name %>" aria-label="删除 API 密钥 <%= apiKey.name %>">
                   <i class="fas fa-trash-alt" aria-hidden="true"></i>
                   <span class="sr-only">删除</span>
@@ -102,10 +106,14 @@
   <section class="api-docs-grid">
     <article class="card api-doc-card">
       <div class="api-doc-heading">
-        <span class="api-method">POST</span>
-        <code>/api/v1/share</code>
+        <span class="api-method"><%= capabilities.operations[0].method %></span>
+        <code><%= capabilities.operations[0].path %></code>
       </div>
       <p>通过 HTML、Markdown、SVG 或 Mermaid 内容创建 QuickShare 分享页。</p>
+      <h3>身份与能力核验</h3>
+      <p><code>GET /api/v1/me</code> 返回实例 origin 与当前凭据身份；<code>GET /api/v1/capabilities</code> 返回真实能力。两者均要求 <code>X-API-Key</code>，维护期间仍可读取。</p>
+      <p>托管密钥与旧版密钥当前均只能创建 Share，不提供读取源内容或更新既有 Share 的管理权限。轮换保持 Key ID，旧密钥立即失效；请同步更新自动化任务。</p>
+      <p>协议 <%= capabilities.protocolVersion %>；可用操作：<%= capabilities.operations.map(operation => operation.id).join('、') %>。</p>
       <h3>身份验证</h3>
       <p>在 <code>X-API-Key</code> 请求头中传入托管密钥。已配置的旧版 <code>SHARE_API_KEY</code> 仍然受支持。</p>
       <pre><code>curl -s -X POST "$QUICKSHARE_URL/api/v1/share" \
@@ -122,10 +130,12 @@
       <h2>请求体</h2>
       <dl class="api-field-list">
         <div><dt><code>htmlContent</code> <span>必填</span></dt><dd>要分享的内容。</dd></div>
-        <div><dt><code>codeType</code></dt><dd>可选 <code>html</code>、<code>markdown</code>、<code>svg</code> 或 <code>mermaid</code>；省略时自动检测。</dd></div>
+        <div><dt><code>codeType</code></dt><dd>可选 <%= capabilities.contentTypes.join('、') %>；省略时自动检测。</dd></div>
         <div><dt><code>title</code> / <code>description</code></dt><dd>可选的页面元数据。</dd></div>
         <div><dt><code>isProtected</code></dt><dd>设为 true 时，QuickShare 会生成页面密码并仅返回一次。</dd></div>
       </dl>
+      <p>Markdown Theme Preset ID：<%= capabilities.markdownThemePresets.join('、') %>。</p>
+      <p>Share 请求体上限 <%= capabilities.limits.shareRequestBodyBytes %> bytes；小型请求体上限 <%= capabilities.limits.smallRequestBodyBytes %> bytes。上限包含 JSON 包装与转义开销，不等于原始正文容量。</p>
       <h2>响应</h2>
       <pre><code>{
   "success": true,

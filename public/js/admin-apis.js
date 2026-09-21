@@ -77,6 +77,14 @@
 
     const actions = document.createElement('td');
     actions.className = 'admin-actions-col';
+    const rotate = document.createElement('button');
+    rotate.type = 'button';
+    rotate.className = 'admin-icon-link api-key-rotate-btn';
+    rotate.dataset.apiKeyId = apiKey.id;
+    rotate.dataset.apiKeyName = apiKey.name;
+    rotate.setAttribute('aria-label', '轮换 API 密钥 ' + apiKey.name);
+    rotate.innerHTML = '<i class="fas fa-sync-alt" aria-hidden="true"></i><span class="sr-only">轮换</span>';
+    actions.appendChild(rotate);
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'admin-delete-btn api-key-delete-btn';
@@ -90,7 +98,46 @@
     keyRows.prepend(row);
   }
 
+  let busy = false;
+  function setBusy(value) {
+    busy = value;
+    form.setAttribute('aria-busy', String(value));
+    keyRows.setAttribute('aria-busy', String(value));
+    document.querySelectorAll('#api-key-form button, #api-keys-body button').forEach(button => { button.disabled = value; });
+  }
+
+  function clearSecret() {
+    secretValue.textContent = '';
+    secretPanel.hidden = true;
+  }
+
+  async function rotateKey(button) {
+    if (busy) return;
+    const id = button.dataset.apiKeyId;
+    const name = button.dataset.apiKeyName || '此密钥';
+    if (!id || !window.confirm('轮换“' + name + '”吗？Key ID 保持不变，旧密钥立即失效。请复制新密钥并更新自动化任务。')) return;
+    clearSecret();
+    setBusy(true);
+    try {
+      const response = await fetch('/admin/apis/keys/' + encodeURIComponent(id) + '/rotate', {
+        method: 'POST', headers: { Accept: 'application/json', 'X-CSRF-Token': csrfToken() }
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || '轮换 API 密钥失败');
+      secretValue.textContent = data.apiKey.secret;
+      secretPanel.hidden = false;
+      secretPanel.scrollIntoView({ block: 'nearest' });
+      copyButton?.focus();
+      notify('success', 'API 密钥已轮换，旧密钥已失效');
+    } catch (error) {
+      notify('error', error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function deleteKey(button) {
+    if (busy) return;
     const id = button.dataset.apiKeyId;
     const name = button.dataset.apiKeyName || '此密钥';
 
@@ -98,7 +145,8 @@
       return;
     }
 
-    button.disabled = true;
+    clearSecret();
+    setBusy(true);
 
     try {
       const response = await fetch('/admin/apis/keys/' + encodeURIComponent(id), {
@@ -118,24 +166,25 @@
       addEmptyState();
       notify('success', 'API 密钥已删除');
     } catch (error) {
-      button.disabled = false;
       notify('error', error.message);
+    } finally {
+      setBusy(false);
     }
   }
 
   form.addEventListener('submit', async function (event) {
     event.preventDefault();
+    if (busy) return;
 
     const name = nameInput.value.trim();
-    const submit = form.querySelector('button[type="submit"]');
 
     if (!name) {
       nameInput.focus();
       return;
     }
 
-    submit.disabled = true;
-    form.setAttribute('aria-busy', 'true');
+    clearSecret();
+    setBusy(true);
 
     try {
       const response = await fetch('/admin/apis/keys', {
@@ -161,8 +210,7 @@
     } catch (error) {
       notify('error', error.message);
     } finally {
-      form.setAttribute('aria-busy', 'false');
-      submit.disabled = false;
+      setBusy(false);
     }
   });
 
@@ -188,5 +236,7 @@
     const button = event.target.closest('.api-key-delete-btn');
 
     if (button) deleteKey(button);
+    const rotate = event.target.closest('.api-key-rotate-btn');
+    if (rotate) rotateKey(rotate);
   });
 })();

@@ -112,8 +112,8 @@ async function seedFixture(pool) {
   );
 
   await pool.query(
-    `INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at, last_used_at)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+    `INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at, last_used_at, credential_version)
+     VALUES ($1, $2, $3, $4, $5, $6, '9007199254740993')`,
     [
       FIXTURE.apiKey.id,
       FIXTURE.apiKey.name,

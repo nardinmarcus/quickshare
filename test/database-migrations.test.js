@@ -53,7 +53,8 @@ test('migrations contain every runtime table, column, index, and site setting', 
     '002_site_settings.sql',
     '003_page_favorites.sql',
     '004_page_access_revision.sql',
-    '005_publishing_writes_paused.sql'
+    '005_publishing_writes_paused.sql',
+    '006_api_key_credential_version.sql'
   ]);
   assert.match(migrations[0].sql, /CREATE TABLE IF NOT EXISTS public\.pages/i);
   assert.match(migrations[0].sql, /ADD COLUMN IF NOT EXISTS password_hash/i);
@@ -90,8 +91,8 @@ test('migration runner applies pending files once and releases its client', asyn
   const second = await runMigrations(fake.pool, { logger: { info() {} } });
   const migrationSql = loadMigrations().map(migration => migration.sql.trim());
 
-  assert.deepEqual(first, { applied: ['001', '002', '003', '004', '005'], skipped: [] });
-  assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004', '005'] });
+  assert.deepEqual(first, { applied: ['001', '002', '003', '004', '005', '006'], skipped: [] });
+  assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004', '005', '006'] });
   for (const sql of migrationSql) {
     assert.equal(fake.queries.filter(query => query.sql === sql).length, 1);
   }

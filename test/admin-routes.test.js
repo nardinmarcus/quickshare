@@ -889,6 +889,36 @@ test('dashboard page mutations accept the rendered CSRF token', async () => {
 });
 
 
+test('rotation requires dashboard identity and CSRF; paused writes do not disable Key discovery', async () => {
+  const cookie = await loginDashboard();
+  const page = await request('/admin/apis', { headers: { Cookie: cookie } });
+  const csrf = page.text.match(/name="csrf-token" content="([^"]+)"/)[1];
+  const headers = { Cookie: cookie, 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' };
+  const created = JSON.parse((await request('/admin/apis/keys', { method: 'POST', headers, body: JSON.stringify({ name: 'CSRF fixture' }) })).text).apiKey;
+  const path = `/admin/apis/keys/${created.id}/rotate`;
+  assert.equal((await request(path, { method: 'POST' })).status, 302);
+  assert.equal((await request(path, { method: 'POST', headers: { Cookie: await login() } })).status, 302);
+  assert.equal((await request(path, { method: 'POST', headers: { Cookie: cookie } })).status, 403);
+  assert.equal((await request(path, { method: 'POST', headers: { ...headers, 'X-CSRF-Token': 'invalid' } })).status, 403);
+  assert.equal((await request('/admin/apis/keys/nonexistent/rotate', { method: 'POST', headers })).status, 404);
+  for (const discovery of ['/api/v1/me', '/api/v1/capabilities']) {
+    assert.equal((await request(discovery, { headers: { Cookie: cookie } })).status, 401);
+  }
+  await app.locals.pageRepository.setPublishingWritesPaused(true);
+  try {
+    const paused = await request(path, { method: 'POST', headers });
+    assert.equal(paused.status, 503);
+    assert.equal(JSON.parse(paused.text).code, 'PUBLISHING_MAINTENANCE');
+    assert.doesNotMatch(paused.text, /qs\./);
+    for (const discovery of ['/api/v1/me', '/api/v1/capabilities']) {
+      assert.equal((await request(discovery, { headers: { 'X-API-Key': created.secret } })).status, 200);
+    }
+  } finally { await app.locals.pageRepository.setPublishingWritesPaused(false); }
+  const rotated = await request(path, { method: 'POST', headers });
+  assert.equal(rotated.status, 200);
+  assert.equal(JSON.parse(rotated.text).apiKey.credential_version, '2');
+});
+
 test('API management creates, documents, and deletes managed keys', async () => {
   const cookie = await loginDashboard();
   const pageResponse = await request('/admin/apis', {

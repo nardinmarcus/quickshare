@@ -1,3 +1,4 @@
+const { invalidApiKey } = require('../utils/apiKeyIdentity');
 const { maintenanceError } = require('./publishing');
 const { isAccessUpdate, assertAccessRevision } = require('../utils/shareAccess');
 const {
@@ -178,6 +179,7 @@ class MemoryPageRepository {
       id: apiKey.id,
       name: apiKey.name,
       key_hash: apiKey.keyHash,
+      credential_version: '1',
       key_prefix: apiKey.keyPrefix,
       created_at: apiKey.createdAt,
       last_used_at: null
@@ -188,6 +190,7 @@ class MemoryPageRepository {
       id: record.id,
       name: record.name,
       key_prefix: record.key_prefix,
+      credential_version: record.credential_version,
       created_at: record.created_at,
       last_used_at: record.last_used_at
     };
@@ -201,6 +204,19 @@ class MemoryPageRepository {
 
   async getApiKeyById(id) {
     return this.apiKeys.get(id) || null;
+  }
+
+  async verifyApiKeyForWrite(identity) {
+    if (this.apiKeys.get(identity.id)?.credential_version !== identity.credentialVersion) throw invalidApiKey();
+  }
+
+  async rotateApiKey(id, keyHash) {
+    const record = this.apiKeys.get(id);
+    if (!record) return null;
+    record.key_hash = keyHash;
+    record.credential_version = (BigInt(record.credential_version) + 1n).toString();
+    const { key_hash, ...receipt } = record;
+    return receipt;
   }
 
   async deleteApiKey(id) {

@@ -38,7 +38,8 @@ const {
 const HARD_REVOCATION_AUDIT_ACTIONS = new Set([
   'page.delete',
   'page.delete.batch',
-  'api_key.delete'
+  'api_key.delete',
+  'api_key.rotate'
 ]);
 
 // Policy-relevant field names emitted in page.update audit details as
@@ -431,8 +432,8 @@ async function runVerification({
         restorePool.query('SELECT * FROM pages ORDER BY id ASC'),
         sourcePool.query('SELECT action, page_id, details, ip, created_at FROM audit_logs ORDER BY id ASC'),
         restorePool.query('SELECT action, page_id, details, ip, created_at FROM audit_logs ORDER BY id ASC'),
-        sourcePool.query('SELECT id, name, key_hash, key_prefix, created_at, last_used_at FROM api_keys ORDER BY id ASC'),
-        restorePool.query('SELECT id, name, key_hash, key_prefix, created_at, last_used_at FROM api_keys ORDER BY id ASC'),
+        sourcePool.query('SELECT id, name, key_hash, key_prefix, created_at, last_used_at, credential_version FROM api_keys ORDER BY id ASC'),
+        restorePool.query('SELECT id, name, key_hash, key_prefix, created_at, last_used_at, credential_version FROM api_keys ORDER BY id ASC'),
         sourcePool.query('SELECT * FROM site_settings ORDER BY id ASC'),
         restorePool.query('SELECT * FROM site_settings ORDER BY id ASC'),
         sourcePool.query('SELECT version, name, checksum, applied_at FROM quickshare_schema_migrations ORDER BY version ASC'),

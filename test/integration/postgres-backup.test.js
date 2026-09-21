@@ -68,7 +68,7 @@ function runStep(command, args) {
 }
 
 test.before(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'issue28-backup-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'issue29-backup-'));
 
   const sourcePool = createPostgresPool(sourceUrl, { env: poolEnv, max: 1 });
   const restoreTarget = new URL(restoreUrl);
@@ -241,6 +241,9 @@ test('native restore rebuilds the database and passes full verification', async 
       );
       assert.equal(restored.rows[0].access_revision, ACCESS_REVISION_DRILL_VALUE);
       assert.equal(typeof restored.rows[0].access_revision, 'string');
+      const restoredKey = await restorePool.query('SELECT credential_version FROM api_keys WHERE id = $1', [FIXTURE.apiKey.id]);
+      assert.equal(restoredKey.rows[0].credential_version, '9007199254740993');
+      assert.equal((await restorePool.query("SELECT version FROM quickshare_schema_migrations WHERE version = '006'")).rowCount, 1);
       const settings = await restorePool.query('SELECT publishing_writes_paused FROM site_settings WHERE id = 1');
       assert.equal(settings.rows[0].publishing_writes_paused, true, 'non-default maintenance setting survives native restore');
       const ledger = await restorePool.query("SELECT version FROM quickshare_schema_migrations WHERE version = '005'");
@@ -415,6 +418,27 @@ test('maintenance setting drift fails the full-row backup verifier', async () =>
     assert.equal(report.checks.find(check => check.name === 'siteSettings').ok, false);
   } finally {
     await restorePool.query('UPDATE site_settings SET publishing_writes_paused = TRUE WHERE id = 1');
+    await restorePool.end();
+  }
+});
+
+test('credential_version drift alone fails native backup verification', async () => {
+  const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+  try {
+    await restorePool.query('UPDATE api_keys SET credential_version = credential_version + 1 WHERE id = $1', [FIXTURE.apiKey.id]);
+    const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
+    const result = await runStep(process.execPath, [
+      'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+      '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+      '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+      '--output', path.join(tmpDir, 'verification-key-version-tamper.json')
+    ]);
+    assert.equal(result.code, 1);
+    const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-key-version-tamper.json')));
+    assert.equal(report.safeToServe, false);
+    assert.equal(report.checks.find(check => check.name === 'managedApiKeys').ok, false);
+  } finally {
+    await restorePool.query("UPDATE api_keys SET credential_version = '9007199254740993' WHERE id = $1", [FIXTURE.apiKey.id]);
     await restorePool.end();
   }
 });

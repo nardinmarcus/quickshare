@@ -99,7 +99,7 @@ test('baseline migration handles empty and legacy databases idempotently', async
   try {
     await resetPublicSchema(pool);
     const emptyResult = await runMigrations(pool, { logger: { info() {} } });
-    assert.deepEqual(emptyResult, { applied: ['001', '002', '003', '004', '005'], skipped: [] });
+    assert.deepEqual(emptyResult, { applied: ['001', '002', '003', '004', '005', '006'], skipped: [] });
 
     const emptyTables = await pool.query(`
       SELECT table_name
@@ -168,8 +168,8 @@ test('baseline migration handles empty and legacy databases idempotently', async
     );
     const migrationCount = await pool.query('SELECT COUNT(*)::int AS count FROM quickshare_schema_migrations');
 
-    assert.deepEqual(legacyResult, { applied: ['001', '002', '003', '004', '005'], skipped: [] });
-    assert.deepEqual(repeatedResult, { applied: [], skipped: ['001', '002', '003', '004', '005'] });
+    assert.deepEqual(legacyResult, { applied: ['001', '002', '003', '004', '005', '006'], skipped: [] });
+    assert.deepEqual(repeatedResult, { applied: [], skipped: ['001', '002', '003', '004', '005', '006'] });
     assert.deepEqual(migratedSentinel.rows, [{
       id: 'sentinel',
       html_content: '<h1>Keep me</h1>',
@@ -179,7 +179,7 @@ test('baseline migration handles empty and legacy databases idempotently', async
       is_favorite: false
     }]);
     assert.deepEqual(repeatedSentinel.rows, [{ is_favorite: true }]);
-    assert.equal(migrationCount.rows[0].count, 5);
+    assert.equal(migrationCount.rows[0].count, 6);
     const accessColumn = await pool.query("SELECT data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = 'pages' AND column_name = 'access_revision'");
     assert.deepEqual(accessColumn.rows, [{ data_type: 'bigint', is_nullable: 'NO', column_default: '1' }]);
     assert.equal((await pool.query("SELECT access_revision FROM pages WHERE id = 'sentinel'")).rows[0].access_revision, '1');
@@ -558,7 +558,7 @@ test('site settings persist real transitions and audit them exactly once', async
     assert.equal(await repository.getHomepagePasswordRequired(), false);
 
     const repeatedMigration = await runMigrations(pool, { logger: { info() {} } });
-    assert.deepEqual(repeatedMigration, { applied: [], skipped: ['001', '002', '003', '004', '005'] });
+    assert.deepEqual(repeatedMigration, { applied: [], skipped: ['001', '002', '003', '004', '005', '006'] });
     assert.equal(await repository.getHomepagePasswordRequired(), false);
 
     const logs = await repository.listAuditLogs();

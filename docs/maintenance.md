@@ -20,7 +20,7 @@ npm run maintenance -- resume
 
 ## 已覆盖的行为
 
-网页创建、Share API 创建、编辑、保护、克隆、单条/批量删除、Favorite Share、首页访问设置、managed Key 创建/删除，以及 `backfill-titles --write` 均通过发布事务 Interface。标题 backfill 的 dry-run 仍只读；`--write` 使用同一 client 查询和更新，不会因单连接池自锁，成功输出也在提交后。
+网页创建、Share API 创建、编辑、保护、克隆、单条/批量删除、Favorite Share、首页访问设置、managed Key 创建/轮换/删除，以及 `backfill-titles --write` 均通过发布事务 Interface。标题 backfill 的 dry-run 仍只读；`--write` 使用同一 client 查询和更新，不会因单连接池自锁，成功输出也在提交后。
 
 认证、CSRF 与 Origin 检查仍先执行，原有未授权拒绝不变。允许进入写入流程的请求在暂停时返回 HTTP 503：
 
@@ -28,7 +28,7 @@ npm run maintenance -- resume
 {"success":false,"code":"PUBLISHING_MAINTENANCE","maintenance":true,"retryable":true,"error":"Share 写入维护中，请稍后重试"}
 ```
 
-浏览事件对存在、未过期且已获访问许可的 Share 同样返回该 503，计数不增加；缺失/过期/未解锁仍分别为 404/410/403。公开阅读、预览、已认证管理读取、两种登录和密码验证继续可用。Key 最近使用时间是 best-effort；维护期间跳过，不阻塞读取/认证。登录审计不是发布事务，不构成内容迁移排空对象。
+浏览事件对存在、未过期且已获访问许可的 Share 同样返回该 503，计数不增加；缺失/过期/未解锁仍分别为 404/410/403。公开阅读、预览、已认证管理读取、两种登录和密码验证继续可用。`GET /api/v1/me` 与 `/api/v1/capabilities` 仍以有效 API Key 鉴权并可读。Key 最近使用时间是 best-effort；维护期间跳过，不阻塞读取/认证。登录审计不是发布事务，不构成内容迁移排空对象。
 
 发布事务在 PostgreSQL 上先取得共享事务 advisory lock `20828001`，再读取维护设置，并用 **同一 client** 执行写入和必要审计。pause/resume 取得同一闸的排他事务锁。锁持续至 COMMIT/ROLLBACK：已进入的写事务先结束，排在暂停之后的写入取得共享锁后会读到暂停状态并拒绝。设置变更不会嵌套 BEGIN/COMMIT；SQL/审计失败整笔回滚，HTTP 不先报成功。事务超时/死锁返回可重试的 `PUBLISHING_UNAVAILABLE` 503，不在服务端盲目重试。
 
@@ -45,7 +45,7 @@ npm run maintenance -- resume
 
 ## 回滚
 
-仅回滚到同时理解当前维护闸与访问安全语义的已验证兼容版本。忽略维护闸或 `access_revision` 的旧版本不是安全回滚目标；无法提供兼容候选时保持写维护并向前修复。不删除新列、不执行破坏性 down migration。
+仅回滚到同时理解当前维护闸与访问安全语义的已验证兼容版本。忽略维护闸、`access_revision` 或 Key `credential_version` 锁内复核的旧版本不是安全回滚目标；无法提供兼容候选时保持写维护并向前修复。不删除新列、不执行破坏性 down migration。
 
 ## 隔离验证
 

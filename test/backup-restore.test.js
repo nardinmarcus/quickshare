@@ -299,6 +299,8 @@ test('post-snapshot revocation detection uses the audit vocabulary the app actua
     { action: 'page.update', page_id: 'a', details: '{"fields":["title","htmlContent"]}', created_at: String(snapshotAt + 1500) },
     // Expiry change is a policy change too.
     { action: 'page.update', page_id: 'b', details: '{"fields":["expiresAt"]}', created_at: String(snapshotAt + 2000) },
+    // Key rotation revokes the old secret too.
+    { action: 'api_key.rotate', page_id: null, details: '{"apiKeyId":"k1","credentialVersion":"2"}', created_at: String(snapshotAt + 2400) },
     // Key revocation.
     { action: 'api_key.delete', page_id: null, details: '{"apiKeyId":"k1"}', created_at: String(snapshotAt + 2500) },
     // Hard purges.
@@ -315,6 +317,7 @@ test('post-snapshot revocation detection uses the audit vocabulary the app actua
   assert.deepEqual(events.map(event => `${event.action}:${event.pageId}`), [
     'page.update:a',
     'page.update:b',
+    'api_key.rotate:null',
     'api_key.delete:null',
     'page.delete:gone2',
     'page.delete.batch:null'

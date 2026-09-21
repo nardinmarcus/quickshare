@@ -7,7 +7,7 @@
     "start": "NODE_ENV=production node --max-old-space-size=1024 server.js",
     "dev": "NODE_ENV=development nodemon server.js",
     "test": "NODE_ENV=test VERCEL_ENV= DATABASE_URL= POSTGRES_URL= node --test test/*.test.js",
-    "test:postgres": "NODE_ENV=test node --test --test-concurrency=1 test/integration/postgres-migrations.test.js test/integration/postgres-maintenance.test.js",
+    "test:postgres": "NODE_ENV=test node --test --test-concurrency=1 test/integration/postgres-migrations.test.js test/integration/postgres-maintenance.test.js test/integration/postgres-api-keys.test.js",
     "test:postgres:backup": "NODE_ENV=test node --test test/integration/postgres-backup.test.js",
     "prod": "NODE_ENV=production node --max-old-space-size=1024 server.js",
     "db:migrate": "node scripts/migrate.js",
@@ -29,6 +29,7 @@
   "license": "ISC",
   "dependencies": {
     "body-parser": "^1.20.3",
+    "bytes": "3.1.2",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

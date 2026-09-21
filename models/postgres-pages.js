@@ -1,3 +1,4 @@
+const { invalidApiKey } = require('../utils/apiKeyIdentity');
 const { createPostgresPool } = require('./postgres-config');
 const { maintenanceError, PUBLISHING_LOCK } = require('./publishing');
 const { isAccessRevision, isAccessUpdate, requireAccessRevision, accessError } = require('../utils/shareAccess');
@@ -545,7 +546,7 @@ class PostgresPageRepository {
       `
         INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at)
         VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, name, key_prefix, created_at, last_used_at
+        RETURNING id, name, key_prefix, created_at, last_used_at, credential_version
       `,
       [apiKey.id, apiKey.name, apiKey.keyHash, apiKey.keyPrefix, apiKey.createdAt]
     );
@@ -556,7 +557,7 @@ class PostgresPageRepository {
   async listApiKeys() {
     const result = await this.pool.query(
       `
-        SELECT id, name, key_prefix, created_at, last_used_at
+        SELECT id, name, key_prefix, created_at, last_used_at, credential_version
         FROM api_keys
         ORDER BY created_at DESC
       `
@@ -567,10 +568,26 @@ class PostgresPageRepository {
 
   async getApiKeyById(id) {
     const result = await this.pool.query(
-      'SELECT id, name, key_hash, key_prefix, created_at, last_used_at FROM api_keys WHERE id = $1 LIMIT 1',
+      'SELECT id, name, key_hash, key_prefix, created_at, last_used_at, credential_version FROM api_keys WHERE id = $1 LIMIT 1',
       [id]
     );
 
+    return result.rows[0] || null;
+  }
+
+  async verifyApiKeyForWrite(identity) {
+    if (!this.transactionClient) throw new Error('Key verification requires a publishing transaction');
+    const result = await this.pool.query('SELECT credential_version FROM api_keys WHERE id = $1 FOR UPDATE', [identity.id]);
+    if (result.rows[0]?.credential_version !== identity.credentialVersion) throw invalidApiKey();
+  }
+
+  async rotateApiKey(id, keyHash) {
+    const result = await this.pool.query(
+      `UPDATE api_keys SET key_hash = $2, credential_version = credential_version + 1
+       WHERE id = $1
+       RETURNING id, name, key_prefix, created_at, last_used_at, credential_version`,
+      [id, keyHash]
+    );
     return result.rows[0] || null;
   }
 
