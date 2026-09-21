@@ -29,6 +29,7 @@ for (const [label, value] of [['source', sourceUrl], ['restore', restoreUrl]]) {
 }
 
 const {
+  ACCESS_REVISION_DRILL_VALUE,
   FIXTURE,
   seedFixture
 } = require('../../scripts/backup-restore-check');
@@ -36,6 +37,12 @@ const {
 const poolEnv = { POSTGRES_SSL: 'false' };
 const srcDocker = process.env.QS27_BACKUP_DOCKER_SRC || null;
 const restoreDocker = process.env.QS27_BACKUP_DOCKER_RESTORE || null;
+
+// Access Revision fixture gate state, resolved in test.before(). False on a
+// schema 001–003 base: the access_revision branch is then EXPLICITLY skipped
+// with a message naming the integrator's post-#25-merge obligation — it is
+// never silently claimed.
+let hasAccessRevision = false;
 
 const childEnv = sanitizeChildEnv(process.env, { SESSION_SECRET: FIXTURE.sessionSecret });
 
@@ -76,7 +83,8 @@ test.before(async () => {
     await runMigrations(sourcePool, { logger: { info() {} } });
 
     process.env.SESSION_SECRET = FIXTURE.sessionSecret;
-    await seedFixture(sourcePool);
+    const seedResult = await seedFixture(sourcePool);
+    hasAccessRevision = seedResult.accessRevisionSeeded === true;
 
     // Recreate the restore database from scratch so the drill proves a full restore.
     await restoreControl.query('DROP DATABASE IF EXISTS issue27_restore_test WITH (FORCE)');
@@ -213,6 +221,27 @@ test('native restore rebuilds the database and passes full verification', async 
   assert.equal(pageCheck.details.comparedColumns.includes('markdown_theme'), true);
   assert.equal(pageCheck.details.comparedColumns.includes('is_favorite'), true);
   assert.equal(pageCheck.details.comparedColumns.includes('expires_at'), true);
+
+  if (hasAccessRevision) {
+    // Full-row verification must name the access_revision column explicitly
+    // and the decimal string beyond the JS safe-integer range must survive
+    // dump→restore exactly (pg returns int8 as a string; assert the string).
+    assert.equal(pageCheck.details.comparedColumns.includes('access_revision'), true);
+    const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+    try {
+      const restored = await restorePool.query(
+        'SELECT access_revision FROM pages WHERE id = $1',
+        [FIXTURE.pages.protectedPage]
+      );
+      assert.equal(restored.rows[0].access_revision, ACCESS_REVISION_DRILL_VALUE);
+      assert.equal(typeof restored.rows[0].access_revision, 'string');
+    } finally {
+      await restorePool.end();
+    }
+  } else {
+    // Schema 001–003 base: the column must NOT be claimed as covered.
+    assert.equal(pageCheck.details.comparedColumns.includes('access_revision'), false);
+  }
 
   const passwordCheck = report.checks.find(check => check.name === 'passwordVerifyAndDecrypt');
   assert.deepEqual(passwordCheck.details, { protectedPages: 1, fixtureCovered: 1 });
@@ -357,4 +386,52 @@ test('verification refuses to claim credential checks passed without fixture cov
   assert.ok(keyCheck.issues.some(issue =>
     issue.keyId === FIXTURE.apiKey.id && /incomplete fixture coverage/.test(issue.message)));
   assert.deepEqual(keyCheck.details, { keys: 1, fixtureCovered: 0 });
+});
+
+test('access_revision tamper in the restored database fails verification', async (t) => {
+  if (!hasAccessRevision) {
+    // Honest skip on this worktree: schema 001–003 has no access_revision
+    // column. The independent integrator MUST run this suite after merging
+    // #25 (migration 004) so the seeded non-default value, exact decimal
+    // string preservation and this tamper gate execute for real.
+    return t.skip('access_revision absent on schema 001-003 base; integrator must exercise after merging #25');
+  }
+
+  const manifestPath = path.join(
+    tmpDir,
+    fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json'))
+  );
+  const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+
+  try {
+    // Restored-only tamper: source keeps the seeded value, the restored copy
+    // drifts by one. The existing full-row verifier must reject it by name.
+    await restorePool.query(
+      'UPDATE pages SET access_revision = access_revision + 1 WHERE id = $1',
+      [FIXTURE.pages.protectedPage]
+    );
+  } finally {
+    await restorePool.end();
+  }
+
+  const tampered = await runStep(process.execPath, [
+    'scripts/verify-backup.js',
+    '--source-url', sourceUrl,
+    '--restore-url', restoreUrl,
+    '--manifest', manifestPath,
+    '--fixture', path.join(tmpDir, 'fixture.json'),
+    '--session-secret', FIXTURE.sessionSecret,
+    '--reconciled',
+    '--output', path.join(tmpDir, 'verification-access-revision-tamper.json')
+  ]);
+
+  assert.equal(tampered.code, 1, 'restored-only access_revision tamper exits 1');
+
+  const tamperReport = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-access-revision-tamper.json'), 'utf8'));
+  const tamperPageCheck = tamperReport.checks.find(check => check.name === 'pageInventory');
+  assert.equal(tamperPageCheck.ok, false);
+  assert.ok(tamperPageCheck.issues.some(issue =>
+    issue.field === 'access_revision'
+    && issue.message.includes(ACCESS_REVISION_DRILL_VALUE)
+    && issue.message.includes('9007199254740994')));
 });

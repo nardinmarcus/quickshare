@@ -54,6 +54,28 @@ const FIXTURE = {
   protectedPassword: 'Drill!Pass1'
 };
 
+// Access Revision fixture gate (sibling #25 compatibility). When the source
+// schema carries `pages.access_revision` (migration 004 from #25), the drill
+// seeds this value — a decimal string beyond Number.MAX_SAFE_INTEGER — on the
+// protected Share so dump→restore exact preservation and explicit column
+// comparison are provable. On a 001–003 base the column is absent and the
+// fixture stays honest: the gate is reported as not exercised, never claimed.
+const ACCESS_REVISION_DRILL_VALUE = '9007199254740993';
+
+async function probeAccessRevisionColumn(pool) {
+  const result = await pool.query(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'pages'
+         AND column_name = 'access_revision'
+     ) AS present`
+  );
+
+  return result.rows[0].present === true;
+}
+
 function sourceUrlFor() {
   return `postgresql://postgres:${FIXTURE.password}@127.0.0.1:${FIXTURE.srcPort}/${FIXTURE.sourceDatabase}`;
 }
@@ -122,6 +144,16 @@ async function seedFixture(pool) {
     'UPDATE site_settings SET homepage_password_required = FALSE, updated_at = $1 WHERE id = 1',
     [base + 50]
   );
+
+  const accessRevisionSeeded = await probeAccessRevisionColumn(pool);
+  if (accessRevisionSeeded) {
+    await pool.query(
+      'UPDATE pages SET access_revision = $1 WHERE id = $2',
+      [ACCESS_REVISION_DRILL_VALUE, FIXTURE.pages.protectedPage]
+    );
+  }
+
+  return { accessRevisionSeeded };
 }
 
 async function ensureContainerRunning(name, port, image) {
@@ -185,7 +217,7 @@ async function resetSourceDatabase(url) {
     await pool.query('DROP SCHEMA public CASCADE');
     await pool.query('CREATE SCHEMA public');
     await runMigrations(pool, { logger: { info() {} } });
-    await seedFixture(pool);
+    return await seedFixture(pool);
   } finally {
     await pool.end();
   }
@@ -226,7 +258,7 @@ async function runDrill({ keepContainers = false, skipContainerSetup = false, ou
     }
 
     await ensureDatabase(FIXTURE.srcContainer, FIXTURE.sourceDatabase);
-    await resetSourceDatabase(sourceUrl);
+    const seedResult = await resetSourceDatabase(sourceUrl);
     await recreateRestoreDatabase(restoreUrl);
 
     fs.writeFileSync(path.join(dir, 'fixture.json'), JSON.stringify({
@@ -285,6 +317,10 @@ async function runDrill({ keepContainers = false, skipContainerSetup = false, ou
       ok: verifyRun.code === 0,
       snapshotAt: new Date(manifest.snapshotAt).toISOString(),
       snapshotWalLsn: manifest.snapshotWalLsn,
+      // Explicit coverage marker: 'exercised' only when the source schema
+      // actually carries pages.access_revision (#25 migration 004). A 001–003
+      // base must never claim schema004 coverage from this drill.
+      accessRevision: seedResult.accessRevisionSeeded ? 'exercised' : 'absent-schema001-003',
       reconciliation: verification ? verification.reconciliation.status : 'not-available',
       safeToServe: false,
       durationsMs: {
@@ -339,7 +375,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  ACCESS_REVISION_DRILL_VALUE,
   FIXTURE,
+  probeAccessRevisionColumn,
   recreateRestoreDatabase,
   resetSourceDatabase,
   restoreUrlFor,
