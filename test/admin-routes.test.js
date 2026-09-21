@@ -92,6 +92,42 @@ async function loginDashboard(password = 'dashboard-secret') {
   return cookie.split(';')[0];
 }
 
+test('maintenance preserves both logins and reads while authentication and CSRF reject before the gate', async () => {
+  const repository = app.locals.pageRepository;
+  await repository.setPublishingWritesPaused(true);
+  try {
+    const dashboard = await loginDashboard();
+    const home = await login();
+    const admin = await request('/admin/stats', { headers: { Cookie: dashboard } });
+    assert.equal(admin.status, 200);
+    const csrf = admin.text.match(/name="csrf-token" content="([^"]+)"/)[1];
+    assert.equal((await request('/', { headers: { Cookie: home } })).status, 200);
+    assert.equal((await request('/admin/apis', { headers: { Cookie: dashboard } })).status, 200);
+    for (const [cookie, token, expected] of [[undefined, undefined, 401], [home, csrf, 401], [dashboard, undefined, 403], [dashboard, csrf, 503]]) {
+      const response = await request('/admin/settings/homepage-access', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...(token ? { 'X-CSRF-Token': token } : {}) },
+        body: JSON.stringify({ passwordRequired: false })
+      });
+      assert.equal(response.status, expected);
+      if (expected === 503) assert.equal(JSON.parse(response.text).maintenance, true);
+    }
+    assert.equal(await repository.getHomepagePasswordRequired(), true);
+    const homepage = await request('/', { headers: { Cookie: home } });
+    const homeCsrf = homepage.text.match(/name="csrf-token" content="([^"]+)"/)[1];
+    const count = await repository.countPages();
+    for (const [token, expected] of [[undefined, 403], [homeCsrf, 503]]) {
+      const response = await request('/api/pages/create', {
+        method: 'POST', headers: { Cookie: home, 'Content-Type': 'application/json', ...(token ? { 'X-CSRF-Token': token } : {}) },
+        body: JSON.stringify({ htmlContent: '<h1>Must remain unsaved</h1>' })
+      });
+      assert.equal(response.status, expected);
+    }
+    assert.equal(await repository.countPages(), count);
+  } finally {
+    await repository.setPublishingWritesPaused(false);
+  }
+});
+
 test('admin pages require login', async () => {
   const response = await request('/admin/pages');
 
@@ -250,7 +286,7 @@ test('favorite mutations persist final state and audit only real transitions', a
   assert.doesNotMatch(auditResponse.text, />page\.favorite\.update</);
 });
 
-test('favorite mutation errors preserve data and audit failure degrades safely', async () => {
+test('favorite mutation and audit errors roll back the Share transaction', async () => {
   const sharedPage = await createSharedPage({ htmlContent: '<h1>Favorite failure boundaries</h1>' });
   const cookie = await loginDashboard();
   const detailResponse = await request(`/admin/pages/${sharedPage.urlId}`, {
@@ -283,10 +319,10 @@ test('favorite mutation errors preserve data and audit failure degrades safely',
       body: JSON.stringify({ isFavorite: true })
     });
 
-    assert.equal(auditFailureResponse.status, 200);
-    assert.equal(JSON.parse(auditFailureResponse.text).isFavorite, true);
-    assert.equal((await repository.getById(sharedPage.urlId)).is_favorite, true);
-    assert.deepEqual(loggedErrors, [['Favorite audit log failed:']]);
+    assert.equal(auditFailureResponse.status, 500);
+    assert.equal(JSON.parse(auditFailureResponse.text).success, false);
+    assert.equal((await repository.getById(sharedPage.urlId)).is_favorite, false);
+    assert.deepEqual(loggedErrors, [['Update favorite failed:']]);
 
     repository.createAuditLog = originalCreateAuditLog;
     const missingResponse = await request('/admin/pages/missing-favorite-route/favorite', {
@@ -307,7 +343,7 @@ test('favorite mutation errors preserve data and audit failure degrades safely',
     });
 
     assert.equal(persistenceFailureResponse.status, 500);
-    assert.equal((await repository.getById(sharedPage.urlId)).is_favorite, true);
+    assert.equal((await repository.getById(sharedPage.urlId)).is_favorite, false);
   } finally {
     repository.createAuditLog = originalCreateAuditLog;
     repository.setFavorite = originalSetFavorite;

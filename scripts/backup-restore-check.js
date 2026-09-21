@@ -141,7 +141,7 @@ async function seedFixture(pool) {
   );
 
   await pool.query(
-    'UPDATE site_settings SET homepage_password_required = FALSE, updated_at = $1 WHERE id = 1',
+    'UPDATE site_settings SET homepage_password_required = FALSE, publishing_writes_paused = TRUE, updated_at = $1 WHERE id = 1',
     [base + 50]
   );
 

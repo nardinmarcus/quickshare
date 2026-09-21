@@ -42,7 +42,7 @@ npm run hash-password -- "your-admin-password"
    ```
 
    首次执行应列出 applied；紧接着的第二次必须全部 skipped。命令结束后立即移除该 job 的 secret 和环境变量。
-4. 核对 `public.quickshare_schema_migrations`、`pages`、`audit_logs`、`api_keys`、`site_settings`、记录数和索引。当前迁移台账应包含 `001`、`002`、`003`；`pages.is_favorite` 必须为 `BOOLEAN NOT NULL DEFAULT FALSE`，且不存在 `NULL`。`site_settings.id=1` 必须存在，`homepage_password_required` 应与迁移前保持一致。
+4. 核对 `public.quickshare_schema_migrations`、`pages`、`audit_logs`、`api_keys`、`site_settings`、记录数和索引。当前迁移台账应包含 `001`–`005`；`pages.access_revision` 必须保留精确 BIGINT 版本；`site_settings.publishing_writes_paused` 必须为 `BOOLEAN NOT NULL DEFAULT FALSE`（已有维护状态不得被重置）；`pages.is_favorite` 必须为 `BOOLEAN NOT NULL DEFAULT FALSE`，且不存在 `NULL`。`site_settings.id=1` 必须存在，`homepage_password_required` 应与迁移前保持一致。
 5. 在本地创建已审查的 release commit，但先不要 push `main`；从该 commit 部署 Preview 并完成下方 smoke。
 6. Preview 通过后才把同一 commit push 到 `main`，等待 CI 和 Vercel Production 自动部署，再用 `vercel inspect` 核对自定义域名指向该修订。
 
@@ -51,8 +51,14 @@ npm run hash-password -- "your-admin-password"
 ### 回滚与恢复
 
 - 迁移命令在 `COMMIT` 前失败：整批事务自动回滚，不会留下迁移记录；修正原因后重跑即可，无需数据恢复。
-- 新代码部署后需要回滚：重新部署上一稳定应用版本；当前迁移只做兼容性新增，保留 `site_settings`、`pages.is_favorite`、迁移记录和已经产生的 Favorite Share 数据，不执行破坏性 down migration。
+- 新代码部署后需要回滚：只能使用已验证、同时理解维护闸与当前访问版本安全语义的兼容应用；忽略维护闸或 `access_revision` 的旧版本不再是安全回滚候选。没有兼容候选时保持维护并向前修复。保留 `site_settings`、`pages.is_favorite`、访问版本及迁移记录，不执行破坏性 down migration。
 - `COMMIT` 后确认发生数据异常：先停止写入，再从迁移前的 provider branch / PITR 检查点恢复到新分支；核对表结构和记录数后才切换运行时连接。不要在未核验的生产主库上直接覆盖恢复。
+
+### 写维护与旧写入者退出
+
+迁移 `005` 只新增运维状态，不提供普通用户配置项。受控运维主机临时注入 `DATABASE_MIGRATION_URL`，使用 `npm run maintenance -- pause|status|resume`；CLI 不加载 `.env` 或回退内存。pause 的成功输出发生在同一数据库事务取得排他维护锁、排空既有发布事务并提交之后。
+
+**滚动部署不是排空证明。**旧部署、旧函数实例与旧 CLI 若不认识维护闸，必须先退出可写路径，并通过连接身份、在途事务与锁状态证明确已排空。无法确认时维持维护状态，不继续回填/开放；`status=true` 不能替代这些证据。公开/管理读取与登录保持可用，符合访问条件的写请求和浏览事件返回 `PUBLISHING_MAINTENANCE` 503，事件不计数。详细步骤、错误恢复及回滚边界见 [写维护手册](maintenance.md)。
 
 ### 原生备份与恢复演练
 
@@ -61,7 +67,7 @@ npm run hash-password -- "your-admin-password"
 - `npm run backup:check` 端到端演练：一次性本地 PostgreSQL 17 容器 + 合成夹具 + `pg_dump`/`pg_restore` + 全量验证（正文摘要、ID、主题、收藏、密码校验/回显、有效期、Key、审计、站点设置、迁移台账），并记录快照点与耗时。恢复库中每条受保护页/Key 都必须被夹具实际验证，缺夹具即显式失败。
 - 恢复出的数据库永远报告 `safeToServe: false` 并保持离线。快照点后检测到撤销/清除事件（含真实审计词表中 `page.update` 的 `fields` 触及密码/保护/有效期）时验证 exit 2（`unreconciled`）；即使未检测到事件，审计历史也无法证明不存在（部分策略路由不写审计），报告为 `owner-review-required`（同样 exit 2）。重新启用恢复出的凭据或公开内容一律需要所有者复核后显式传入 `--reconciled`。
 - 脚本默认只接受 localhost 且库名以 `_test` 结尾的数据库；真实 secret 与加密材料不进入导出、日志或演练夹具。
-- 详细流程、实测结果与后续票扩展合同见 `docs/backup-restore.md`。访问版本化改造（`docs/access-revision-rollout.md`，由访问撤销票提供）落地后，恢复验证证据必须显式覆盖 `access_revision`。
+- 详细流程、实测结果与后续票扩展合同见 `docs/backup-restore.md`。访问版本化改造（`docs/access-revision-rollout.md`，由访问撤销票提供）落地后，恢复验证证据必须显式覆盖 `access_revision`。迁移 `005` 后夹具还应覆盖非默认 `publishing_writes_paused=true`，恢复后保持离线，不把暂停开关或验证通过等同于上线许可。
 
 ### 验证清单
 

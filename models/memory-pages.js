@@ -1,3 +1,4 @@
+const { maintenanceError } = require('./publishing');
 const { isAccessUpdate, assertAccessRevision } = require('../utils/shareAccess');
 const {
   buildManagementDailyStats,
@@ -52,6 +53,53 @@ class MemoryPageRepository {
     this.auditIdCounter = 0;
     this.apiKeys = new Map();
     this.homepagePasswordRequired = true;
+    this.publishingWritesPaused = false;
+    this.publishingQueue = Promise.resolve();
+  }
+
+  async enqueuePublishing(operation) {
+    const previous = this.publishingQueue;
+    let release;
+    this.publishingQueue = new Promise(resolve => { release = resolve; });
+    await previous;
+    try { return await operation(); } finally { release(); }
+  }
+
+  async getPublishingWritesPaused() {
+    if (typeof this.publishingWritesPaused !== 'boolean') throw new Error('Publishing setting is unavailable');
+    return this.publishingWritesPaused;
+  }
+
+  async setPublishingWritesPaused(paused) {
+    if (typeof paused !== 'boolean') throw new TypeError('paused must be a boolean');
+    return this.enqueuePublishing(async () => {
+      this.publishingWritesPaused = paused;
+      return { publishingWritesPaused: paused };
+    });
+  }
+
+  async withPublishingTransaction(operation) {
+    return this.enqueuePublishing(async () => {
+      // Only one publishing writer stages state at a time. Failed work never
+      // restores a stale snapshot over another writer's committed state.
+      const transaction = Object.create(this);
+      transaction.pages = structuredClone(this.pages);
+      transaction.apiKeys = structuredClone(this.apiKeys);
+      transaction.auditLogs = [];
+      transaction.auditIdCounter = 0;
+      transaction.homepagePasswordRequired = this.homepagePasswordRequired;
+      transaction.publishingWritesPaused = this.publishingWritesPaused;
+      const result = await operation(transaction);
+      this.pages = transaction.pages;
+      this.apiKeys = transaction.apiKeys;
+      this.homepagePasswordRequired = transaction.homepagePasswordRequired;
+      // Login audit events may arrive independently of publishing transactions.
+      for (const log of [...transaction.auditLogs].reverse()) {
+        this.auditLogs.unshift({ ...log, id: ++this.auditIdCounter });
+      }
+      this.auditLogs = this.auditLogs.slice(0, 1000);
+      return result;
+    });
   }
 
   async init() {
@@ -160,6 +208,7 @@ class MemoryPageRepository {
   }
 
   async touchApiKey(id, usedAt = Date.now()) {
+    if (this.publishingWritesPaused) return;
     const apiKey = this.apiKeys.get(id);
 
     if (apiKey) {
@@ -395,6 +444,7 @@ class MemoryPageRepository {
       return 'protected';
     }
 
+    if (this.publishingWritesPaused) throw maintenanceError();
     page.view_count = (page.view_count || 0) + 1;
     return 'counted';
   }

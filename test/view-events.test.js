@@ -117,13 +117,13 @@ test('GET view stays read-only and injects reporting only for a served public pa
 
 test('view-event response waits for the increment and counts exactly once', async () => {
   const repository = app.locals.pageRepository;
-  const originalRecordViewEvent = repository.recordViewEvent.bind(repository);
+  const originalRecordViewEvent = repository.recordViewEvent;
   let markStarted;
   let releaseIncrement;
   let responseSettled = false;
   const incrementStarted = new Promise(resolve => { markStarted = resolve; });
 
-  repository.recordViewEvent = async (id, now, accessRevision) => {
+  repository.recordViewEvent = async function (id, now, accessRevision) {
     if (id === 'event-awaited') {
       assert.equal(Number.isFinite(now), true);
       assert.equal(accessRevision, null);
@@ -131,7 +131,7 @@ test('view-event response waits for the increment and counts exactly once', asyn
       await new Promise(resolve => { releaseIncrement = resolve; });
     }
 
-    return originalRecordViewEvent(id, now, accessRevision);
+    return originalRecordViewEvent.call(this, id, now, accessRevision);
   };
 
   try {

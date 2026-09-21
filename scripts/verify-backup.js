@@ -433,8 +433,8 @@ async function runVerification({
         restorePool.query('SELECT action, page_id, details, ip, created_at FROM audit_logs ORDER BY id ASC'),
         sourcePool.query('SELECT id, name, key_hash, key_prefix, created_at, last_used_at FROM api_keys ORDER BY id ASC'),
         restorePool.query('SELECT id, name, key_hash, key_prefix, created_at, last_used_at FROM api_keys ORDER BY id ASC'),
-        sourcePool.query('SELECT id, homepage_password_required, updated_at FROM site_settings ORDER BY id ASC'),
-        restorePool.query('SELECT id, homepage_password_required, updated_at FROM site_settings ORDER BY id ASC'),
+        sourcePool.query('SELECT * FROM site_settings ORDER BY id ASC'),
+        restorePool.query('SELECT * FROM site_settings ORDER BY id ASC'),
         sourcePool.query('SELECT version, name, checksum, applied_at FROM quickshare_schema_migrations ORDER BY version ASC'),
         restorePool.query('SELECT version, name, checksum, applied_at FROM quickshare_schema_migrations ORDER BY version ASC')
       ]);
@@ -508,7 +508,10 @@ async function runVerification({
       name: 'siteSettings',
       ok: settingsIssues.length === 0,
       issues: settingsIssues,
-      details: { rows: restoreSettings.rows.length }
+      details: {
+        rows: restoreSettings.rows.length,
+        comparedColumns: [...new Set([...sourceSettings.fields, ...restoreSettings.fields].map(field => field.name))].sort()
+      }
     });
 
     const restoreById = new Map(restorePages.rows.map(row => [row.id, row]));

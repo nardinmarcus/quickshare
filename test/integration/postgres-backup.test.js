@@ -68,10 +68,13 @@ function runStep(command, args) {
 }
 
 test.before(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qs27-issue27-backup-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'issue28-backup-'));
 
   const sourcePool = createPostgresPool(sourceUrl, { env: poolEnv, max: 1 });
-  const restoreControl = createPostgresPool(restoreUrl.replace(/\/issue27_restore_test$/, '/postgres'), {
+  const restoreTarget = new URL(restoreUrl);
+  const restoreDatabase = decodeURIComponent(restoreTarget.pathname.slice(1));
+  restoreTarget.pathname = '/postgres';
+  const restoreControl = createPostgresPool(restoreTarget.href, {
     env: poolEnv,
     max: 1
   });
@@ -87,8 +90,9 @@ test.before(async () => {
     hasAccessRevision = seedResult.accessRevisionSeeded === true;
 
     // Recreate the restore database from scratch so the drill proves a full restore.
-    await restoreControl.query('DROP DATABASE IF EXISTS issue27_restore_test WITH (FORCE)');
-    await restoreControl.query('CREATE DATABASE issue27_restore_test');
+    const quotedDatabase = `"${restoreDatabase.replace(/"/g, '""')}"`;
+    await restoreControl.query(`DROP DATABASE IF EXISTS ${quotedDatabase} WITH (FORCE)`);
+    await restoreControl.query(`CREATE DATABASE ${quotedDatabase}`);
   } finally {
     await Promise.allSettled([sourcePool.end(), restoreControl.end()]);
   }
@@ -118,7 +122,7 @@ test('native backup captures a consistent snapshot with matched tooling', async 
 
   const manifest = JSON.parse(fs.readFileSync(path.join(tmpDir, manifestPath), 'utf8'));
   assert.equal(manifest.kind, 'quickshare-native-consistent-backup');
-  assert.equal(manifest.database, 'issue27_src_test');
+  assert.equal(manifest.database, decodeURIComponent(new URL(sourceUrl).pathname.slice(1)));
   assert.equal(manifest.host, '127.0.0.1');
   assert.equal(manifest.format, 'custom');
   assert.match(manifest.dumpSha256, /^[0-9a-f]{64}$/);
@@ -216,6 +220,8 @@ test('native restore rebuilds the database and passes full verification', async 
   ]);
   assert.ok(Number.isFinite(report.durationsMs.verifyMs));
 
+  const settingsCheck = report.checks.find(check => check.name === 'siteSettings');
+  assert.equal(settingsCheck.details.comparedColumns.includes('publishing_writes_paused'), true);
   const pageCheck = report.checks.find(check => check.name === 'pageInventory');
   assert.equal(pageCheck.details.pageCount, 4);
   assert.equal(pageCheck.details.comparedColumns.includes('markdown_theme'), true);
@@ -235,6 +241,10 @@ test('native restore rebuilds the database and passes full verification', async 
       );
       assert.equal(restored.rows[0].access_revision, ACCESS_REVISION_DRILL_VALUE);
       assert.equal(typeof restored.rows[0].access_revision, 'string');
+      const settings = await restorePool.query('SELECT publishing_writes_paused FROM site_settings WHERE id = 1');
+      assert.equal(settings.rows[0].publishing_writes_paused, true, 'non-default maintenance setting survives native restore');
+      const ledger = await restorePool.query("SELECT version FROM quickshare_schema_migrations WHERE version = '005'");
+      assert.equal(ledger.rowCount, 1);
     } finally {
       await restorePool.end();
     }
@@ -386,6 +396,27 @@ test('verification refuses to claim credential checks passed without fixture cov
   assert.ok(keyCheck.issues.some(issue =>
     issue.keyId === FIXTURE.apiKey.id && /incomplete fixture coverage/.test(issue.message)));
   assert.deepEqual(keyCheck.details, { keys: 1, fixtureCovered: 0 });
+});
+
+test('maintenance setting drift fails the full-row backup verifier', async () => {
+  const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+  try {
+    await restorePool.query('UPDATE site_settings SET publishing_writes_paused = FALSE WHERE id = 1');
+    const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
+    const result = await runStep(process.execPath, [
+      'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+      '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+      '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+      '--output', path.join(tmpDir, 'verification-maintenance-tamper.json')
+    ]);
+    assert.equal(result.code, 1);
+    const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-maintenance-tamper.json')));
+    assert.equal(report.safeToServe, false);
+    assert.equal(report.checks.find(check => check.name === 'siteSettings').ok, false);
+  } finally {
+    await restorePool.query('UPDATE site_settings SET publishing_writes_paused = TRUE WHERE id = 1');
+    await restorePool.end();
+  }
 });
 
 test('access_revision tamper in the restored database fails verification', async (t) => {

@@ -14,6 +14,7 @@ const config = require('./config');
 const { isAccessRevision, requireAccessRevision } = require('./utils/shareAccess');
 const { publicShareProjection } = require('./utils/publicShareProjection');
 const { createPageRepository } = require('./models/pageRepository');
+const { createPublishing, sendPublishingError } = require('./models/publishing');
 const { detectCodeType, extractCodeBlocks } = require('./utils/codeDetector');
 const { renderContent, escapeHtml } = require('./utils/contentRenderer');
 const { FAVICON_VERSION } = require('./utils/faviconVersion');
@@ -74,6 +75,7 @@ let nextViewRequestIsColdStart = true;
 
 const app = express();
 const pageRepository = createPageRepository();
+const publishing = createPublishing(pageRepository);
 const parseSmallJson = bodyParser.json({ limit: config.smallBodyLimit });
 const parseSmallForm = bodyParser.urlencoded({ extended: true, limit: config.smallBodyLimit });
 const parseShareJson = bodyParser.json({ limit: config.shareBodyLimit });
@@ -663,14 +665,14 @@ function normalizeCodeType(content, requestedCodeType) {
   return VALID_CODE_TYPES.has(detectedType) ? detectedType : 'html';
 }
 
-async function createPageWithRetry(data) {
+async function createPageWithRetry(data, repository) {
   let lastError = null;
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const id = generateId();
 
     try {
-      await pageRepository.create({
+      await repository.create({
         ...data,
         id
       });
@@ -703,7 +705,7 @@ function parseFutureExpiry(expiresAt, now) {
   return { value, error: null };
 }
 
-async function createPageFromInput(input) {
+async function createPageFromInput(input, repository) {
   const {
     htmlContent,
     codeType,
@@ -756,7 +758,7 @@ async function createPageFromInput(input) {
     createdAt,
     expiresAt: expiry.value,
     markdownTheme: resolvedTheme
-  });
+  }, repository);
 
   return {
     error: null,
@@ -1080,44 +1082,48 @@ app.get('/admin/apis', requireDashboardAdmin, async (req, res) => {
 
 app.post('/admin/apis/keys', requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
   try {
-    const name = String(req.body?.name || '').trim();
+    const respond = await publishing.run(async (repository) => {
+      const name = String(req.body?.name || '').trim();
 
-    if (!name || name.length > 80) {
-      return res.status(400).json({
-        success: false,
-        error: 'Key name must be between 1 and 80 characters'
-      });
-    }
-
-    const id = generateId(12);
-    const secret = randomBytes(32).toString('base64url');
-    const apiKey = await pageRepository.createApiKey({
-      id,
-      name,
-      keyHash: await hashSecret(secret),
-      keyPrefix: `qs.${id.slice(0, 8)}…`,
-      createdAt: Date.now()
-    });
-
-    pageRepository.createAuditLog({
-      action: 'api_key.create',
-      pageId: null,
-      details: JSON.stringify({ apiKeyId: apiKey.id, name: apiKey.name }),
-      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
-    }).catch((err) => { console.error('Audit log failed:', err); });
-
-    return res.status(201).json({
-      success: true,
-      apiKey: {
-        id: apiKey.id,
-        name: apiKey.name,
-        key_prefix: apiKey.key_prefix,
-        created_at: apiKey.created_at,
-        last_used_at: apiKey.last_used_at,
-        secret: `qs.${id}.${secret}`
+      if (!name || name.length > 80) {
+        return (res) => res.status(400).json({
+          success: false,
+          error: 'Key name must be between 1 and 80 characters'
+        });
       }
+
+      const id = generateId(12);
+      const secret = randomBytes(32).toString('base64url');
+      const apiKey = await repository.createApiKey({
+        id,
+        name,
+        keyHash: await hashSecret(secret),
+        keyPrefix: `qs.${id.slice(0, 8)}…`,
+        createdAt: Date.now()
+      });
+
+      await repository.createAuditLog({
+        action: 'api_key.create',
+        pageId: null,
+        details: JSON.stringify({ apiKeyId: apiKey.id, name: apiKey.name }),
+        ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+      });
+
+      return (res) => res.status(201).json({
+        success: true,
+        apiKey: {
+          id: apiKey.id,
+          name: apiKey.name,
+          key_prefix: apiKey.key_prefix,
+          created_at: apiKey.created_at,
+          last_used_at: apiKey.last_used_at,
+          secret: `qs.${id}.${secret}`
+        }
+      });
     });
+    return respond(res);
   } catch (error) {
+    if (sendPublishingError(res, error)) return;
     console.error('Create API key failed:', error);
     return res.status(500).json({
       success: false,
@@ -1128,24 +1134,28 @@ app.post('/admin/apis/keys', requireDashboardAdmin, parseSmallJson, requireDashb
 
 app.delete('/admin/apis/keys/:id', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
   try {
-    const deleted = await pageRepository.deleteApiKey(req.params.id);
+    const respond = await publishing.run(async (repository) => {
+      const deleted = await repository.deleteApiKey(req.params.id);
 
-    if (!deleted) {
-      return res.status(404).json({
-        success: false,
-        error: 'API key not found'
+      if (!deleted) {
+        return (res) => res.status(404).json({
+          success: false,
+          error: 'API key not found'
+        });
+      }
+
+      await repository.createAuditLog({
+        action: 'api_key.delete',
+        pageId: null,
+        details: JSON.stringify({ apiKeyId: req.params.id }),
+        ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
       });
-    }
 
-    pageRepository.createAuditLog({
-      action: 'api_key.delete',
-      pageId: null,
-      details: JSON.stringify({ apiKeyId: req.params.id }),
-      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
-    }).catch((err) => { console.error('Audit log failed:', err); });
-
-    return res.json({ success: true });
+      return (res) => res.json({ success: true });
+    });
+    return respond(res);
   } catch (error) {
+    if (sendPublishingError(res, error)) return;
     console.error('Delete API key failed:', error);
     return res.status(500).json({
       success: false,
@@ -1263,10 +1273,10 @@ app.put('/admin/settings/homepage-access', requireDashboardApiAdmin, parseSmallJ
   }
 
   try {
-    const result = await pageRepository.setHomepagePasswordRequired({
+    const result = await publishing.run(repository => repository.setHomepagePasswordRequired({
       passwordRequired: req.body.passwordRequired,
       ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
-    });
+    }));
 
     return res.json({
       success: true,
@@ -1274,6 +1284,7 @@ app.put('/admin/settings/homepage-access', requireDashboardApiAdmin, parseSmallJ
       changed: result.changed
     });
   } catch (error) {
+    if (sendPublishingError(res, error)) return;
     console.error('Update homepage access setting failed:', error);
     return res.status(503).json({
       success: false,
@@ -1414,34 +1425,34 @@ app.put('/admin/pages/:id/favorite', requireDashboardApiAdmin, parseSmallJsonBod
   }
 
   try {
-    const result = await pageRepository.setFavorite(req.params.id, req.body.isFavorite);
+    const respond = await publishing.run(async (repository) => {
+      const result = await repository.setFavorite(req.params.id, req.body.isFavorite);
 
-    if (!result.found) {
-      return res.status(404).json({
-        success: false,
-        error: 'Share not found'
-      });
-    }
+      if (!result.found) {
+        return (res) => res.status(404).json({
+          success: false,
+          error: 'Share not found'
+        });
+      }
 
-    if (result.changed) {
-      try {
-        await pageRepository.createAuditLog({
+      if (result.changed) {
+        await repository.createAuditLog({
           action: 'page.favorite.update',
           pageId: req.params.id,
           details: JSON.stringify({ from: result.previousValue, to: result.isFavorite }),
           ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
         });
-      } catch (error) {
-        console.error('Favorite audit log failed:');
       }
-    }
 
-    return res.json({
-      success: true,
-      changed: result.changed,
-      isFavorite: result.isFavorite
+      return (res) => res.json({
+        success: true,
+        changed: result.changed,
+        isFavorite: result.isFavorite
+      });
     });
+    return respond(res);
   } catch (error) {
+    if (sendPublishingError(res, error)) return;
     console.error('Update favorite failed:');
     return res.status(500).json({
       success: false,
@@ -1452,108 +1463,112 @@ app.put('/admin/pages/:id/favorite', requireDashboardApiAdmin, parseSmallJsonBod
 
 app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashboardCsrf, async (req, res) => {
   try {
-    const page = await pageRepository.getById(req.params.id);
+    const respond = await publishing.run(async (repository) => {
+      const page = await repository.getById(req.params.id);
 
-    if (!page) {
-      return res.status(404).json({
-        success: false,
-        error: 'Page not found'
-      });
-    }
+      if (!page) {
+        return (res) => res.status(404).json({
+          success: false,
+          error: 'Page not found'
+        });
+      }
 
-    const { title, description, htmlContent, expiresAt, isProtected, password, markdownTheme } = req.body;
-    const customPassword = parseCustomPassword(password);
+      const { title, description, htmlContent, expiresAt, isProtected, password, markdownTheme } = req.body;
+      const customPassword = parseCustomPassword(password);
 
-    if (customPassword.error) {
-      return res.status(400).json({
-        success: false,
-        error: CUSTOM_PASSWORD_ERROR
-      });
-    }
+      if (customPassword.error) {
+        return (res) => res.status(400).json({
+          success: false,
+          error: CUSTOM_PASSWORD_ERROR
+        });
+      }
 
-    const updateOptions = { returnUpdated: true };
-    if (req.body.revokeAccess !== undefined && typeof req.body.revokeAccess !== 'boolean') {
-      return res.status(400).json({ success: false, error: 'revokeAccess must be a boolean' });
-    }
-    const policySubmitted = isProtected !== undefined || expiresAt !== undefined || req.body.revokeAccess === true;
-    if (policySubmitted) {
-      updateOptions.expectedAccessRevision = requireAccessRevision(req.body.expectedAccessRevision);
-      updateOptions.revokeAccess = req.body.revokeAccess === true;
-      // Keep even unchanged protection submissions conditional on the displayed baseline.
-      updateOptions.accessPrecondition = true;
-    }
+      const updateOptions = { returnUpdated: true };
+      if (req.body.revokeAccess !== undefined && typeof req.body.revokeAccess !== 'boolean') {
+        return (res) => res.status(400).json({ success: false, error: 'revokeAccess must be a boolean' });
+      }
+      const policySubmitted = isProtected !== undefined || expiresAt !== undefined || req.body.revokeAccess === true;
+      if (policySubmitted) {
+        updateOptions.expectedAccessRevision = requireAccessRevision(req.body.expectedAccessRevision);
+        updateOptions.revokeAccess = req.body.revokeAccess === true;
+        // Keep even unchanged protection submissions conditional on the displayed baseline.
+        updateOptions.accessPrecondition = true;
+      }
 
-    if (title !== undefined) {
-      updateOptions.title = title ? String(title).trim() || null : null;
-    }
-    if (description !== undefined) {
-      updateOptions.description = description ? String(description).trim() || null : null;
-    }
-    if (htmlContent !== undefined) {
-      updateOptions.htmlContent = htmlContent;
-    }
-    if (expiresAt !== undefined) {
-      const parsed = Number.parseInt(expiresAt, 10);
-      updateOptions.expiresAt = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-    }
-    if (markdownTheme !== undefined && page.code_type === 'markdown') {
-      updateOptions.markdownTheme = resolveMarkdownThemeId(markdownTheme);
-    }
+      if (title !== undefined) {
+        updateOptions.title = title ? String(title).trim() || null : null;
+      }
+      if (description !== undefined) {
+        updateOptions.description = description ? String(description).trim() || null : null;
+      }
+      if (htmlContent !== undefined) {
+        updateOptions.htmlContent = htmlContent;
+      }
+      if (expiresAt !== undefined) {
+        const parsed = Number.parseInt(expiresAt, 10);
+        updateOptions.expiresAt = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+      }
+      if (markdownTheme !== undefined && page.code_type === 'markdown') {
+        updateOptions.markdownTheme = resolveMarkdownThemeId(markdownTheme);
+      }
 
-    if (isProtected !== undefined) {
-      const newProtected = Boolean(isProtected);
-      const currentlyProtected = page.is_protected === 1;
+      if (isProtected !== undefined) {
+        const newProtected = Boolean(isProtected);
+        const currentlyProtected = page.is_protected === 1;
 
-      if (newProtected !== currentlyProtected) {
-        updateOptions.isProtected = newProtected;
+        if (newProtected !== currentlyProtected) {
+          updateOptions.isProtected = newProtected;
 
-        if (newProtected) {
-          const finalPassword = customPassword.provided
-            ? customPassword.value
-            : generateNumericPassword(DEFAULT_PASSWORD_LENGTH);
-          updateOptions.passwordHash = await hashSecret(finalPassword);
-          updateOptions.encryptedPassword = encryptSecret(finalPassword);
-        } else {
-          updateOptions.passwordHash = null;
-          updateOptions.encryptedPassword = null;
+          if (newProtected) {
+            const finalPassword = customPassword.provided
+              ? customPassword.value
+              : generateNumericPassword(DEFAULT_PASSWORD_LENGTH);
+            updateOptions.passwordHash = await hashSecret(finalPassword);
+            updateOptions.encryptedPassword = encryptSecret(finalPassword);
+          } else {
+            updateOptions.passwordHash = null;
+            updateOptions.encryptedPassword = null;
+          }
+        } else if (newProtected && customPassword.provided) {
+          // Protection status unchanged but password explicitly provided - update password
+          updateOptions.isProtected = true;
+          updateOptions.passwordHash = await hashSecret(customPassword.value);
+          updateOptions.encryptedPassword = encryptSecret(customPassword.value);
         }
-      } else if (newProtected && customPassword.provided) {
-        // Protection status unchanged but password explicitly provided - update password
-        updateOptions.isProtected = true;
-        updateOptions.passwordHash = await hashSecret(customPassword.value);
-        updateOptions.encryptedPassword = encryptSecret(customPassword.value);
       }
-    }
 
-    const saved = await pageRepository.updatePage(req.params.id, updateOptions);
-    if (!saved) return res.status(404).json({ success: false, error: 'Share not found' });
+      const saved = await repository.updatePage(req.params.id, updateOptions);
+      if (!saved) return (res) => res.status(404).json({ success: false, error: 'Share not found' });
 
-    const updatedPage = saved;
+      const updatedPage = saved;
 
-    pageRepository.createAuditLog({
-      action: 'page.update',
-      pageId: req.params.id,
-      details: JSON.stringify({ fields: Object.keys(updateOptions) }),
-      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
-    }).catch((err) => { console.error('Audit log failed:', err); });
+      await repository.createAuditLog({
+        action: 'page.update',
+        pageId: req.params.id,
+        details: JSON.stringify({ fields: Object.keys(updateOptions) }),
+        ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+      });
 
-    return res.json({
-      success: true,
-      page: {
-        id: updatedPage.id,
-        title: updatedPage.title,
-        description: updatedPage.description,
-        htmlContent: updatedPage.html_content,
-        codeType: updatedPage.code_type,
-        isProtected: updatedPage.is_protected === 1,
-        accessRevision: updatedPage.access_revision,
-        password: visiblePagePassword(updatedPage),
-        expiresAt: updatedPage.expires_at,
-        markdownTheme: updatedPage.markdown_theme,
-        createdAt: updatedPage.created_at
-      }
+      return (res) => res.json({
+        success: true,
+        page: {
+          id: updatedPage.id,
+          title: updatedPage.title,
+          description: updatedPage.description,
+          htmlContent: updatedPage.html_content,
+          codeType: updatedPage.code_type,
+          isProtected: updatedPage.is_protected === 1,
+          accessRevision: updatedPage.access_revision,
+          password: visiblePagePassword(updatedPage),
+          expiresAt: updatedPage.expires_at,
+          markdownTheme: updatedPage.markdown_theme,
+          createdAt: updatedPage.created_at
+        }
+      });
     });
+    return respond(res);
   } catch (error) {
+    if (sendPublishingError(res, error)) return;
     if (error.code?.startsWith('ACCESS_') || error.code === 'INVALID_ACCESS_REVISION') {
       return res.status(error.status).json({ success: false, code: error.code, error: error.message });
     }
@@ -1567,27 +1582,31 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
 
 app.delete('/admin/pages/batch', requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
   try {
-    const { ids } = req.body;
+    const respond = await publishing.run(async (repository) => {
+      const { ids } = req.body;
 
-    if (!Array.isArray(ids) || ids.length === 0) {
-      return res.status(400).json({ success: false, error: 'ids must be a non-empty array' });
-    }
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return (res) => res.status(400).json({ success: false, error: 'ids must be a non-empty array' });
+      }
 
-    if (ids.length > 100) {
-      return res.status(400).json({ success: false, error: 'Batch delete limited to 100 items' });
-    }
+      if (ids.length > 100) {
+        return (res) => res.status(400).json({ success: false, error: 'Batch delete limited to 100 items' });
+      }
 
-    const deleted = await pageRepository.deletePages(ids);
+      const deleted = await repository.deletePages(ids);
 
-    pageRepository.createAuditLog({
-      action: 'page.delete.batch',
-      pageId: null,
-      details: JSON.stringify({ count: deleted, ids: ids.slice(0, 10) }),
-      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
-    }).catch((err) => { console.error('Audit log failed:', err); });
+      await repository.createAuditLog({
+        action: 'page.delete.batch',
+        pageId: null,
+        details: JSON.stringify({ count: deleted, ids: ids.slice(0, 10) }),
+        ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+      });
 
-    return res.json({ success: true, deleted });
+      return (res) => res.json({ success: true, deleted });
+    });
+    return respond(res);
   } catch (error) {
+    if (sendPublishingError(res, error)) return;
     console.error('Batch delete failed:', error);
     return res.status(500).json({ success: false, error: 'Failed to delete pages' });
   }
@@ -1595,28 +1614,32 @@ app.delete('/admin/pages/batch', requireDashboardAdmin, parseSmallJson, requireD
 
 app.delete('/admin/pages/:id', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
   try {
-    const page = await pageRepository.getById(req.params.id);
+    const respond = await publishing.run(async (repository) => {
+      const page = await repository.getById(req.params.id);
 
-    if (!page) {
-      return res.status(404).json({
-        success: false,
-        error: 'Page not found'
+      if (!page) {
+        return (res) => res.status(404).json({
+          success: false,
+          error: 'Page not found'
+        });
+      }
+
+      await repository.deletePage(req.params.id);
+
+      await repository.createAuditLog({
+        action: 'page.delete',
+        pageId: req.params.id,
+        details: JSON.stringify({ title: page.title || page.id }),
+        ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
       });
-    }
 
-    await pageRepository.deletePage(req.params.id);
-
-    pageRepository.createAuditLog({
-      action: 'page.delete',
-      pageId: req.params.id,
-      details: JSON.stringify({ title: page.title || page.id }),
-      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
-    }).catch((err) => { console.error('Audit log failed:', err); });
-
-    return res.json({
-      success: true
+      return (res) => res.json({
+        success: true
+      });
     });
+    return respond(res);
   } catch (error) {
+    if (sendPublishingError(res, error)) return;
     console.error('Delete page failed:', error);
     return res.status(500).json({
       success: false,
@@ -1627,29 +1650,33 @@ app.delete('/admin/pages/:id', requireDashboardAdmin, requireDashboardCsrf, asyn
 
 app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requireDashboardCsrf, async (req, res) => {
   try {
-    const page = await pageRepository.getById(req.params.id);
+    const respond = await publishing.run(async (repository) => {
+      const page = await repository.getById(req.params.id);
 
-    if (!page) {
-      return res.status(404).json({ success: false, error: 'Page not found' });
-    }
+      if (!page) {
+        return (res) => res.status(404).json({ success: false, error: 'Page not found' });
+      }
 
-    const newId = await createPageWithRetry({
-      htmlContent: page.html_content,
-      passwordHash: null,
-      encryptedPassword: null,
-      isProtected: false,
-      codeType: page.code_type,
-      title: (page.title || page.id) + ' (Copy)',
-      description: page.description,
-      createdAt: Date.now(),
-      expiresAt: null,
-      markdownTheme: page.code_type === 'markdown'
-        ? resolveMarkdownThemeId(page.markdown_theme)
-        : null
+      const newId = await createPageWithRetry({
+        htmlContent: page.html_content,
+        passwordHash: null,
+        encryptedPassword: null,
+        isProtected: false,
+        codeType: page.code_type,
+        title: (page.title || page.id) + ' (Copy)',
+        description: page.description,
+        createdAt: Date.now(),
+        expiresAt: null,
+        markdownTheme: page.code_type === 'markdown'
+          ? resolveMarkdownThemeId(page.markdown_theme)
+          : null
+      }, repository);
+
+      return (res) => res.redirect('/admin/pages/' + encodeURIComponent(newId));
     });
-
-    return res.redirect('/admin/pages/' + encodeURIComponent(newId));
+    return respond(res);
   } catch (error) {
+    if (sendPublishingError(res, error)) return;
     console.error('Clone page failed:', error);
     return res.status(500).json({ success: false, error: 'Failed to clone page' });
   }
@@ -1657,34 +1684,38 @@ app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requir
 
 app.post('/api/pages/create', privateNoStore, requireBrowserPublishAccess, parseShareJson, requireBrowserPublishCsrf, async (req, res) => {
   try {
-    const result = await createPageFromInput(req.body);
+    const respond = await publishing.run(async (repository) => {
+      const result = await createPageFromInput(req.body, repository);
 
-    if (result.error) {
-      return res.status(400).json({
-        success: false,
-        error: result.error
+      if (result.error) {
+        return (res) => res.status(400).json({
+          success: false,
+          error: result.error
+        });
+      }
+
+      await repository.createAuditLog({
+        action: 'page.create',
+        pageId: result.id,
+        details: JSON.stringify({ codeType: result.codeType, isProtected: result.isProtected }),
+        ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
       });
-    }
 
-    pageRepository.createAuditLog({
-      action: 'page.create',
-      pageId: result.id,
-      details: JSON.stringify({ codeType: result.codeType, isProtected: result.isProtected }),
-      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
-    }).catch((err) => { console.error('Audit log failed:', err); });
-
-    return res.json({
-      success: true,
-      urlId: result.id,
-      password: result.password,
-      isProtected: result.isProtected,
-      codeType: result.codeType,
-      title: result.title,
-      description: result.description,
-      expiresAt: result.expiresAt,
-      markdownTheme: result.markdownTheme
+      return (res) => res.json({
+        success: true,
+        urlId: result.id,
+        password: result.password,
+        isProtected: result.isProtected,
+        codeType: result.codeType,
+        title: result.title,
+        description: result.description,
+        expiresAt: result.expiresAt,
+        markdownTheme: result.markdownTheme
+      });
     });
+    return respond(res);
   } catch (error) {
+    if (sendPublishingError(res, error)) return;
     console.error('Create page failed:', error);
     return res.status(500).json({
       success: false,
@@ -1726,35 +1757,39 @@ app.post('/api/pages/preview', privateNoStore, requireBrowserPublishAccess, pars
 
 app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (req, res) => {
   try {
-    const result = await createPageFromInput(req.body);
+    const respond = await publishing.run(async (repository) => {
+      const result = await createPageFromInput(req.body, repository);
 
-    if (result.error) {
-      return res.status(400).json({ success: false, error: result.error });
-    }
+      if (result.error) {
+        return (res) => res.status(400).json({ success: false, error: result.error });
+      }
 
-    const base = config.shareBaseUrl || `${req.protocol}://${req.get('host')}`;
-    const url = `${base.replace(/\/+$/, '')}/view/${result.id}`;
+      const base = config.shareBaseUrl || `${req.protocol}://${req.get('host')}`;
+      const url = `${base.replace(/\/+$/, '')}/view/${result.id}`;
 
-    pageRepository.createAuditLog({
-      action: 'page.create',
-      pageId: result.id,
-      details: JSON.stringify({ codeType: result.codeType, isProtected: result.isProtected, source: 'api' }),
-      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
-    }).catch((err) => { console.error('Audit log failed:', err); });
+      await repository.createAuditLog({
+        action: 'page.create',
+        pageId: result.id,
+        details: JSON.stringify({ codeType: result.codeType, isProtected: result.isProtected, source: 'api' }),
+        ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+      });
 
-    return res.json({
-      success: true,
-      url,
-      urlId: result.id,
-      password: result.password,
-      isProtected: result.isProtected,
-      codeType: result.codeType,
-      title: result.title,
-      description: result.description,
-      expiresAt: result.expiresAt,
-      markdownTheme: result.markdownTheme
+      return (res) => res.json({
+        success: true,
+        url,
+        urlId: result.id,
+        password: result.password,
+        isProtected: result.isProtected,
+        codeType: result.codeType,
+        title: result.title,
+        description: result.description,
+        expiresAt: result.expiresAt,
+        markdownTheme: result.markdownTheme
+      });
     });
+    return respond(res);
   } catch (error) {
+    if (sendPublishingError(res, error)) return;
     console.error('Share API failed:', error);
     return res.status(500).json({ success: false, error: '服务器错误' });
   }
@@ -1825,48 +1860,52 @@ app.get('/api/pages/:id/protect', privateNoStore, requireApiAdmin, async (req, r
 
 app.post('/api/pages/:id/protect', privateNoStore, requireApiAdmin, parseSmallJson, requireCsrf, async (req, res) => {
   try {
-    const page = await pageRepository.getById(req.params.id);
+    const respond = await publishing.run(async (repository) => {
+      const page = await repository.getById(req.params.id);
 
-    if (!page) {
-      return res.status(404).json({
-        success: false,
-        error: '页面不存在'
+      if (!page) {
+        return (res) => res.status(404).json({
+          success: false,
+          error: '页面不存在'
+        });
+      }
+
+      const isProtected = Boolean(req.body.isProtected);
+      const customPassword = parseCustomPassword(req.body.password);
+
+      if (customPassword.error) {
+        return (res) => res.status(400).json({
+          success: false,
+          error: CUSTOM_PASSWORD_ERROR
+        });
+      }
+
+      const expectedAccessRevision = requireAccessRevision(req.body.expectedAccessRevision);
+      const password = isProtected
+        ? (customPassword.provided ? customPassword.value : generateNumericPassword(DEFAULT_PASSWORD_LENGTH))
+        : null;
+      const passwordHash = password ? await hashSecret(password) : null;
+      const encryptedPassword = password ? encryptSecret(password) : null;
+
+      const saved = await repository.updateProtection(req.params.id, {
+        isProtected,
+        passwordHash,
+        encryptedPassword,
+        expectedAccessRevision,
+        returnUpdated: true
       });
-    }
+      if (!saved) return (res) => res.status(404).json({ success: false, error: 'Share not found' });
 
-    const isProtected = Boolean(req.body.isProtected);
-    const customPassword = parseCustomPassword(req.body.password);
-
-    if (customPassword.error) {
-      return res.status(400).json({
-        success: false,
-        error: CUSTOM_PASSWORD_ERROR
+      return (res) => res.json({
+        success: true,
+        isProtected,
+        password,
+        accessRevision: saved.access_revision
       });
-    }
-
-    const expectedAccessRevision = requireAccessRevision(req.body.expectedAccessRevision);
-    const password = isProtected
-      ? (customPassword.provided ? customPassword.value : generateNumericPassword(DEFAULT_PASSWORD_LENGTH))
-      : null;
-    const passwordHash = password ? await hashSecret(password) : null;
-    const encryptedPassword = password ? encryptSecret(password) : null;
-
-    const saved = await pageRepository.updateProtection(req.params.id, {
-      isProtected,
-      passwordHash,
-      encryptedPassword,
-      expectedAccessRevision,
-      returnUpdated: true
     });
-    if (!saved) return res.status(404).json({ success: false, error: 'Share not found' });
-
-    return res.json({
-      success: true,
-      isProtected,
-      password,
-      accessRevision: saved.access_revision
-    });
+    return respond(res);
   } catch (error) {
+    if (sendPublishingError(res, error)) return;
     if (error.code?.startsWith('ACCESS_') || error.code === 'INVALID_ACCESS_REVISION') {
       return res.status(error.status).json({ success: false, code: error.code, error: error.message });
     }
@@ -1932,11 +1971,11 @@ app.post('/view/:id/view-event', privateNoStore, async (req, res) => {
   }
 
   try {
-    const outcome = await pageRepository.recordViewEvent(
+    const outcome = await publishing.run(repository => repository.recordViewEvent(
       req.params.id,
       Date.now(),
       pageAccessRevision(req, req.params.id)
-    );
+    ), { allowPaused: true });
 
     if (outcome === 'not_found') {
       return res.sendStatus(404);
@@ -1952,6 +1991,7 @@ app.post('/view/:id/view-event', privateNoStore, async (req, res) => {
 
     return outcome === 'counted' ? res.sendStatus(204) : res.sendStatus(500);
   } catch (error) {
+    if (sendPublishingError(res, error)) return;
     console.error('Track page view failed:', {
       name: error?.name || 'Error',
       code: safeErrorCode(error)

@@ -1,4 +1,5 @@
 const { createPostgresPool } = require('./postgres-config');
+const { maintenanceError, PUBLISHING_LOCK } = require('./publishing');
 const { isAccessRevision, isAccessUpdate, requireAccessRevision, accessError } = require('../utils/shareAccess');
 const {
   buildManagementDailyStats,
@@ -71,6 +72,59 @@ class PostgresPageRepository {
     // Schema changes are applied only through `npm run db:migrate`.
   }
 
+  async getPublishingWritesPaused() {
+    const result = await this.pool.query('SELECT publishing_writes_paused FROM site_settings WHERE id = 1');
+    const paused = result.rows[0]?.publishing_writes_paused;
+    if (typeof paused !== 'boolean') throw new Error('Publishing setting is unavailable');
+    return paused;
+  }
+
+  async setPublishingWritesPaused(paused) {
+    if (typeof paused !== 'boolean') throw new TypeError('paused must be a boolean');
+    return this.withTransaction(async transaction => {
+      await transaction.pool.query('SELECT pg_advisory_xact_lock($1)', [PUBLISHING_LOCK]);
+      const result = await transaction.pool.query(
+        'UPDATE site_settings SET publishing_writes_paused = $1, updated_at = $2 WHERE id = 1 RETURNING id',
+        [paused, Date.now()]
+      );
+      if (result.rowCount !== 1) throw new Error('Publishing setting is unavailable');
+      return { publishingWritesPaused: paused };
+    });
+  }
+
+  async withTransaction(operation) {
+    const client = await this.pool.connect();
+    let queryError;
+    const transaction = Object.create(this);
+    transaction.pool = { query: async (...args) => {
+      try { return await client.query(...args); }
+      catch (error) { queryError ||= error; throw error; }
+    } };
+    transaction.transactionClient = transaction.pool;
+    try {
+      await client.query('BEGIN');
+      const result = await operation(transaction);
+      // PostgreSQL COMMIT on an aborted transaction reports ROLLBACK, not an
+      // exception. Never turn a swallowed SQL/audit failure into HTTP success.
+      if (queryError) throw queryError;
+      const committed = await client.query('COMMIT');
+      if (committed.command !== 'COMMIT') throw new Error('Publishing transaction did not commit');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch { /* Preserve original error. */ }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async withPublishingTransaction(operation) {
+    return this.withTransaction(async transaction => {
+      await transaction.pool.query('SELECT pg_advisory_xact_lock_shared($1)', [PUBLISHING_LOCK]);
+      return operation(transaction);
+    });
+  }
+
   async getHomepagePasswordRequired() {
     const result = await this.pool.query(
       'SELECT homepage_password_required FROM site_settings WHERE id = 1 LIMIT 1'
@@ -89,10 +143,10 @@ class PostgresPageRepository {
       throw new TypeError('passwordRequired must be a boolean');
     }
 
-    const client = await this.pool.connect();
+    const client = this.transactionClient || await this.pool.connect();
 
     try {
-      await client.query('BEGIN');
+      if (!this.transactionClient) await client.query('BEGIN');
       const result = await client.query(
         'SELECT homepage_password_required FROM site_settings WHERE id = 1 FOR UPDATE'
       );
@@ -103,7 +157,7 @@ class PostgresPageRepository {
       }
 
       if (previousValue === passwordRequired) {
-        await client.query('COMMIT');
+        if (!this.transactionClient) await client.query('COMMIT');
         return { passwordRequired, changed: false };
       }
 
@@ -122,29 +176,30 @@ class PostgresPageRepository {
           updatedAt
         ]
       );
-      await client.query('COMMIT');
+      if (!this.transactionClient) await client.query('COMMIT');
 
       return { passwordRequired, changed: true };
     } catch (error) {
       try {
-        await client.query('ROLLBACK');
+        if (!this.transactionClient) await client.query('ROLLBACK');
       } catch {
         // Preserve the original transaction error.
       }
       throw error;
     } finally {
-      client.release();
+      if (!this.transactionClient) client.release();
     }
   }
 
   async create(page) {
-    await this.pool.query(
+    const result = await this.pool.query(
       `
         INSERT INTO pages (
           id, html_content, created_at, password_hash, encrypted_password, is_protected,
           code_type, title, description, expires_at, markdown_theme
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (id) DO NOTHING
       `,
       [
         page.id,
@@ -161,6 +216,7 @@ class PostgresPageRepository {
       ]
     );
 
+    if (result.rowCount === 0) throw Object.assign(new Error('Share id already exists'), { code: '23505' });
     return { id: page.id };
   }
 
@@ -259,6 +315,14 @@ class PostgresPageRepository {
   }
 
   async recordViewEvent(id, now = Date.now(), accessRevision = null) {
+    if (this.publishingWritesPaused) {
+      const state = await this.pool.query('SELECT is_protected, expires_at, access_revision FROM pages WHERE id = $1 LIMIT 1', [id]);
+      const page = state.rows[0];
+      if (!page) return 'not_found';
+      if (page.expires_at !== null && Number(page.expires_at) <= now) return 'expired';
+      if (page.is_protected === 1 && page.access_revision !== accessRevision) return 'protected';
+      throw maintenanceError();
+    }
     const updateResult = await this.pool.query(
       `
         UPDATE pages
@@ -516,7 +580,7 @@ class PostgresPageRepository {
   }
 
   async touchApiKey(id, usedAt = Date.now()) {
-    await this.pool.query('UPDATE api_keys SET last_used_at = $2 WHERE id = $1', [id, usedAt]);
+    await this.pool.query('UPDATE api_keys SET last_used_at = $2 WHERE id = $1 AND EXISTS (SELECT 1 FROM site_settings WHERE id = 1 AND publishing_writes_paused = FALSE)', [id, usedAt]);
   }
 
   async createAuditLog({ action, pageId, details, ip }) {

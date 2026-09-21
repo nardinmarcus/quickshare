@@ -58,10 +58,12 @@ npm run verify:backup -- --source-url <src> --restore-url <restore> \
 - 密码**校验与回显**双重能力：恢复库上 `password_hash` 可验证夹具密码，`encrypted_password` 可用夹具会话密钥解密回显；
 - managed Key 行与 secret 校验；
 - 审计日志（快照点两侧一致）；
-- 站点设置；
+- 站点设置全行（迁移 `005` 后夹具将 `publishing_writes_paused` 置为非默认 `true`，必须完整恢复；恢复库单独篡改此值时 `siteSettings` 检查必须失败）；
 - 迁移台账（恢复库、源库与本地 `db/migrations` 三方一致，checksum 不符即失败）。
 
 **夹具覆盖诚实性**：恢复库中每一条受保护页与每一条 managed Key 都必须被夹具材料实际验证；没有对应夹具条目时，验证以“incomplete fixture coverage”显式失败（exit 1），绝不把这些行的功能检查静默标为通过。夹具中引用但恢复库不存在的条目同样报错。报告同时记录快照点（`snapshotAt` + `snapshotWalLsn`）与各步骤真实耗时（`durationsMs`）。
+
+维护设置的恢复验证将现有设置检查扩展为全行比较，并列出 `comparedColumns`，不新增平行验证器。独立 PostgreSQL 测试显式读回 `publishing_writes_paused=true` 和迁移 `005` 台账，同时保留 `access_revision='9007199254740993'` 的精确字符串及篡改回归。运行最新夹具前须应用全部迁移，不能用旧 schema 声称覆盖新设置。
 
 ## 恢复库默认隔离，失败即关闭
 
@@ -77,7 +79,7 @@ npm run verify:backup -- --source-url <src> --restore-url <restore> \
 - 脚本不加载 `.env`；URL 一律显式传入，子进程环境会剥离继承的 `DATABASE_URL`、`SESSION_SECRET` 等再注入合成值。
 - manifest 与日志只含 redacted URL；密码不出现在任何产物中。
 - 测试与演练只用合成 secret；生产备份属于单独授权的运维操作（脚本提供显式 `--allow-non-test` 逃生口并在 manifest 中记录绕过标记）。
-- 恢复库保持私有：不要把恢复库 URL 配置给任何 QuickShare 运行环境。
+- 恢复库保持私有：不要把恢复库 URL 配置给任何 QuickShare 运行环境。恢复到 `publishing_writes_paused=true` 也不替代隔离或所有者复核；若快照值为 false，更不能直接开放。受控暂停、旧写入者退出/排空与恢复写入流程见 [写维护手册](maintenance.md)。
 
 ## 后续票的扩展合同
 
