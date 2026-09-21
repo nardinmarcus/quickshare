@@ -15,7 +15,7 @@ const { managedIdentity } = require('./utils/apiKeyIdentity');
 const { CONTENT_TYPES, CREATE_SHARE, apiCapabilities } = require('./utils/apiCapabilities');
 const capabilities = apiCapabilities(config);
 const { isAccessRevision, requireAccessRevision } = require('./utils/shareAccess');
-const { contentEtag, requireContentBaselineFor } = require('./utils/contentRevision');
+const { contentEtag, requireContentBaselineFor, isContentRevision } = require('./utils/contentRevision');
 const { publicShareProjection } = require('./utils/publicShareProjection');
 const { createPageRepository } = require('./models/pageRepository');
 const { createPublishing, sendPublishingError } = require('./models/publishing');
@@ -1445,6 +1445,212 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       title: 'Server Error',
       page: 'error-page',
       message: 'Unable to load shared page details'
+    });
+  }
+});
+
+// ---- Owner history (#31): dashboard-only, read-only, metadata-first. ----
+// Every surface below reads existing snapshots through bounded queries; none
+// of them write, count views, touch policy fields or talk to public surfaces.
+
+const HISTORY_DEFAULT_PAGE_SIZE = 20;
+const HISTORY_MAX_PAGE_SIZE = 100;
+const HISTORY_SOURCE_LABELS = {
+  web: '网页创建',
+  api: 'Share API',
+  clone: '克隆',
+  'dashboard-edit': '后台编辑',
+  'title-backfill': '标题回填',
+  'baseline-backfill': '基线回填'
+};
+
+function parseHistoryPagination(query) {
+  const pageRaw = Number.parseInt(query.page, 10);
+  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
+  const limitRaw = Number.parseInt(query.limit, 10);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0
+    ? Math.min(limitRaw, HISTORY_MAX_PAGE_SIZE)
+    : HISTORY_DEFAULT_PAGE_SIZE;
+  return { page, limit, offset: (page - 1) * limit };
+}
+
+function historyPageView(pagination, revisions, total) {
+  const totalPages = Math.max(Math.ceil(Number(total) / pagination.limit), 1);
+  return {
+    page: pagination.page,
+    limit: pagination.limit,
+    total,
+    totalPages,
+    // Exact big-integer arithmetic: a total above 2^53 still yields correct
+    // bounds without ever passing the revision count through Number ordering.
+    hasNext: BigInt(pagination.offset) + BigInt(revisions.length) < BigInt(total),
+    hasPrevious: pagination.page > 1 && BigInt(total) > 0n
+  };
+}
+
+function buildHistoryUrl(id, page, limit) {
+  const params = new URLSearchParams();
+  if (page > 1) params.set('page', String(page));
+  if (limit !== HISTORY_DEFAULT_PAGE_SIZE) params.set('limit', String(limit));
+  const query = params.toString();
+  return `/admin/pages/${encodeURIComponent(id)}/history${query ? `?${query}` : ''}`;
+}
+
+function historyRevisionProjection(row) {
+  return {
+    revision: String(row.revision),
+    createdAt: Number(row.created_at),
+    source: row.source || null,
+    restoredFrom: row.restored_from === null || row.restored_from === undefined ? null : String(row.restored_from)
+  };
+}
+
+app.get('/admin/pages/:id/history', requireDashboardAdmin, async (req, res) => {
+  try {
+    const sharedPage = await pageRepository.getById(req.params.id);
+
+    if (!sharedPage) {
+      return res.status(404).render('error', {
+        title: 'Page Not Found',
+        page: 'error-page',
+        message: 'The requested shared page does not exist'
+      });
+    }
+
+    const pagination = parseHistoryPagination(req.query);
+    const { items, total } = await pageRepository.listContentRevisionPage(req.params.id, pagination);
+    const revisions = items.map(historyRevisionProjection);
+    const view = historyPageView(pagination, revisions, total);
+
+    return res.render('admin-page-history', {
+      title: `QuickShare | ${sharedPage.id} 历史版本`,
+      page: 'admin-page-detail',
+      sharedPage: {
+        id: sharedPage.id,
+        title: sharedPage.title,
+        codeType: sharedPage.code_type,
+        currentRevision: String(sharedPage.current_revision)
+      },
+      revisions,
+      pagination: view,
+      sourceLabels: HISTORY_SOURCE_LABELS,
+      prevUrl: view.hasPrevious ? buildHistoryUrl(sharedPage.id, view.page - 1, view.limit) : null,
+      nextUrl: view.hasNext ? buildHistoryUrl(sharedPage.id, view.page + 1, view.limit) : null,
+      historyDataJson: serializeJsonForHtml({
+        id: sharedPage.id,
+        codeType: sharedPage.code_type,
+        currentRevision: String(sharedPage.current_revision),
+        revisions,
+        pagination: view
+      })
+    });
+  } catch (error) {
+    console.error('Admin page history failed:', error);
+    return res.status(500).render('error', {
+      title: 'Server Error',
+      page: 'error-page',
+      message: 'Unable to load share history'
+    });
+  }
+});
+
+app.get('/admin/pages/:id/revisions', requireDashboardApiAdmin, async (req, res) => {
+  try {
+    const sharedPage = await pageRepository.getById(req.params.id);
+
+    if (!sharedPage) {
+      return res.status(404).json({ success: false, error: 'Share not found' });
+    }
+
+    const pagination = parseHistoryPagination(req.query);
+    const { items, total } = await pageRepository.listContentRevisionPage(req.params.id, pagination);
+    const revisions = items.map(historyRevisionProjection);
+
+    return res.json({
+      success: true,
+      shareId: sharedPage.id,
+      revisions,
+      pagination: historyPageView(pagination, revisions, total)
+    });
+  } catch (error) {
+    console.error('Admin revision list failed:', error);
+    return res.status(500).json({ success: false, error: 'Failed to list revisions' });
+  }
+});
+
+app.get('/admin/pages/:id/revisions/:revision', requireDashboardApiAdmin, async (req, res) => {
+  try {
+    if (!isContentRevision(req.params.revision)) {
+      return res.status(400).json({ success: false, code: 'INVALID_CONTENT_REVISION', error: 'content revision must be a positive decimal string' });
+    }
+
+    const row = await pageRepository.getContentRevision(req.params.id, req.params.revision);
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'Revision not found' });
+    }
+
+    return res.json({
+      success: true,
+      revision: {
+        shareId: row.share_id,
+        revision: String(row.revision),
+        htmlContent: row.html_content,
+        codeType: row.code_type,
+        title: row.title,
+        description: row.description,
+        markdownTheme: row.markdown_theme,
+        createdAt: Number(row.created_at),
+        snapshotHash: row.snapshot_hash,
+        source: row.source || null,
+        actor: row.actor || null,
+        restoredFrom: row.restored_from === null || row.restored_from === undefined ? null : String(row.restored_from)
+      }
+    });
+  } catch (error) {
+    if (error.code === 'INVALID_CONTENT_REVISION') {
+      return res.status(400).json({ success: false, code: error.code, error: error.message });
+    }
+    console.error('Admin revision read failed:', error);
+    return res.status(500).json({ success: false, error: 'Failed to read revision' });
+  }
+});
+
+app.get('/admin/pages/:id/revisions/:revision/preview', requireDashboardAdmin, async (req, res) => {
+  try {
+    if (!isContentRevision(req.params.revision)) {
+      return res.status(400).render('error', {
+        title: 'Invalid Revision',
+        page: 'error-page',
+        message: 'The requested content revision is invalid'
+      });
+    }
+
+    const row = await pageRepository.getContentRevision(req.params.id, req.params.revision);
+    if (!row) {
+      return res.status(404).render('error', {
+        title: 'Revision Not Found',
+        page: 'error-page',
+        message: 'The requested content revision does not exist'
+      });
+    }
+
+    // Same renderer and sandbox as the public view, but WITHOUT pageUrl (no
+    // public analytics script) and WITHOUT viewEventUrl (no view counting).
+    // The wrapper document is safe to open directly: the escaped srcdoc
+    // iframe keeps the historical user content out of the management origin.
+    const prepared = await prepareSandboxContent(row.html_content, row.code_type, row.markdown_theme);
+    setTrustedUiCsp(res, { allowFraming: true });
+    return res.send(renderSandboxedDocument(prepared.renderedContent, prepared.contentType, {
+      title: `${row.title || row.share_id} · 版本 ${String(row.revision)} 历史预览`,
+      description: row.description || '',
+      socialImageUrl: ''
+    }));
+  } catch (error) {
+    console.error('Admin revision preview failed:', error);
+    return res.status(500).render('error', {
+      title: 'Server Error',
+      page: 'error-page',
+      message: 'Unable to render revision preview'
     });
   }
 });

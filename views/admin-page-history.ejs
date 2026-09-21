@@ -1,0 +1,139 @@
+<%- include('partials/header', { title, page }) %>
+
+<div class="admin-container">
+  <header class="admin-header">
+    <div>
+      <p class="admin-kicker">历史版本</p>
+      <h1 class="admin-title"><%= sharedPage.title || sharedPage.id %></h1>
+      <p class="admin-subtitle"><%= sharedPage.id %> · 当前内容版本 <%= sharedPage.currentRevision %></p>
+    </div>
+    <%- include('partials/admin-nav', { current: 'pages' }) %>
+  </header>
+
+  <div class="admin-detail-actions">
+    <a class="cyber-btn cyber-btn-secondary" href="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>">
+      <i class="fas fa-arrow-left" aria-hidden="true"></i>
+      <span>返回详情</span>
+    </a>
+  </div>
+
+  <section class="card admin-card" id="history-list-section">
+    <h2 class="admin-section-title">版本历史</h2>
+    <p class="field-hint">共 <%= pagination.total %> 个版本，按版本号倒序展示（北京时间为准）；列表仅含元信息，正文与预览需单独打开。</p>
+    <p id="history-empty" class="field-hint" <%= revisions.length ? 'hidden' : '' %>>暂无历史版本。</p>
+    <% if (revisions.length) { %>
+    <div class="admin-table-wrap" tabindex="0" aria-label="历史版本列表，可横向滚动">
+      <table class="admin-table history-table" id="history-table">
+        <thead>
+          <tr>
+            <th scope="col">版本</th>
+            <th scope="col">时间（北京时间）</th>
+            <th scope="col">来源</th>
+            <th scope="col">恢复来源</th>
+            <th scope="col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% revisions.forEach(function (revision) { %>
+          <tr id="history-table-row-<%= revision.revision %>">
+            <td><span class="admin-pill history-revision-pill"><%= revision.revision %></span></td>
+            <td><time datetime="<%= new Date(revision.createdAt).toISOString() %>"><%= formatManagementDateTime(revision.createdAt) %></time></td>
+            <td><%= sourceLabels[revision.source] || revision.source || '—' %></td>
+            <td><%= revision.restoredFrom ? '版本 ' + revision.restoredFrom : '—' %></td>
+            <td class="history-row-actions">
+              <button type="button" class="cyber-btn cyber-btn-secondary" data-history-action="raw" data-revision="<%= revision.revision %>">原稿</button>
+              <button type="button" class="cyber-btn cyber-btn-secondary" data-history-action="preview" data-revision="<%= revision.revision %>">预览</button>
+            </td>
+          </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+    <nav class="admin-pagination" aria-label="历史版本分页">
+      <% if (pagination.hasPrevious && prevUrl) { %>
+        <a class="cyber-btn cyber-btn-secondary" href="<%= prevUrl %>">上一页</a>
+      <% } %>
+      <span class="admin-page-count">第 <%= pagination.page %> / <%= pagination.totalPages %> 页</span>
+      <% if (pagination.hasNext && nextUrl) { %>
+        <a class="cyber-btn cyber-btn-secondary" href="<%= nextUrl %>">下一页</a>
+      <% } %>
+    </nav>
+    <% } %>
+  </section>
+
+  <section class="card admin-card" id="history-compare-section">
+    <h2 class="admin-section-title">版本比较</h2>
+    <p class="field-hint">输入任意两个历史版本号（可跨页、含超过 2^53 的大版本号），或从本页列表选择；比较正文行级源码差异与标题、描述、主题取值。比较在本地 Worker 内按纯文本进行，保留空白与换行。</p>
+    <div class="history-compare-controls">
+      <div class="history-compare-field">
+        <label for="compare-select-a">版本 A（旧）</label>
+        <input
+          type="text"
+          id="compare-select-a"
+          list="history-revision-options"
+          inputmode="numeric"
+          autocomplete="off"
+          spellcheck="false"
+          value="<%= revisions.length > 1 ? revisions[1].revision : (revisions[0] ? revisions[0].revision : '') %>"
+          placeholder="输入版本号"
+        >
+      </div>
+      <div class="history-compare-field">
+        <label for="compare-select-b">版本 B（新）</label>
+        <input
+          type="text"
+          id="compare-select-b"
+          list="history-revision-options"
+          inputmode="numeric"
+          autocomplete="off"
+          spellcheck="false"
+          value="<%= revisions[0] ? revisions[0].revision : '' %>"
+          placeholder="输入版本号"
+        >
+      </div>
+      <button type="button" class="cyber-btn" id="compare-run">比较所选版本</button>
+    </div>
+    <datalist id="history-revision-options">
+      <% revisions.forEach(function (revision) { %>
+        <option value="<%= revision.revision %>">版本 <%= revision.revision %>（<%= formatManagementDateTime(revision.createdAt) %>）</option>
+      <% }); %>
+    </datalist>
+    <div class="history-compare-actions" id="compare-source-actions" hidden>
+      <button type="button" class="cyber-btn cyber-btn-secondary" id="compare-raw-a">版本 A 原稿</button>
+      <button type="button" class="cyber-btn cyber-btn-secondary" id="compare-raw-b">版本 B 原稿</button>
+      <button type="button" class="cyber-btn cyber-btn-secondary" id="compare-preview-a">预览版本 A</button>
+      <button type="button" class="cyber-btn cyber-btn-secondary" id="compare-preview-b">预览版本 B</button>
+    </div>
+    <p id="compare-status" class="field-hint" role="status" aria-live="polite"></p>
+    <div id="compare-meta-summary" class="history-meta-summary" hidden></div>
+    <div id="compare-meta" class="conflict-meta" hidden></div>
+    <div id="compare-diff" class="conflict-diff history-diff" tabindex="0" aria-label="正文行级差异"></div>
+    <div id="history-raw-panel" hidden>
+      <p id="history-raw-title" class="field-hint"></p>
+      <textarea id="history-raw-view" class="admin-content-viewer" readonly aria-label="版本原稿（只读）"></textarea>
+    </div>
+  </section>
+
+  <section class="card admin-card" id="history-preview-section">
+    <h2 class="admin-section-title">单版预览</h2>
+    <p class="field-hint">预览在沙盒中渲染，与管理端同源隔离；不记录浏览量，也不注入公开统计。</p>
+    <p id="history-preview-empty" class="field-hint">在上方列表选择一个版本的「预览」，或在新标签中直接打开。</p>
+    <iframe
+      id="history-preview-frame"
+      class="admin-rendered-preview history-preview-frame"
+      title="历史版本预览"
+      hidden
+      sandbox="allow-downloads allow-forms allow-modals allow-popups allow-scripts"
+    ></iframe>
+    <a id="history-preview-open" class="cyber-btn cyber-btn-secondary" href="#" target="_blank" rel="noopener noreferrer" hidden>
+      <i class="fas fa-external-link-alt" aria-hidden="true"></i>
+      <span>在新标签打开预览</span>
+    </a>
+  </section>
+</div>
+
+<script type="application/json" id="history-data"><%- historyDataJson %></script>
+<script src="/js/admin.js"></script>
+<script src="/js/source-diff.js"></script>
+<script src="/js/admin-history.js"></script>
+<%- include('partials/footer', { page }) %>

@@ -223,6 +223,45 @@ class MemoryPageRepository {
       .sort((left, right) => BigInt(left.revision) - BigInt(right.revision) > 0n ? 1 : -1);
   }
 
+  /**
+   * Owner history page (#31): bounded, metadata-only page ordered by the
+   * exact big-integer revision value (never Number or string order); the
+   * projected items never carry the body.
+   */
+  async listContentRevisionPage(shareId, { limit = 20, offset = 0 } = {}) {
+    const revisions = this.revisions.get(shareId);
+    const all = revisions ? [...revisions.values()] : [];
+    all.sort((left, right) => {
+      const leftValue = BigInt(left.revision);
+      const rightValue = BigInt(right.revision);
+      return rightValue > leftValue ? 1 : rightValue < leftValue ? -1 : 0;
+    });
+    const parsedLimit = Math.trunc(Number(limit));
+    const safeLimit = Math.min(Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20, 100);
+    const parsedOffset = Math.trunc(Number(offset));
+    const safeOffset = Number.isFinite(parsedOffset) && parsedOffset > 0 ? parsedOffset : 0;
+    const items = all.slice(safeOffset, safeOffset + safeLimit).map(row => ({
+      share_id: row.share_id,
+      revision: String(row.revision),
+      created_at: row.created_at,
+      source: row.source,
+      restored_from: row.restored_from === undefined ? null : row.restored_from
+    }));
+    return { items, total: String(all.length) };
+  }
+
+  /**
+   * Single bounded snapshot read for owner history (#31). The revision value
+   * is validated as an exact decimal revision BEFORE any lookup runs.
+   */
+  async getContentRevision(shareId, revision) {
+    if (!isContentRevision(revision)) {
+      throw contentError(400, 'content revision must be a positive decimal string');
+    }
+    const row = this.revisions.get(shareId)?.get(String(revision));
+    return row ? { ...row } : null;
+  }
+
   async listPagesMissingBaselineRevision(limit = 200) {
     const missing = [];
     for (const page of this.pages.values()) {

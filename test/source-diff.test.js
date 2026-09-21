@@ -83,3 +83,64 @@ test('worker echoes errors without leaking internals', async () => {
   assert.ok(typeof message.message === 'string' && message.message.length < 200);
   assert.doesNotMatch(message.message, /synthetic internal failure/, 'internal errors are not leaked');
 });
+
+// ---- #31 rework R2-failure-path: worker error events are owned by the
+// worker generation that received the comparison. A late error from an
+// already-terminated old worker must never reject a NEW worker's pending
+// comparison, and a timed-out comparison must not be resurrected by its old
+// worker's late events. ----
+
+test('worker error ownership is bound to the worker generation', async () => {
+  const fs = require('fs');
+  const vm = require('vm');
+  const source = fs.readFileSync('public/js/source-diff.js', 'utf8');
+  const workers = [];
+  class WorkerStub {
+    constructor() {
+      this.terminated = false;
+      workers.push(this);
+    }
+    postMessage() {}
+    terminate() { this.terminated = true; }
+  }
+  const timers = [];
+  const context = {
+    document: { createElement: () => ({ textContent: '', children: [], appendChild() {} }) },
+    Worker: WorkerStub,
+    setTimeout: (callback, ms) => { timers.push({ callback, ms }); return timers.length; },
+    clearTimeout: () => {}
+  };
+  context.window = context;
+  vm.runInNewContext(source, context);
+  const SourceDiff = context.SourceDiff;
+
+  // Comparison 1: worker #1 (generation 1); answered OK.
+  const first = SourceDiff.compare('a', 'b');
+  assert.equal(workers.length, 1);
+  workers[0].onmessage({ data: { id: 1, status: 'ok', parts: [] } });
+  const firstResult = await first;
+  assert.equal(firstResult.status, 'ok');
+
+  // Comparison 2: reuses worker #1; the outer deadline fires → worker
+  // terminated and the comparison reports timeout.
+  const second = SourceDiff.compare('c', 'd');
+  assert.equal(workers.length, 1, 'a healthy worker is reused');
+  const deadlineTimer = timers.pop();
+  assert.equal(deadlineTimer.ms, 2000);
+  deadlineTimer.callback();
+  const secondResult = await second;
+  assert.equal(secondResult.status, 'timeout');
+  assert.equal(workers[0].terminated, true, 'the deadline terminates the old worker');
+
+  // Comparison 3: a NEW worker (generation 2) is created.
+  const third = SourceDiff.compare('e', 'f');
+  assert.equal(workers.length, 2, 'a terminated worker is replaced by a fresh one');
+
+  // LATE error from the OLD (terminated) worker #1: this must NOT reject
+  // comparison 3, which is owned by worker #2.
+  workers[0].onerror(new Error('stale worker failure'));
+
+  workers[1].onmessage({ data: { id: 3, status: 'ok', parts: [] } });
+  const thirdResult = await third;
+  assert.equal(thirdResult.status, 'ok', 'the new worker\'s pending comparison survives a late old-worker error');
+});

@@ -31,6 +31,11 @@
   const conflictMeta = document.getElementById('conflict-meta');
   const conflictDiff = document.getElementById('conflict-diff');
   const conflictDiffStatus = document.getElementById('conflict-diff-status');
+  const conflictRawPanel = document.getElementById('conflict-raw-panel');
+  const conflictRawRemote = document.getElementById('conflict-raw-remote');
+  const conflictRawRemoteTitle = document.getElementById('conflict-raw-remote-title');
+  const conflictRawLocal = document.getElementById('conflict-raw-local');
+  const conflictRawLocalTitle = document.getElementById('conflict-raw-local-title');
   const conflictTakeRemoteBtn = document.getElementById('conflict-take-remote');
   const conflictSaveMineBtn = document.getElementById('conflict-save-mine');
   const adminTime = window.AdminTime;
@@ -55,6 +60,19 @@
   function contentIfMatch(data) {
     // Strong HTTP entity-tag: always the double-quoted form.
     return '"content:' + data.id + ':' + data.currentRevision + '"';
+  }
+
+  function candidateBody() {
+    // The EXACT body bytes a content save would submit. A textarea
+    // normalizes CRLF/CR to LF in .value, so an untouched (or reverted) body
+    // resolves to the ORIGINAL raw bytes from the page baseline; an actual
+    // edit resolves to the browser-normalized edited value. Sending, the
+    // conflict comparison and the local raw view ALL resolve through this
+    // single helper: what the owner reviews is exactly what will be sent —
+    // never a phantom end-of-line rewrite of the real candidate.
+    return contentTextarea.value === baselineTextareaValue
+      ? originalData.htmlContent
+      : contentTextarea.value;
   }
 
   try {
@@ -93,10 +111,18 @@
 
   function hideConflictPanel() {
     conflictRemote = null;
+    // Invalidate any queued chunked render before clearing: a comparison
+    // whose chunks are still pending must never refill the hidden panel.
+    if (SourceDiff && SourceDiff.cancelRender) SourceDiff.cancelRender(conflictDiff);
     conflictPanel.hidden = true;
     conflictDiff.textContent = '';
     conflictMeta.textContent = '';
     conflictDiffStatus.textContent = '';
+    conflictRawPanel.hidden = true;
+    conflictRawRemote.value = '';
+    conflictRawLocal.value = '';
+    conflictRawRemoteTitle.textContent = '';
+    conflictRawLocalTitle.textContent = '';
   }
 
   function captureContentBaseline() {
@@ -295,9 +321,7 @@
       // the edited value. "Save my version" therefore submits exactly the
       // candidate the owner reviewed (user metadata + the shown body), never
       // a silent merge that would keep a remote body under a new baseline.
-      payload.htmlContent = contentTextarea.value === baselineTextareaValue
-        ? originalData.htmlContent
-        : contentTextarea.value;
+      payload.htmlContent = candidateBody();
 
       const response = await fetch('/admin/pages/' + encodeURIComponent(originalData.id), {
         method: 'PUT',
@@ -388,6 +412,9 @@
     }
     conflictRemote = remote;
     conflictPanel.hidden = false;
+    // Invalidate any queued render from an earlier comparison before
+    // clearing: stale chunks must never refill the new target's diff area.
+    if (SourceDiff && SourceDiff.cancelRender) SourceDiff.cancelRender(conflictDiff);
     conflictSummary.textContent = '此 Share 当前已是第 ' + remote.currentRevision + ' 版，你的编辑基于第 '
       + originalData.currentRevision + ' 版。未保存的稿件已保留，请先查看差异，再选择采用远端或保留你的版本。';
 
@@ -395,21 +422,48 @@
     conflictDiff.textContent = '';
     conflictDiffStatus.textContent = '正在比较当前远端与你的稿件…';
 
-    // Compare remote (old) with the retained draft (new). Any result that
-    // belongs to an earlier comparison target is discarded inside SourceDiff.
-    const result = await SourceDiff.compare(remote.htmlContent, contentTextarea.value);
+    // Both complete sources stay reachable while the conflict is open: the
+    // frozen remote snapshot and the EXACT local candidate (raw bytes when
+    // untouched, edited value otherwise) — the same resolution a save sends.
+    const localCandidate = candidateBody();
+    conflictRawRemote.value = remote.htmlContent;
+    conflictRawRemoteTitle.textContent = '当前远端 · 第 ' + remote.currentRevision + ' 版快照（只读）';
+    conflictRawLocal.value = localCandidate;
+    conflictRawLocalTitle.textContent = '本地候选 · 基于第 ' + originalData.currentRevision + ' 版（只读）';
+    conflictRawPanel.hidden = false;
+
+    // Compare remote (old) with the retained candidate (new). Any result
+    // that belongs to an earlier comparison target is discarded inside
+    // SourceDiff.
+    let result;
+    try {
+      result = await SourceDiff.compare(remote.htmlContent, localCandidate);
+    } catch (error) {
+      // Comparator failure (e.g. worker error): a terminal, clearly
+      // unfinished state — distinct from an oversized diff, never a stuck
+      // in-flight wording, and both raw sources stay reachable below.
+      if (conflictRemote !== remote) return; // stale rejection: the panel moved on
+      if (SourceDiff && SourceDiff.cancelRender) SourceDiff.cancelRender(conflictDiff);
+      conflictDiff.textContent = '';
+      conflictDiffStatus.textContent = '差异比较失败，未完成比较。下方已提供双方完整只读原稿。';
+      return;
+    }
     if (conflictRemote !== remote) return;
 
     if (result.status === 'ok') {
-      SourceDiff.renderParts(conflictDiff, result.parts);
+      SourceDiff.renderParts(conflictDiff, result.parts, {
+        truncationNotice: '差异行数过多，仅显示前 ' + (SourceDiff.MAX_RENDERED_ROWS || 2000) + ' 行；完整原稿见下方两侧只读原稿。'
+      });
       const changed = result.parts.some(part => part.added || part.removed);
       conflictDiffStatus.textContent = changed
         ? '以下为正文行级差异（当前远端 → 你的稿件）：'
         : '正文没有行级差异；请检查上方标题、描述或主题的取值变化。';
     } else {
-      // Timeout/worker failure: never show this as "no differences".
+      // Timeout/worker failure: never show this as "no differences"; both
+      // complete raw sources remain visible below.
+      if (SourceDiff && SourceDiff.cancelRender) SourceDiff.cancelRender(conflictDiff);
       conflictDiff.textContent = '';
-      conflictDiffStatus.textContent = '差异过大，未完成比较。可分别打开公开页面与编辑框查看完整原稿。';
+      conflictDiffStatus.textContent = '差异过大，未完成比较。下方已提供双方完整只读原稿。';
     }
   }
 

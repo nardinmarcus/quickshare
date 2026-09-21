@@ -294,6 +294,53 @@ class PostgresPageRepository {
     return result.rows;
   }
 
+  /**
+   * Owner history page (#31): bounded, metadata-only, ordered by the exact
+   * BIGINT revision value (never Number or string order) and never selecting
+   * html_content, so list responses cannot aggregate bodies.
+   */
+  async listContentRevisionPage(shareId, { limit = 20, offset = 0 } = {}) {
+    const parsedLimit = Math.trunc(Number(limit));
+    const safeLimit = Math.min(Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20, 100);
+    const parsedOffset = Math.trunc(Number(offset));
+    const safeOffset = Number.isFinite(parsedOffset) && parsedOffset > 0 ? parsedOffset : 0;
+    const [pageResult, countResult] = await Promise.all([
+      this.pool.query(
+        `
+          SELECT share_id, revision, created_at, source, restored_from
+          FROM share_revisions
+          WHERE share_id = $1
+          ORDER BY revision DESC
+          LIMIT $2 OFFSET $3
+        `,
+        [shareId, safeLimit, safeOffset]
+      ),
+      this.pool.query('SELECT count(*) AS total FROM share_revisions WHERE share_id = $1', [shareId])
+    ]);
+    return { items: pageResult.rows, total: String(countResult.rows[0].total) };
+  }
+
+  /**
+   * Single bounded snapshot read for owner history (#31). The revision value
+   * is validated as an exact decimal revision BEFORE any query runs.
+   */
+  async getContentRevision(shareId, revision) {
+    if (!isContentRevision(revision)) {
+      throw contentError(400, 'content revision must be a positive decimal string');
+    }
+    const result = await this.pool.query(
+      `
+        SELECT share_id, revision, html_content, code_type, title, description, markdown_theme, created_at,
+               snapshot_hash, source, actor, restored_from
+        FROM share_revisions
+        WHERE share_id = $1 AND revision = $2
+        LIMIT 1
+      `,
+      [shareId, revision]
+    );
+    return result.rows[0] || null;
+  }
+
   async listPagesMissingBaselineRevision(limit = 200) {
     const result = await this.pool.query(
       `

@@ -52,3 +52,18 @@ env -u DATABASE_URL -u POSTGRES_URL -u DATABASE_MIGRATION_URL \
 ## 本票不做
 
 历史浏览/恢复/清除、幂等请求记录、grants 与管理 API、上下架、客户端能力（#31–#43）均不在本票范围；`published` 仅有列与备份语义，没有任何应用入口。
+
+## #31 增量：Owner 历史只读面（T07）
+
+在 #30 快照与冲突差异之上，#31 交付所有者的历史浏览/比较/单版预览，全部只读，不新增任何 schema、迁移或持久化字段。
+
+- **仓储层**：两 Adapter 新增 `listContentRevisionPage(shareId, { limit, offset })`（默认 20、上限 100、按精确 BIGINT 版本号倒序，列表投影仅含 `share_id/revision/created_at/source/restored_from`，SQL 与内存路径都不读正文）与 `getContentRevision(shareId, revision)`（先以 `isContentRevision` 校验再读单行完整快照）。旧 `listContentRevisions`（升序、含正文，供 backfill/测试）保持不变。
+- **路由**（全部在 `/admin` 的 `private, no-store` 之下，认证先于任何敏感读取）：
+  - `GET /admin/pages/:id/history`：`requireDashboardAdmin`，服务端渲染历史页（首页元信息表格 + 上一页/下一页链接）。
+  - `GET /admin/pages/:id/revisions`：`requireDashboardApiAdmin` 401 JSON，仅元信息分页；`page/limit` 非法回退默认，`limit>100` 截到 100。
+  - `GET /admin/pages/:id/revisions/:revision`：`requireDashboardApiAdmin`，单版完整快照 JSON；非法版本号 400（`INVALID_CONTENT_REVISION`），不存在 404。
+  - `GET /admin/pages/:id/revisions/:revision/preview`：`requireDashboardAdmin`，复用 `prepareSandboxContent` + `renderSandboxedDocument`；不传 `pageUrl`（无公开统计脚本）、不传 `viewEventUrl`（无浏览计数）、`socialImageUrl` 为空；srcdoc 转义、无 `allow-same-origin`、`no-referrer`，直接打开 URL 与内嵌同权安全。
+  - 前端 cookie、create-only managed/legacy API Key、已解锁公开访问都不是历史身份；只读操作不触碰 `current_revision`/`access_revision`/保护/Favorite/浏览量/发布状态与快照行；写维护暂停时仍可读。空历史如实呈现，不猜测旧历史。
+- **前端**：`views/admin-page-history.ejs` + `public/js/admin-history.js` 沿用现有 shell 与 CSS 变量；分页用服务端链接（无 JS 也可用）；比较/预览/原稿的每个异步流持单调 token，旧 HTTP/Worker 结果一律丢弃；未完成比较显示「差异过大，未完成比较」并保留分别查看原稿的入口，绝不冒充无差异；meta 比较用 `SourceDiff.renderMetaChanges` 的新可选 `{ previousLabel, currentLabel }` 以「版本 A/版本 B」标注两侧（默认值保持 #30 冲突文案，向后兼容）。
+- **渲染分块**：`SourceDiff.renderParts` 改为有界分块渲染（首块同步、余量经 `requestAnimationFrame`/`setTimeout` 续渲染，`MAX_RENDERED_ROWS=2000` 截断并显式提示「仅显示前 2000 行」，截断不是「无差异」）；新增 `SourceDiff.cancelRender` 供切换/关闭时取消在途渲染。Worker 算法预算 1000ms、外层终止期限 2000ms、本地 vendor 与 diff@9.0.0 均不变。
+- **rework 增量（bounded rework R1–R4）**：历史比较输入为自由版本号输入+datalist（可跨页、超过 2^53 的版本号逐字传递，缺失/非法版本有带版本标签的明确状态，比较面板提供双方「原稿/预览」入口）；Worker 错误事件按 worker 代际归属（旧/已终止 worker 的迟到 error 不会 reject 新 worker 的比较）；`SourceDiff.compare` 的 reject 在两个消费者中归为明确的「差异比较失败，未完成比较」终态（与「差异过大」区分，稿件/面板不卡在比较中，旧目标的拒绝不覆盖新目标）；后台详情候选正文提取为单一 `candidateBody()` 解析（发送、冲突比较、本地原稿三处同源，未编辑/回退送原始字节，展示=提交）；冲突面板提供双方完整只读原稿（冻结远端快照+本地解析候选，带版本身份），取代「打开公开页面」的旧提示。

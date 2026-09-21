@@ -29,6 +29,10 @@
       <i class="fas fa-pen" aria-hidden="true"></i>
       <span>编辑</span>
     </button>
+    <a class="cyber-btn cyber-btn-secondary" id="history-link" href="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>/history">
+      <i class="fas fa-history" aria-hidden="true"></i>
+      <span>历史版本</span>
+    </a>
     <form method="post" action="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>/clone" class="admin-inline-form">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <button type="submit" class="cyber-btn cyber-btn-secondary">
@@ -190,6 +194,18 @@
     <div id="conflict-meta" class="conflict-meta" hidden></div>
     <p id="conflict-diff-status" class="field-hint" role="status"></p>
     <div id="conflict-diff" class="conflict-diff" tabindex="0"></div>
+    <div id="conflict-raw-panel" class="conflict-raw-panel" hidden>
+      <div class="conflict-raw-grid">
+        <div class="conflict-raw-column">
+          <p id="conflict-raw-remote-title" class="field-hint"></p>
+          <textarea id="conflict-raw-remote" class="admin-content-viewer conflict-raw-view" readonly aria-label="当前远端完整原稿（只读）"></textarea>
+        </div>
+        <div class="conflict-raw-column">
+          <p id="conflict-raw-local-title" class="field-hint"></p>
+          <textarea id="conflict-raw-local" class="admin-content-viewer conflict-raw-view" readonly aria-label="本地候选完整原稿（只读）"></textarea>
+        </div>
+      </div>
+    </div>
     <div class="admin-edit-actions">
       <button type="button" class="cyber-btn cyber-btn-secondary" id="conflict-take-remote">采用当前远端，丢弃我的修改</button>
       <button type="button" class="cyber-btn" id="conflict-save-mine">已查看差异，仍要保存我的版本</button>
