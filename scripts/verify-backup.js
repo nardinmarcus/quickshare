@@ -35,6 +35,10 @@ const {
   redactUrl
 } = require('./backup-db');
 
+const API_KEY_COMPARED_COLUMNS = Object.freeze([
+  'id', 'name', 'key_hash', 'key_prefix', 'created_at', 'last_used_at', 'credential_version'
+]);
+
 const HARD_REVOCATION_AUDIT_ACTIONS = new Set([
   'page.delete',
   'page.delete.batch',
@@ -432,8 +436,8 @@ async function runVerification({
         restorePool.query('SELECT * FROM pages ORDER BY id ASC'),
         sourcePool.query('SELECT action, page_id, details, ip, created_at FROM audit_logs ORDER BY id ASC'),
         restorePool.query('SELECT action, page_id, details, ip, created_at FROM audit_logs ORDER BY id ASC'),
-        sourcePool.query('SELECT id, name, key_hash, key_prefix, created_at, last_used_at, credential_version FROM api_keys ORDER BY id ASC'),
-        restorePool.query('SELECT id, name, key_hash, key_prefix, created_at, last_used_at, credential_version FROM api_keys ORDER BY id ASC'),
+        sourcePool.query(`SELECT ${API_KEY_COMPARED_COLUMNS.join(', ')} FROM api_keys ORDER BY id ASC`),
+        restorePool.query(`SELECT ${API_KEY_COMPARED_COLUMNS.join(', ')} FROM api_keys ORDER BY id ASC`),
         sourcePool.query('SELECT * FROM site_settings ORDER BY id ASC'),
         restorePool.query('SELECT * FROM site_settings ORDER BY id ASC'),
         sourcePool.query('SELECT version, name, checksum, applied_at FROM quickshare_schema_migrations ORDER BY version ASC'),
@@ -499,7 +503,7 @@ async function runVerification({
       name: 'managedApiKeys',
       ok: keyRowIssues.length === 0 && keyPlan.ok,
       issues: [...keyRowIssues, ...keyPlan.issues],
-      details: keyPlan.details
+      details: { ...keyPlan.details, comparedColumns: API_KEY_COMPARED_COLUMNS }
     });
 
     const settingsIssues = rowsEqual(sourceSettings.rows, restoreSettings.rows)

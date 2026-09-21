@@ -35,6 +35,9 @@ const {
 } = require('../../scripts/backup-restore-check');
 
 const poolEnv = { POSTGRES_SSL: 'false' };
+const expectedKeyComparedColumns = [
+  'id', 'name', 'key_hash', 'key_prefix', 'created_at', 'last_used_at', 'credential_version'
+];
 const srcDocker = process.env.QS27_BACKUP_DOCKER_SRC || null;
 const restoreDocker = process.env.QS27_BACKUP_DOCKER_RESTORE || null;
 
@@ -259,7 +262,7 @@ test('native restore rebuilds the database and passes full verification', async 
   const passwordCheck = report.checks.find(check => check.name === 'passwordVerifyAndDecrypt');
   assert.deepEqual(passwordCheck.details, { protectedPages: 1, fixtureCovered: 1 });
   const keyCheck = report.checks.find(check => check.name === 'managedApiKeys');
-  assert.deepEqual(keyCheck.details, { keys: 1, fixtureCovered: 1 });
+  assert.deepEqual(keyCheck.details, { keys: 1, fixtureCovered: 1, comparedColumns: expectedKeyComparedColumns });
 });
 
 test('post-snapshot revocations in the real audit vocabulary fail closed', async () => {
@@ -398,7 +401,7 @@ test('verification refuses to claim credential checks passed without fixture cov
   assert.equal(keyCheck.ok, false);
   assert.ok(keyCheck.issues.some(issue =>
     issue.keyId === FIXTURE.apiKey.id && /incomplete fixture coverage/.test(issue.message)));
-  assert.deepEqual(keyCheck.details, { keys: 1, fixtureCovered: 0 });
+  assert.deepEqual(keyCheck.details, { keys: 1, fixtureCovered: 0, comparedColumns: expectedKeyComparedColumns });
 });
 
 test('maintenance setting drift fails the full-row backup verifier', async () => {
@@ -436,7 +439,9 @@ test('credential_version drift alone fails native backup verification', async ()
     assert.equal(result.code, 1);
     const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-key-version-tamper.json')));
     assert.equal(report.safeToServe, false);
-    assert.equal(report.checks.find(check => check.name === 'managedApiKeys').ok, false);
+    const keyCheck = report.checks.find(check => check.name === 'managedApiKeys');
+    assert.equal(keyCheck.ok, false);
+    assert.deepEqual(keyCheck.details, { keys: 1, fixtureCovered: 1, comparedColumns: expectedKeyComparedColumns });
   } finally {
     await restorePool.query("UPDATE api_keys SET credential_version = '9007199254740993' WHERE id = $1", [FIXTURE.apiKey.id]);
     await restorePool.end();
