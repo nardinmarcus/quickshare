@@ -1,3 +1,4 @@
+const { isAccessUpdate, assertAccessRevision } = require('../utils/shareAccess');
 const {
   buildManagementDailyStats,
   managementDateRange
@@ -111,6 +112,7 @@ class MemoryPageRepository {
       expires_at: page.expiresAt || null,
       markdown_theme: page.markdownTheme || null,
       is_favorite: false,
+      access_revision: '1',
       view_count: 0
     });
 
@@ -292,10 +294,7 @@ class MemoryPageRepository {
       return false;
     }
 
-    page.is_protected = options.isProtected ? 1 : 0;
-    page.password_hash = options.passwordHash || null;
-    page.encrypted_password = options.encryptedPassword || null;
-    return true;
+    return this.updatePage(id, options);
   }
 
   async setFavorite(id, isFavorite) {
@@ -333,6 +332,13 @@ class MemoryPageRepository {
       return false;
     }
 
+    if (isAccessUpdate(options) || options.accessPrecondition) {
+      assertAccessRevision(options.expectedAccessRevision, page.access_revision);
+    }
+    if ((options.isProtected !== undefined && (options.isProtected || page.is_protected === 1)) || (options.expiresAt !== undefined && options.expiresAt !== page.expires_at) || options.revokeAccess === true) {
+      page.access_revision = (BigInt(page.access_revision) + 1n).toString();
+    }
+
     if (options.title !== undefined) {
       page.title = options.title || null;
     }
@@ -354,7 +360,7 @@ class MemoryPageRepository {
       page.markdown_theme = options.markdownTheme || null;
     }
 
-    return true;
+    return options.returnUpdated ? { ...page } : true;
   }
 
   async deletePage(id) {
@@ -369,7 +375,7 @@ class MemoryPageRepository {
     return count;
   }
 
-  async recordViewEvent(id, now = Date.now(), hasAccess = false) {
+  async recordViewEvent(id, now = Date.now(), accessRevision = null) {
     const page = this.pages.get(id);
 
     if (!page) {
@@ -380,7 +386,7 @@ class MemoryPageRepository {
       return 'expired';
     }
 
-    if (page.is_protected === 1 && !hasAccess) {
+    if (page.is_protected === 1 && accessRevision !== page.access_revision) {
       return 'protected';
     }
 

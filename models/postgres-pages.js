@@ -1,4 +1,5 @@
 const { createPostgresPool } = require('./postgres-config');
+const { isAccessRevision, isAccessUpdate, requireAccessRevision, accessError } = require('../utils/shareAccess');
 const {
   buildManagementDailyStats,
   managementDateRange,
@@ -252,17 +253,17 @@ class PostgresPageRepository {
     return Number.parseInt(result.rows[0]?.count || '0', 10);
   }
 
-  async recordViewEvent(id, now = Date.now(), hasAccess = false) {
+  async recordViewEvent(id, now = Date.now(), accessRevision = null) {
     const updateResult = await this.pool.query(
       `
         UPDATE pages
         SET view_count = COALESCE(view_count, 0) + 1
         WHERE id = $1
           AND (expires_at IS NULL OR expires_at > $2)
-          AND (COALESCE(is_protected, 0) <> 1 OR $3)
+          AND (COALESCE(is_protected, 0) <> 1 OR access_revision = $3::bigint)
         RETURNING id
       `,
-      [id, now, hasAccess]
+      [id, now, isAccessRevision(accessRevision) ? accessRevision : null]
     );
 
     if (updateResult.rowCount > 0) {
@@ -342,12 +343,7 @@ class PostgresPageRepository {
   }
 
   async updateProtection(id, options) {
-    const result = await this.pool.query(
-      'UPDATE pages SET is_protected = $1, password_hash = $2, encrypted_password = $3 WHERE id = $4',
-      [options.isProtected ? 1 : 0, options.passwordHash || null, options.encryptedPassword || null, id]
-    );
-
-    return result.rowCount > 0;
+    return this.updatePage(id, options);
   }
 
   async setFavorite(id, isFavorite) {
@@ -393,6 +389,11 @@ class PostgresPageRepository {
   }
 
   async updatePage(id, options) {
+    const conditional = isAccessUpdate(options) || options.accessPrecondition;
+    if (conditional) requireAccessRevision(options.expectedAccessRevision);
+    const bumps = [];
+    if (options.revokeAccess === true || options.isProtected === true) bumps.push('TRUE');
+    else if (options.isProtected !== undefined) bumps.push('is_protected = 1');
     const fields = [];
     const params = [];
     let paramIndex = 1;
@@ -413,6 +414,7 @@ class PostgresPageRepository {
       paramIndex += 1;
     }
     if (options.expiresAt !== undefined) {
+      bumps.push(`expires_at IS DISTINCT FROM $${paramIndex}::bigint`);
       fields.push(`expires_at = $${paramIndex}`);
       params.push(options.expiresAt || null);
       paramIndex += 1;
@@ -434,17 +436,28 @@ class PostgresPageRepository {
       paramIndex += 1;
     }
 
+    if (bumps.length) fields.push(`access_revision = access_revision + CASE WHEN ${bumps.join(' OR ')} THEN 1 ELSE 0 END`);
     if (fields.length === 0) {
-      return true;
+      if (!conditional && !options.returnUpdated) return true;
+      fields.push('access_revision = access_revision');
     }
 
     params.push(id);
+    let condition = `id = $${paramIndex}`;
+    if (conditional) {
+      params.push(options.expectedAccessRevision);
+      condition += ` AND access_revision = $${paramIndex + 1}::bigint`;
+    }
     const result = await this.pool.query(
-      `UPDATE pages SET ${fields.join(', ')} WHERE id = $${paramIndex}`,
+      `UPDATE pages SET ${fields.join(', ')} WHERE ${condition} RETURNING *`,
       params
     );
-
-    return result.rowCount > 0;
+    if (result.rowCount > 0) return options.returnUpdated ? result.rows[0] : true;
+    if (conditional) {
+      const existing = await this.pool.query('SELECT access_revision FROM pages WHERE id = $1', [id]);
+      if (existing.rowCount > 0) throw accessError(412, 'Share 访问设置已更改，请刷新后重新确认；未保存的输入已保留。');
+    }
+    return false;
   }
 
   async deletePage(id) {

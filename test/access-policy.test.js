@@ -217,14 +217,17 @@ test('empty passwords keep automatic generation and existing protected admin pas
     password: ''
   });
   const protectResponse = await jsonRequest('/api/pages/protect-auto/protect', 'POST', {
+    expectedAccessRevision: '1',
     isProtected: true,
     password: ''
   });
   const adminAutoResponse = await jsonRequest('/admin/pages/admin-auto', 'PUT', {
+    expectedAccessRevision: '1',
     isProtected: true,
     password: ''
   });
   const adminKeepResponse = await jsonRequest('/admin/pages/admin-keep', 'PUT', {
+    expectedAccessRevision: '1',
     isProtected: true,
     password: ''
   });

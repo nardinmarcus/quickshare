@@ -32,13 +32,74 @@ async function resetPublicSchema(pool) {
   await pool.query('CREATE SCHEMA public');
 }
 
+test('Share access conditional writes and view events serialize across independent PostgreSQL connections', async () => {
+  const pool = createPostgresPool(connectionString, { env, max: 2 });
+  const repo = Object.create(PostgresPageRepository.prototype);
+  repo.pool = pool;
+  let locker;
+  try {
+    await resetPublicSchema(pool);
+    await runMigrations(pool, { logger: { info() {} } });
+    const a = await pool.connect();
+    const b = await pool.connect();
+    assert.notEqual((await a.query('SELECT pg_backend_pid() AS pid')).rows[0].pid, (await b.query('SELECT pg_backend_pid() AS pid')).rows[0].pid);
+    a.release(); b.release();
+    for (const id of ['race', 'other']) await repo.create({ id, htmlContent: 'ORIGINAL', createdAt: 1, isProtected: true, passwordHash: 'old-hash' });
+    const results = await Promise.allSettled(['winner-a', 'winner-b'].map(htmlContent => repo.updatePage('race', {
+      htmlContent, revokeAccess: true, expectedAccessRevision: '1'
+    })));
+    assert.equal(results.filter(r => r.status === 'fulfilled' && r.value === true).length, 1);
+    assert.equal(results.filter(r => r.status === 'rejected' && r.reason.status === 412).length, 1);
+    const winner = results.findIndex(r => r.status === 'fulfilled');
+    const stored = await repo.getById('race');
+    assert.equal(stored.html_content, ['winner-a', 'winner-b'][winner]);
+    assert.equal(stored.access_revision, '2');
+    assert.equal((await repo.getById('other')).access_revision, '1');
+    await assert.rejects(repo.updatePage('race', { htmlContent: 'MUST NOT SAVE', expiresAt: 9000 }), { status: 428 });
+    assert.equal((await repo.getById('race')).html_content, stored.html_content);
+
+    // One connection commits revocation while the other is blocked in its conditional UPDATE.
+    locker = await pool.connect();
+    await locker.query('BEGIN');
+    await locker.query("UPDATE pages SET access_revision = access_revision + 1 WHERE id = 'race'");
+    const event = repo.recordViewEvent('race', 5000, '2');
+    let waiting = false;
+    for (let i = 0; i < 100; i += 1) {
+      // Activity statistics are cached within this transaction; observe the live waiter.
+      await locker.query('SELECT pg_stat_clear_snapshot()');
+      const activity = await locker.query("SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND wait_event_type = 'Lock' AND query LIKE '%SET view_count%'");
+      if (activity.rows[0].count > 0) { waiting = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    await locker.query('COMMIT');
+    locker.release(); locker = null;
+    assert.equal(await event, 'protected');
+    assert.equal(waiting, true, 'second backend must actually wait on the policy writer');
+    assert.equal((await repo.getById('race')).view_count, '0');
+    assert.equal(await repo.recordViewEvent('race', 5000, '3'), 'counted');
+    assert.equal(await repo.recordViewEvent('other', 5000, '1'), 'counted');
+    // BIGINT survives the JS safe-integer boundary unchanged.
+    await pool.query("UPDATE pages SET access_revision = 9007199254740993 WHERE id = 'race'");
+    await repo.updatePage('race', { revokeAccess: true, expectedAccessRevision: '9007199254740993' });
+    assert.equal((await repo.getById('race')).access_revision, '9007199254740994');
+    const unchanged = await repo.updatePage('race', { returnUpdated: true });
+    assert.equal(unchanged.access_revision, '9007199254740994');
+    assert.equal(unchanged.html_content, stored.html_content);
+    const samePolicy = await repo.updatePage('race', { expiresAt: null, expectedAccessRevision: unchanged.access_revision, returnUpdated: true });
+    assert.equal(samePolicy.access_revision, unchanged.access_revision);
+  } finally {
+    if (locker) { await locker.query('ROLLBACK'); locker.release(); }
+    await pool.end();
+  }
+});
+
 test('baseline migration handles empty and legacy databases idempotently', async () => {
   const pool = createPostgresPool(connectionString, { env, max: 1 });
 
   try {
     await resetPublicSchema(pool);
     const emptyResult = await runMigrations(pool, { logger: { info() {} } });
-    assert.deepEqual(emptyResult, { applied: ['001', '002', '003'], skipped: [] });
+    assert.deepEqual(emptyResult, { applied: ['001', '002', '003', '004'], skipped: [] });
 
     const emptyTables = await pool.query(`
       SELECT table_name
@@ -106,8 +167,8 @@ test('baseline migration handles empty and legacy databases idempotently', async
     );
     const migrationCount = await pool.query('SELECT COUNT(*)::int AS count FROM quickshare_schema_migrations');
 
-    assert.deepEqual(legacyResult, { applied: ['001', '002', '003'], skipped: [] });
-    assert.deepEqual(repeatedResult, { applied: [], skipped: ['001', '002', '003'] });
+    assert.deepEqual(legacyResult, { applied: ['001', '002', '003', '004'], skipped: [] });
+    assert.deepEqual(repeatedResult, { applied: [], skipped: ['001', '002', '003', '004'] });
     assert.deepEqual(migratedSentinel.rows, [{
       id: 'sentinel',
       html_content: '<h1>Keep me</h1>',
@@ -117,7 +178,10 @@ test('baseline migration handles empty and legacy databases idempotently', async
       is_favorite: false
     }]);
     assert.deepEqual(repeatedSentinel.rows, [{ is_favorite: true }]);
-    assert.equal(migrationCount.rows[0].count, 3);
+    assert.equal(migrationCount.rows[0].count, 4);
+    const accessColumn = await pool.query("SELECT data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = 'pages' AND column_name = 'access_revision'");
+    assert.deepEqual(accessColumn.rows, [{ data_type: 'bigint', is_nullable: 'NO', column_default: '1' }]);
+    assert.equal((await pool.query("SELECT access_revision FROM pages WHERE id = 'sentinel'")).rows[0].access_revision, '1');
   } finally {
     await pool.end();
   }
@@ -277,7 +341,7 @@ test('view events atomically enforce page availability without loading content',
 
     assert.equal(await repository.recordViewEvent('active', 5000, false), 'counted');
     assert.equal(await repository.recordViewEvent('protected', 5000, false), 'protected');
-    assert.equal(await repository.recordViewEvent('protected', 5000, true), 'counted');
+    assert.equal(await repository.recordViewEvent('protected', 5000, '1'), 'counted');
     assert.equal(await repository.recordViewEvent('expired', 5000, false), 'expired');
     assert.equal(await repository.recordViewEvent('missing', 5000, false), 'not_found');
 
@@ -401,6 +465,7 @@ test('Postgres Favorite Share lifecycle preserves admin state and public boundar
     assert.equal((await repository.getById('favorite-lifecycle-source')).is_favorite, false);
     await repository.setFavorite('favorite-lifecycle-source', true);
     await repository.updatePage('favorite-lifecycle-source', {
+      expectedAccessRevision: '1',
       title: 'Edited favorite lifecycle source',
       description: 'Still managed after expiry',
       htmlContent: '<h1>Edited favorite lifecycle source</h1>',
@@ -492,7 +557,7 @@ test('site settings persist real transitions and audit them exactly once', async
     assert.equal(await repository.getHomepagePasswordRequired(), false);
 
     const repeatedMigration = await runMigrations(pool, { logger: { info() {} } });
-    assert.deepEqual(repeatedMigration, { applied: [], skipped: ['001', '002', '003'] });
+    assert.deepEqual(repeatedMigration, { applied: [], skipped: ['001', '002', '003', '004'] });
     assert.equal(await repository.getHomepagePasswordRequired(), false);
 
     const logs = await repository.listAuditLogs();

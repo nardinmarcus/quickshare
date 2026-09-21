@@ -240,6 +240,7 @@ test('editing and expiring a Favorite Share preserves state and keeps admin favo
       'X-CSRF-Token': csrfToken
     },
     body: JSON.stringify({
+      expectedAccessRevision: '1',
       title: 'Edited lifecycle fixture',
       htmlContent: '<h1>Edited lifecycle content</h1>',
       expiresAt,

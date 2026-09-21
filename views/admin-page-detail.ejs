@@ -66,6 +66,18 @@
           <% } %>
         </dd>
       </div>
+      <div>
+        <dt>访问版本</dt>
+        <dd id="access-revision-display"><%= sharedPage.accessRevision %></dd>
+      </div>
+      <div class="admin-detail-wide">
+        <dt>已解锁访问</dt>
+        <dd>
+          <button type="button" class="cyber-btn cyber-btn-secondary" id="revoke-access-btn" aria-describedby="revoke-access-hint" aria-busy="false">撤销已解锁访问</button>
+          <p id="revoke-access-hint" class="field-hint">此前解锁的接收者需重新输入密码。不会更改正文、密码或有效期；公开 Share 仍可直接访问。</p>
+          <p id="access-action-status" class="field-hint" role="status" aria-live="polite"></p>
+        </dd>
+      </div>
       <div id="password-display-row" <%= !sharedPage.isProtected ? 'hidden' : '' %>>
         <dt>密码</dt>
         <dd id="password-display">

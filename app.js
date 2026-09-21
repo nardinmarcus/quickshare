@@ -11,6 +11,7 @@ const cookieParser = require('cookie-parser');
 const { performance } = require('node:perf_hooks');
 
 const config = require('./config');
+const { isAccessRevision, requireAccessRevision } = require('./utils/shareAccess');
 const { createPageRepository } = require('./models/pageRepository');
 const { detectCodeType, extractCodeBlocks } = require('./utils/codeDetector');
 const { renderContent, escapeHtml } = require('./utils/contentRenderer');
@@ -619,8 +620,8 @@ function pageAccessCookieName(id) {
   return `page_access_${id}`;
 }
 
-function setPageAccessCookie(res, id) {
-  const token = createScopedToken('page-access', { id }, PAGE_ACCESS_TTL_MS);
+function setPageAccessCookie(res, id, accessRevision) {
+  const token = createScopedToken('page-access', { id, accessRevision }, PAGE_ACCESS_TTL_MS);
 
   res.cookie(pageAccessCookieName(id), token, {
     maxAge: PAGE_ACCESS_TTL_MS,
@@ -630,11 +631,12 @@ function setPageAccessCookie(res, id) {
   });
 }
 
-function hasPageAccess(req, id) {
+function pageAccessRevision(req, id) {
   const token = req.cookies?.[pageAccessCookieName(id)];
   const payload = verifyScopedToken(token, 'page-access');
 
-  return payload?.id === id;
+  return payload?.id === id && isAccessRevision(payload.accessRevision)
+    ? payload.accessRevision : null;
 }
 
 function isSameOriginRequest(req) {
@@ -1374,6 +1376,7 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       description: sharedPage.description,
       isProtected: sharedPage.is_protected === 1,
       isFavorite: sharedPage.is_favorite === true,
+      accessRevision: sharedPage.access_revision,
       password: visiblePagePassword(sharedPage),
       expiresAt: sharedPage.expires_at,
       markdownTheme: sharedPage.code_type === 'markdown'
@@ -1467,7 +1470,17 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
       });
     }
 
-    const updateOptions = {};
+    const updateOptions = { returnUpdated: true };
+    if (req.body.revokeAccess !== undefined && typeof req.body.revokeAccess !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'revokeAccess must be a boolean' });
+    }
+    const policySubmitted = isProtected !== undefined || expiresAt !== undefined || req.body.revokeAccess === true;
+    if (policySubmitted) {
+      updateOptions.expectedAccessRevision = requireAccessRevision(req.body.expectedAccessRevision);
+      updateOptions.revokeAccess = req.body.revokeAccess === true;
+      // Keep even unchanged protection submissions conditional on the displayed baseline.
+      updateOptions.accessPrecondition = true;
+    }
 
     if (title !== undefined) {
       updateOptions.title = title ? String(title).trim() || null : null;
@@ -1511,9 +1524,10 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
       }
     }
 
-    await pageRepository.updatePage(req.params.id, updateOptions);
+    const saved = await pageRepository.updatePage(req.params.id, updateOptions);
+    if (!saved) return res.status(404).json({ success: false, error: 'Share not found' });
 
-    const updatedPage = await pageRepository.getById(req.params.id);
+    const updatedPage = saved;
 
     pageRepository.createAuditLog({
       action: 'page.update',
@@ -1531,6 +1545,7 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
         htmlContent: updatedPage.html_content,
         codeType: updatedPage.code_type,
         isProtected: updatedPage.is_protected === 1,
+        accessRevision: updatedPage.access_revision,
         password: visiblePagePassword(updatedPage),
         expiresAt: updatedPage.expires_at,
         markdownTheme: updatedPage.markdown_theme,
@@ -1538,6 +1553,9 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
       }
     });
   } catch (error) {
+    if (error.code?.startsWith('ACCESS_') || error.code === 'INVALID_ACCESS_REVISION') {
+      return res.status(error.status).json({ success: false, code: error.code, error: error.message });
+    }
     console.error('Update page failed:', error);
     return res.status(500).json({
       success: false,
@@ -1759,7 +1777,7 @@ app.get('/api/pages/list/recent', requireApiAdmin, async (req, res) => {
   }
 });
 
-app.get('/api/pages/:id', async (req, res) => {
+app.get('/api/pages/:id', privateNoStore, async (req, res) => {
   try {
     const publicPage = await pageRepository.getPublicById(req.params.id, Date.now());
 
@@ -1792,6 +1810,7 @@ app.get('/api/pages/:id', async (req, res) => {
         title: page.title,
         description: page.description,
         isProtected: page.is_protected === 1,
+        accessRevision: page.access_revision,
         expiresAt: page.expires_at,
         markdownTheme: page.markdown_theme
       }
@@ -1826,24 +1845,32 @@ app.post('/api/pages/:id/protect', privateNoStore, requireApiAdmin, parseSmallJs
       });
     }
 
+    const expectedAccessRevision = requireAccessRevision(req.body.expectedAccessRevision);
     const password = isProtected
       ? (customPassword.provided ? customPassword.value : generateNumericPassword(DEFAULT_PASSWORD_LENGTH))
       : null;
     const passwordHash = password ? await hashSecret(password) : null;
     const encryptedPassword = password ? encryptSecret(password) : null;
 
-    await pageRepository.updateProtection(req.params.id, {
+    const saved = await pageRepository.updateProtection(req.params.id, {
       isProtected,
       passwordHash,
-      encryptedPassword
+      encryptedPassword,
+      expectedAccessRevision,
+      returnUpdated: true
     });
+    if (!saved) return res.status(404).json({ success: false, error: 'Share not found' });
 
     return res.json({
       success: true,
       isProtected,
-      password
+      password,
+      accessRevision: saved.access_revision
     });
   } catch (error) {
+    if (error.code?.startsWith('ACCESS_') || error.code === 'INVALID_ACCESS_REVISION') {
+      return res.status(error.status).json({ success: false, code: error.code, error: error.message });
+    }
     console.error('Update page protection failed:', error);
     return res.status(500).json({
       success: false,
@@ -1877,6 +1904,8 @@ app.post('/view/:id/password', privateNoStore, parseSmallJson, async (req, res) 
       });
     }
 
+    // Capture the revision with the hash before asynchronous password verification.
+    const accessRevision = page.access_revision;
     const isValid = await verifySecret(req.body.password, page.password_hash || page.password);
 
     if (!isValid) {
@@ -1885,7 +1914,7 @@ app.post('/view/:id/password', privateNoStore, parseSmallJson, async (req, res) 
       });
     }
 
-    setPageAccessCookie(res, req.params.id);
+    setPageAccessCookie(res, req.params.id, accessRevision);
     return res.json({
       valid: true,
       redirectUrl: `/view/${req.params.id}`
@@ -1907,7 +1936,7 @@ app.post('/view/:id/view-event', privateNoStore, async (req, res) => {
     const outcome = await pageRepository.recordViewEvent(
       req.params.id,
       Date.now(),
-      hasPageAccess(req, req.params.id)
+      pageAccessRevision(req, req.params.id)
     );
 
     if (outcome === 'not_found') {
@@ -1973,14 +2002,14 @@ app.get('/view/:id', async (req, res) => {
       });
     }
 
-    if (page.is_protected === 1 && !hasPageAccess(req, req.params.id)) {
+    if (page.is_protected === 1 && pageAccessRevision(req, req.params.id) !== page.access_revision) {
       metrics.outcome = 'password_required';
       setTrustedUiCsp(res, { allowFraming: true });
       return res.render('password', {
         title: 'QuickShare | 密码保护',
         page: 'password-page',
         id: req.params.id,
-        error: null
+        error: req.cookies?.[pageAccessCookieName(req.params.id)] ? '访问凭证已失效，请重新输入密码解锁。' : null
       });
     }
 

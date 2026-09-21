@@ -1,5 +1,7 @@
 (function () {
   const editBtn = document.getElementById('edit-toggle-btn');
+  const revokeBtn = document.getElementById('revoke-access-btn');
+  const accessStatus = document.getElementById('access-action-status');
   const editForm = document.getElementById('edit-form');
   const contentTextarea = document.getElementById('content-textarea');
   const cancelBtn = document.getElementById('edit-cancel');
@@ -90,6 +92,7 @@
   }
 
   function enterEditMode() {
+    if (revokeBtn) revokeBtn.disabled = true;
     editBtn.hidden = true;
     editForm.hidden = false;
     contentTextarea.removeAttribute('readonly');
@@ -99,6 +102,7 @@
   }
 
   function exitEditMode() {
+    if (revokeBtn) revokeBtn.disabled = false;
     editBtn.hidden = false;
     editForm.hidden = true;
     contentTextarea.setAttribute('readonly', '');
@@ -114,6 +118,8 @@
   }
 
   function updateViewMode(data) {
+    const revisionDisplay = document.getElementById('access-revision-display');
+    if (revisionDisplay) revisionDisplay.textContent = data.accessRevision;
     titleDisplay.textContent = data.title || data.id;
 
     if (data.description) {
@@ -147,6 +153,35 @@
         '<span class="admin-muted">永不过期</span>';
     }
   }
+
+  if (revokeBtn) revokeBtn.addEventListener('click', async function () {
+    if (revokeBtn.disabled) return;
+    revokeBtn.disabled = true;
+    editBtn.disabled = true;
+    revokeBtn.setAttribute('aria-busy', 'true');
+    accessStatus.textContent = '正在撤销…';
+    try {
+      const response = await fetch('/admin/pages/' + encodeURIComponent(originalData.id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': csrfToken() },
+        body: JSON.stringify({ revokeAccess: true, expectedAccessRevision: originalData.accessRevision })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || '撤销失败，请稍后重试');
+      originalData = { ...originalData, ...data.page };
+      updateViewMode(data.page);
+      resetForm();
+      resetRenderedPreview();
+      accessStatus.textContent = '已撤销此前的解锁访问；接收者需重新输入密码。公开 Share 仍可直接访问。';
+    } catch (error) {
+      accessStatus.textContent = error.message || '撤销失败，请稍后重试';
+      Toast.error(accessStatus.textContent);
+    } finally {
+      revokeBtn.disabled = false;
+      editBtn.disabled = false;
+      revokeBtn.setAttribute('aria-busy', 'false');
+    }
+  });
 
   editBtn.addEventListener('click', enterEditMode);
   cancelBtn.addEventListener('click', exitEditMode);
@@ -218,9 +253,11 @@
     const title = document.getElementById('edit-title').value.trim();
     const description = document.getElementById('edit-description').value.trim();
     const expiresAtValue = expiresInput.value;
-    const expiresAt = expiresAtValue
-      ? adminTime.parseDateTimeLocal(expiresAtValue)
-      : null;
+    const displayedExpiry = originalData.expiresAt ? adminTime.toDateTimeLocal(originalData.expiresAt) : '';
+    // datetime-local displays minutes; an untouched control must not round the policy instant.
+    const expiresAt = expiresAtValue === displayedExpiry
+      ? originalData.expiresAt
+      : expiresAtValue ? adminTime.parseDateTimeLocal(expiresAtValue) : null;
     const customPassword = passwordInput.value;
 
     if (protectedCheckbox.checked && customPassword && !customPasswordPattern.test(customPassword)) {
@@ -245,6 +282,7 @@
       description: description || null,
       htmlContent: contentTextarea.value,
       isProtected: protectedCheckbox.checked,
+      expectedAccessRevision: originalData.accessRevision,
       expiresAt
     };
     if (themeSelect) payload.markdownTheme = themeSelect.value;

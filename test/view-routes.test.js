@@ -100,6 +100,7 @@ test('public view works without expiry and before a future expiry', async () => 
   assert.ok(expiresAt > createdAt);
   assert.deepEqual(metadataPage, {
     id: 'future-expiry',
+    accessRevision: '1',
     codeType: 'html',
     title: 'future-expiry',
     description: null,

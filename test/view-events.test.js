@@ -123,15 +123,15 @@ test('view-event response waits for the increment and counts exactly once', asyn
   let responseSettled = false;
   const incrementStarted = new Promise(resolve => { markStarted = resolve; });
 
-  repository.recordViewEvent = async (id, now, hasAccess) => {
+  repository.recordViewEvent = async (id, now, accessRevision) => {
     if (id === 'event-awaited') {
       assert.equal(Number.isFinite(now), true);
-      assert.equal(hasAccess, false);
+      assert.equal(accessRevision, null);
       markStarted();
       await new Promise(resolve => { releaseIncrement = resolve; });
     }
 
-    return originalRecordViewEvent(id, now, hasAccess);
+    return originalRecordViewEvent(id, now, accessRevision);
   };
 
   try {
