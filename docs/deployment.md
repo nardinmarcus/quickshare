@@ -54,6 +54,15 @@ npm run hash-password -- "your-admin-password"
 - 新代码部署后需要回滚：重新部署上一稳定应用版本；当前迁移只做兼容性新增，保留 `site_settings`、`pages.is_favorite`、迁移记录和已经产生的 Favorite Share 数据，不执行破坏性 down migration。
 - `COMMIT` 后确认发生数据异常：先停止写入，再从迁移前的 provider branch / PITR 检查点恢复到新分支；核对表结构和记录数后才切换运行时连接。不要在未核验的生产主库上直接覆盖恢复。
 
+### 原生备份与恢复演练
+
+管理后台的「导出清单」只是元数据清单（不含 Share 正文，不可独立恢复）；完整备份使用 PostgreSQL 原生一致性备份，并必须先在隔离库完成可复验的恢复演练：
+
+- `npm run backup:check` 端到端演练：一次性本地 PostgreSQL 17 容器 + 合成夹具 + `pg_dump`/`pg_restore` + 全量验证（正文摘要、ID、主题、收藏、密码校验/回显、有效期、Key、审计、站点设置、迁移台账），并记录快照点与耗时。恢复库中每条受保护页/Key 都必须被夹具实际验证，缺夹具即显式失败。
+- 恢复出的数据库永远报告 `safeToServe: false` 并保持离线。快照点后检测到撤销/清除事件（含真实审计词表中 `page.update` 的 `fields` 触及密码/保护/有效期）时验证 exit 2（`unreconciled`）；即使未检测到事件，审计历史也无法证明不存在（部分策略路由不写审计），报告为 `owner-review-required`（同样 exit 2）。重新启用恢复出的凭据或公开内容一律需要所有者复核后显式传入 `--reconciled`。
+- 脚本默认只接受 localhost 且库名以 `_test` 结尾的数据库；真实 secret 与加密材料不进入导出、日志或演练夹具。
+- 详细流程、实测结果与后续票扩展合同见 `docs/backup-restore.md`。访问版本化改造（`docs/access-revision-rollout.md`，由访问撤销票提供）落地后，恢复验证证据必须显式覆盖 `access_revision`。
+
 ### 验证清单
 
 - `/login` 可以登录（前端密码）。
@@ -70,7 +79,7 @@ npm run hash-password -- "your-admin-password"
 - `/admin/pages` 页面列表分页/搜索/过滤正常。
 - 列表与详情页可以用键盘收藏和取消收藏，忙碌、成功与失败状态均可观察；失败时保留原状态。
 - `favorite=true` 可与搜索、类型、保护状态、日期、排序和分页组合；在 Favorite Shares 中取消收藏后由服务端重新计算行、总数和页码。
-- 管理导出包含布尔 `isFavorite`，真实状态变化产生一次 `page.favorite.update` 审计，幂等提交不重复审计。
+- 管理导出为元数据清单（含布尔 `isFavorite`，不含正文），真实状态变化产生一次 `page.favorite.update` 审计，幂等提交不重复审计。
 - 公开查看、密码验证、过期、浏览事件、近期列表、统计和 Share API 均不接受或泄露 Favorite Share 元数据。
 - `POST /api/v1/share` 带有效 `X-API-Key` 可创建分享并返回 URL。
 - `POST /api/v1/share` 不带或带错误 key 返回 401。

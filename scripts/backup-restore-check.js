@@ -1,0 +1,349 @@
+#!/usr/bin/env node
+'use strict';
+
+/*
+ * Repeatable native backup → restore → verify drill for QuickShare.
+ *
+ * Provisions two disposable PostgreSQL 17 containers bound to 127.0.0.1
+ * (issue27-pg-src / issue27-pg-restore), creates the `issue27_*_test`
+ * databases, applies the real migrations, seeds a synthetic fixture, then
+ * runs scripts/backup-db.js → scripts/restore-db.js → scripts/verify-backup.js
+ * and reports actual snapshot point and timings.
+ *
+ * Only its own named containers are ever created or removed. Real secrets are
+ * never used: the fixture derives password hashes and encrypted display
+ * material from a synthetic session secret defined below.
+ */
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const { createPostgresPool } = require('../models/postgres-config');
+const { runMigrations } = require('../models/postgres-migrations');
+const { encryptSecret, hashSecret } = require('../utils/security');
+
+const {
+  localPoolEnv,
+  parseCliArgs,
+  runCommand,
+  sanitizeChildEnv
+} = require('./backup-db');
+
+const FIXTURE = {
+  sessionSecret: 'qs27-issue27-drill-session-secret-0123456789abcdef',
+  image: 'postgres:17-alpine',
+  password: 'issue27local',
+  srcContainer: 'issue27-pg-src',
+  restoreContainer: 'issue27-pg-restore',
+  srcPort: 5541,
+  restorePort: 5542,
+  sourceDatabase: 'issue27_src_test',
+  restoreDatabase: 'issue27_restore_test',
+  pages: {
+    publicHtml: 'issue27pub0010',
+    markdownThemed: 'issue27md00010',
+    protectedPage: 'issue27prot0001',
+    expiredPage: 'issue27exp00010'
+  },
+  apiKey: {
+    id: 'issue27key00001',
+    name: 'backup-drill-key',
+    secret: 'qs27-drill-api-key-1234567890'
+  },
+  protectedPassword: 'Drill!Pass1'
+};
+
+function sourceUrlFor() {
+  return `postgresql://postgres:${FIXTURE.password}@127.0.0.1:${FIXTURE.srcPort}/${FIXTURE.sourceDatabase}`;
+}
+
+function restoreUrlFor() {
+  return `postgresql://postgres:${FIXTURE.password}@127.0.0.1:${FIXTURE.restorePort}/${FIXTURE.restoreDatabase}`;
+}
+
+/**
+ * Seeds the deterministic synthetic fixture. Requires process.env.SESSION_SECRET
+ * to be set to FIXTURE.sessionSecret before calling (hash/encrypt derive from it).
+ */
+async function seedFixture(pool) {
+  const base = Date.now() - 60000;
+  const pages = FIXTURE.pages;
+  const passwordHash = await hashSecret(FIXTURE.protectedPassword);
+  const encryptedPassword = encryptSecret(FIXTURE.protectedPassword);
+
+  await pool.query(
+    `INSERT INTO pages (id, html_content, created_at, password_hash, encrypted_password,
+       is_protected, code_type, title, description, expires_at, markdown_theme, view_count, is_favorite)
+     VALUES
+       ($1, $2, $3, NULL, NULL, 0, 'html', 'QS27 drill public', NULL, NULL, NULL, 3, FALSE),
+       ($4, $5, $6, NULL, NULL, 0, 'markdown', 'QS27 drill markdown', 'themed fixture', NULL, 'github', 7, TRUE),
+       ($7, $8, $9, $10, $11, 1, 'html', 'QS27 drill protected', NULL, NULL, NULL, 1, FALSE),
+       ($12, $13, $14, NULL, NULL, 0, 'html', 'QS27 drill expired', NULL, $15, NULL, 0, FALSE)`,
+    [
+      pages.publicHtml, '<h1>QS27 backup drill public</h1><!--drill-body-->', base,
+      pages.markdownThemed, '# QS27 drill markdown', base + 1000,
+      pages.protectedPage, '<p>QS27 drill secret</p>', base + 2000,
+      passwordHash, encryptedPassword,
+      pages.expiredPage, '<p>QS27 drill expired</p>', base + 3000, base - 1000
+    ]
+  );
+
+  await pool.query(
+    `INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at, last_used_at)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      FIXTURE.apiKey.id,
+      FIXTURE.apiKey.name,
+      await hashSecret(FIXTURE.apiKey.secret),
+      FIXTURE.apiKey.secret.slice(0, 8),
+      base,
+      base + 500
+    ]
+  );
+
+  await pool.query(
+    `INSERT INTO audit_logs (action, page_id, details, ip, created_at) VALUES
+       ('page.create', $1, '{"drill":"public-html"}', '127.0.0.1', $5),
+       ('page.create', $2, '{"drill":"markdown-themed"}', '127.0.0.1', $6),
+       ('page.create', $3, '{"drill":"protected"}', '127.0.0.1', $7),
+       ('page.create', $4, '{"drill":"expired"}', '127.0.0.1', $8),
+       ('page.favorite.update', $2, '{"favorite":true}', '127.0.0.1', $9),
+       ('api_key.create', NULL, '{"apiKeyId":"issue27key00001"}', '127.0.0.1', $10),
+       ('admin.login', NULL, '{"drill":true}', '127.0.0.1', $11),
+       ('page.delete', 'issue27gone0001', '{"drill":"pre-snapshot"}', '127.0.0.1', $12)`,
+    [
+      pages.publicHtml, pages.markdownThemed, pages.protectedPage, pages.expiredPage,
+      base, base, base, base + 10, base + 20, base + 30, base + 40, base - 5000
+    ]
+  );
+
+  await pool.query(
+    'UPDATE site_settings SET homepage_password_required = FALSE, updated_at = $1 WHERE id = 1',
+    [base + 50]
+  );
+}
+
+async function ensureContainerRunning(name, port, image) {
+  const inspect = await runCommand(['docker', 'inspect', '-f', '{{.State.Running}}', name]);
+
+  if (inspect.code === 0) {
+    if (inspect.stdout.trim() === 'true') {
+      return { created: false, started: false };
+    }
+
+    const start = await runCommand(['docker', 'start', name]);
+    if (start.code !== 0) {
+      throw new Error(`docker start ${name} failed: ${start.stderr.trim().slice(0, 200)}`);
+    }
+    return { created: false, started: true };
+  }
+
+  const run = await runCommand([
+    'docker', 'run', '-d', '--name', name,
+    '-e', `POSTGRES_PASSWORD=${FIXTURE.password}`,
+    '-p', `127.0.0.1:${port}:5432`,
+    image
+  ]);
+
+  if (run.code !== 0) {
+    throw new Error(`docker run ${name} failed: ${run.stderr.trim().slice(0, 200)}`);
+  }
+
+  return { created: true, started: true };
+}
+
+async function waitForPostgres(container, timeoutMs = 60000) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const ready = await runCommand(['docker', 'exec', container, 'pg_isready', '-U', 'postgres']);
+    if (ready.code === 0) {
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+
+  throw new Error(`Postgres in ${container} not ready after ${timeoutMs}ms`);
+}
+
+async function ensureDatabase(container, database) {
+  const check = await runCommand([
+    'docker', 'exec', container, 'psql', '-U', 'postgres', '-tAc',
+    `SELECT 1 FROM pg_database WHERE datname = '${database}'`
+  ]);
+
+  if (check.stdout.trim() !== '1') {
+    await runCommand(['docker', 'exec', container, 'psql', '-U', 'postgres', '-c', `CREATE DATABASE ${database}`]);
+  }
+}
+
+async function resetSourceDatabase(url) {
+  const pool = createPostgresPool(url, { env: localPoolEnv(url), max: 1 });
+
+  try {
+    await pool.query('DROP SCHEMA public CASCADE');
+    await pool.query('CREATE SCHEMA public');
+    await runMigrations(pool, { logger: { info() {} } });
+    await seedFixture(pool);
+  } finally {
+    await pool.end();
+  }
+}
+
+async function recreateRestoreDatabase(restoreUrl) {
+  const controlUrl = restoreUrl.replace(/\/[^/]+$/, '/postgres');
+  const pool = createPostgresPool(controlUrl, { env: localPoolEnv(controlUrl), max: 1 });
+
+  try {
+    await pool.query(`DROP DATABASE IF EXISTS ${FIXTURE.restoreDatabase} WITH (FORCE)`);
+    await pool.query(`CREATE DATABASE ${FIXTURE.restoreDatabase}`);
+  } finally {
+    await pool.end();
+  }
+}
+
+async function runStep(command, args, label, env = process.env) {
+  const started = Date.now();
+  const result = await runCommand([command, ...args], { env });
+  return { ...result, ms: Date.now() - started, label };
+}
+
+async function runDrill({ keepContainers = false, skipContainerSetup = false, outputDir } = {}) {
+  const previousSecret = process.env.SESSION_SECRET;
+  process.env.SESSION_SECRET = FIXTURE.sessionSecret;
+
+  const sourceUrl = sourceUrlFor();
+  const restoreUrl = restoreUrlFor();
+  const dir = outputDir || fs.mkdtempSync(path.join(os.tmpdir(), 'qs27-backup-check-'));
+
+  try {
+    if (!skipContainerSetup) {
+      await ensureContainerRunning(FIXTURE.srcContainer, FIXTURE.srcPort, FIXTURE.image);
+      await ensureContainerRunning(FIXTURE.restoreContainer, FIXTURE.restorePort, FIXTURE.image);
+      await waitForPostgres(FIXTURE.srcContainer);
+      await waitForPostgres(FIXTURE.restoreContainer);
+    }
+
+    await ensureDatabase(FIXTURE.srcContainer, FIXTURE.sourceDatabase);
+    await resetSourceDatabase(sourceUrl);
+    await recreateRestoreDatabase(restoreUrl);
+
+    fs.writeFileSync(path.join(dir, 'fixture.json'), JSON.stringify({
+      apiKeys: [{ id: FIXTURE.apiKey.id, secret: FIXTURE.apiKey.secret }],
+      protectedPages: [{ id: FIXTURE.pages.protectedPage, password: FIXTURE.protectedPassword }]
+    }, null, 2));
+
+    const childEnv = sanitizeChildEnv(process.env, { SESSION_SECRET: FIXTURE.sessionSecret });
+    const spawnOptions = { env: childEnv };
+    const scriptsDir = __dirname;
+
+    const backupRun = await runStep(process.execPath, [
+      path.join(scriptsDir, 'backup-db.js'),
+      '--url', sourceUrl,
+      '--output-dir', dir,
+      '--docker', FIXTURE.srcContainer
+    ], 'backup', childEnv);
+    if (backupRun.code !== 0) {
+      throw new Error(`backup failed: ${backupRun.stderr.trim().slice(0, 400)}`);
+    }
+
+    const manifestFile = fs.readdirSync(dir)
+      .find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json'));
+    const manifestPath = path.join(dir, manifestFile);
+
+    const restoreRun = await runStep(process.execPath, [
+      path.join(scriptsDir, 'restore-db.js'),
+      '--manifest', manifestPath,
+      '--target-url', restoreUrl,
+      '--docker', FIXTURE.restoreContainer,
+      '--output', path.join(dir, 'restore-manifest.json')
+    ], 'restore', childEnv);
+    if (restoreRun.code !== 0) {
+      throw new Error(`restore failed: ${restoreRun.stderr.trim().slice(0, 400)}`);
+    }
+
+    const verifyRun = await runStep(process.execPath, [
+      path.join(scriptsDir, 'verify-backup.js'),
+      '--source-url', sourceUrl,
+      '--restore-url', restoreUrl,
+      '--manifest', manifestPath,
+      '--fixture', path.join(dir, 'fixture.json'),
+      '--session-secret', FIXTURE.sessionSecret,
+      '--output', path.join(dir, 'verification.json'),
+      // The drill's fixture is fully synthetic and its history is known, so
+      // the drill itself provides the owner acknowledgment that real restores
+      // require from a human. Without this flag verification fails closed.
+      '--reconciled'
+    ], 'verify', childEnv);
+
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const verification = verifyRun.code === 0
+      ? JSON.parse(fs.readFileSync(path.join(dir, 'verification.json'), 'utf8'))
+      : null;
+    const summary = {
+      ok: verifyRun.code === 0,
+      snapshotAt: new Date(manifest.snapshotAt).toISOString(),
+      snapshotWalLsn: manifest.snapshotWalLsn,
+      reconciliation: verification ? verification.reconciliation.status : 'not-available',
+      safeToServe: false,
+      durationsMs: {
+        backupMs: manifest.durationsMs.dumpMs + manifest.durationsMs.snapshotMs,
+        restoreMs: JSON.parse(fs.readFileSync(path.join(dir, 'restore-manifest.json'), 'utf8')).durationsMs.restoreMs,
+        verifyMs: verification ? verification.durationsMs.verifyMs : null
+      },
+      artifacts: {
+        dump: manifest.dumpFile,
+        manifest: manifestPath,
+        restoreManifest: path.join(dir, 'restore-manifest.json'),
+        verification: path.join(dir, 'verification.json')
+      }
+    };
+
+    if (verifyRun.code !== 0) {
+      summary.verificationOutput = verifyRun.stdout.trim().slice(0, 800);
+    }
+
+    return summary;
+  } finally {
+    process.env.SESSION_SECRET = previousSecret;
+
+    if (!keepContainers) {
+      // Only ever removes its own disposable drill containers.
+      await runCommand(['docker', 'rm', '-f', FIXTURE.srcContainer]);
+      await runCommand(['docker', 'rm', '-f', FIXTURE.restoreContainer]);
+    }
+  }
+}
+
+async function main() {
+  const args = parseCliArgs(process.argv.slice(2));
+  const summary = await runDrill({
+    keepContainers: args.keepContainers === true,
+    skipContainerSetup: args.skipContainerSetup === true,
+    outputDir: args.outputDir || undefined
+  });
+
+  console.log(JSON.stringify(summary, null, 2));
+
+  if (!summary.ok) {
+    process.exitCode = 1;
+  }
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`[backup:check] failed: ${error.message}`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  FIXTURE,
+  recreateRestoreDatabase,
+  resetSourceDatabase,
+  restoreUrlFor,
+  runDrill,
+  seedFixture,
+  sourceUrlFor
+};
