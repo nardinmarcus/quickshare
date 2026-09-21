@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createPostgresPool } = require('../../models/postgres-config');
-const { runMigrations } = require('../../models/postgres-migrations');
+const { runMigrations, loadMigrations } = require('../../models/postgres-migrations');
 const { PostgresPageRepository } = require('../../models/postgres-pages');
 
 const connectionString = process.env.POSTGRES_TEST_URL;
@@ -46,7 +46,7 @@ test('Share access conditional writes and view events serialize across independe
     a.release(); b.release();
     for (const id of ['race', 'other']) await repo.create({ id, htmlContent: 'ORIGINAL', createdAt: 1, isProtected: true, passwordHash: 'old-hash' });
     const results = await Promise.allSettled(['winner-a', 'winner-b'].map(htmlContent => repo.updatePage('race', {
-      htmlContent, revokeAccess: true, expectedAccessRevision: '1'
+      htmlContent, revokeAccess: true, expectedAccessRevision: '1', expectedContentRevision: '1'
     })));
     assert.equal(results.filter(r => r.status === 'fulfilled' && r.value === true).length, 1);
     assert.equal(results.filter(r => r.status === 'rejected' && r.reason.status === 412).length, 1);
@@ -54,6 +54,7 @@ test('Share access conditional writes and view events serialize across independe
     const stored = await repo.getById('race');
     assert.equal(stored.html_content, ['winner-a', 'winner-b'][winner]);
     assert.equal(stored.access_revision, '2');
+    assert.equal(stored.current_revision, '2', 'the content winner advanced the revision exactly once');
     assert.equal((await repo.getById('other')).access_revision, '1');
     await assert.rejects(repo.updatePage('race', { htmlContent: 'MUST NOT SAVE', expiresAt: 9000 }), { status: 428 });
     assert.equal((await repo.getById('race')).html_content, stored.html_content);
@@ -99,7 +100,7 @@ test('baseline migration handles empty and legacy databases idempotently', async
   try {
     await resetPublicSchema(pool);
     const emptyResult = await runMigrations(pool, { logger: { info() {} } });
-    assert.deepEqual(emptyResult, { applied: ['001', '002', '003', '004', '005', '006'], skipped: [] });
+    assert.deepEqual(emptyResult, { applied: ['001', '002', '003', '004', '005', '006', '007'], skipped: [] });
 
     const emptyTables = await pool.query(`
       SELECT table_name
@@ -112,6 +113,7 @@ test('baseline migration handles empty and legacy databases idempotently', async
       'audit_logs',
       'pages',
       'quickshare_schema_migrations',
+      'share_revisions',
       'site_settings'
     ]);
 
@@ -168,8 +170,8 @@ test('baseline migration handles empty and legacy databases idempotently', async
     );
     const migrationCount = await pool.query('SELECT COUNT(*)::int AS count FROM quickshare_schema_migrations');
 
-    assert.deepEqual(legacyResult, { applied: ['001', '002', '003', '004', '005', '006'], skipped: [] });
-    assert.deepEqual(repeatedResult, { applied: [], skipped: ['001', '002', '003', '004', '005', '006'] });
+    assert.deepEqual(legacyResult, { applied: ['001', '002', '003', '004', '005', '006', '007'], skipped: [] });
+    assert.deepEqual(repeatedResult, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007'] });
     assert.deepEqual(migratedSentinel.rows, [{
       id: 'sentinel',
       html_content: '<h1>Keep me</h1>',
@@ -179,7 +181,7 @@ test('baseline migration handles empty and legacy databases idempotently', async
       is_favorite: false
     }]);
     assert.deepEqual(repeatedSentinel.rows, [{ is_favorite: true }]);
-    assert.equal(migrationCount.rows[0].count, 6);
+    assert.equal(migrationCount.rows[0].count, 7);
     const accessColumn = await pool.query("SELECT data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = 'pages' AND column_name = 'access_revision'");
     assert.deepEqual(accessColumn.rows, [{ data_type: 'bigint', is_nullable: 'NO', column_default: '1' }]);
     assert.equal((await pool.query("SELECT access_revision FROM pages WHERE id = 'sentinel'")).rows[0].access_revision, '1');
@@ -467,6 +469,7 @@ test('Postgres Favorite Share lifecycle preserves admin state and public boundar
     await repository.setFavorite('favorite-lifecycle-source', true);
     await repository.updatePage('favorite-lifecycle-source', {
       expectedAccessRevision: '1',
+      expectedContentRevision: '1',
       title: 'Edited favorite lifecycle source',
       description: 'Still managed after expiry',
       htmlContent: '<h1>Edited favorite lifecycle source</h1>',
@@ -558,7 +561,7 @@ test('site settings persist real transitions and audit them exactly once', async
     assert.equal(await repository.getHomepagePasswordRequired(), false);
 
     const repeatedMigration = await runMigrations(pool, { logger: { info() {} } });
-    assert.deepEqual(repeatedMigration, { applied: [], skipped: ['001', '002', '003', '004', '005', '006'] });
+    assert.deepEqual(repeatedMigration, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007'] });
     assert.equal(await repository.getHomepagePasswordRequired(), false);
 
     const logs = await repository.listAuditLogs();
@@ -599,6 +602,108 @@ test('site setting changes roll back when the audit record cannot be written', a
     await pool.query(
       'ALTER TABLE IF EXISTS audit_logs DROP CONSTRAINT IF EXISTS reject_homepage_setting_audit'
     ).catch(() => {});
+    await pool.end();
+  }
+});
+
+test('share revision expansion upgrades a legacy two-phase database and repeats skipped', async () => {
+  const pool = createPostgresPool(connectionString, { env, max: 2 });
+  const localPoolEnv = { POSTGRES_SSL: 'false', POSTGRES_POOL_MAX: '2' };
+
+  try {
+    await resetPublicSchema(pool);
+    // Phase 1: build a genuine pre-007 deployment state — schema and ledger
+    // exactly at 001–006, then rows written by the old version.
+    await runMigrations(pool, { logger: { info() {} } });
+    await pool.query('DROP TABLE public.share_revisions');
+    await pool.query('ALTER TABLE public.pages DROP COLUMN current_revision, DROP COLUMN published');
+    await pool.query("DELETE FROM public.quickshare_schema_migrations WHERE version = '007'");
+    await pool.query(
+      `INSERT INTO pages (id, html_content, created_at, code_type, title, description, markdown_theme)
+       VALUES ($1, $2, $3, 'markdown', $4, $5, 'github')`,
+      ['issue30-legacy', '<h1>Legacy body</h1>', 777, 'Legacy title', 'Legacy description']
+    );
+    await pool.query(
+      `INSERT INTO pages (id, html_content, created_at, code_type) VALUES ($1, $2, $3, 'html')`,
+      ['issue30-legacy-plain', '<p>plain</p>', 778]
+    );
+
+    // Phase 2: the additive expansion applies; existing rows receive the
+    // defaults without touching IDs, URLs, bodies or policy.
+    const result = await runMigrations(pool, { logger: { info() {} } });
+    assert.deepEqual(result, {
+      applied: ['007'],
+      skipped: ['001', '002', '003', '004', '005', '006']
+    });
+
+    const defaults = await pool.query(
+      `SELECT id, current_revision, published FROM pages ORDER BY id`
+    );
+    assert.deepEqual(defaults.rows, [
+      { id: 'issue30-legacy', current_revision: '1', published: true },
+      { id: 'issue30-legacy-plain', current_revision: '1', published: true }
+    ]);
+
+    const revisionTable = await pool.query(`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'share_revisions'
+      ORDER BY column_name
+    `);
+    assert.deepEqual(revisionTable.rows.map(row => [row.column_name, row.data_type, row.is_nullable]), [
+      ['actor', 'text', 'YES'],
+      ['code_type', 'text', 'NO'],
+      ['created_at', 'bigint', 'NO'],
+      ['description', 'text', 'YES'],
+      ['html_content', 'text', 'NO'],
+      ['markdown_theme', 'text', 'YES'],
+      ['restored_from', 'bigint', 'YES'],
+      ['revision', 'bigint', 'NO'],
+      ['share_id', 'text', 'NO'],
+      ['snapshot_hash', 'text', 'NO'],
+      ['source', 'text', 'NO'],
+      ['title', 'text', 'YES']
+    ]);
+
+    // The controlled baseline backfill (separate from the migration runner)
+    // completes the two-phase flow; a second run reports nothing to do.
+    const repository = new PostgresPageRepository(connectionString, {
+      ...localPoolEnv,
+      POSTGRES_STATEMENT_TIMEOUT_MS: '8000', POSTGRES_QUERY_TIMEOUT_MS: '9000'
+    });
+    const { runBackfill } = require('../../scripts/backfill-page-revisions');
+    await repository.setPublishingWritesPaused(true);
+    const first = await runBackfill(repository, { write: true, limit: 10 });
+    assert.equal(first.backfilled, 2);
+    const second = await runBackfill(repository, { write: true, limit: 10 });
+    assert.equal(second.scanned, 0, 'repeat baseline run must be all skipped');
+
+    const baseline = await repository.listContentRevisions('issue30-legacy');
+    assert.equal(baseline.length, 1);
+    assert.equal(baseline[0].html_content, '<h1>Legacy body</h1>');
+    assert.equal(baseline[0].code_type, 'markdown');
+    assert.equal(baseline[0].title, 'Legacy title');
+    assert.equal(baseline[0].markdown_theme, 'github');
+    // The baseline stamps the actual capture moment, not the Share creation
+    // time (777), and carries row-level provenance.
+    assert.ok(Number(baseline[0].created_at) >= 777 + 500, `baseline created_at must be the capture moment, got ${baseline[0].created_at}`);
+    assert.equal(baseline[0].source, 'baseline-backfill');
+    assert.equal(baseline[0].actor, 'maintenance:baseline-backfill');
+    assert.equal(baseline[0].restored_from, null);
+    assert.equal((await repository.getById('issue30-legacy')).current_revision, '1');
+
+    // Deleting a Share removes its snapshots with it (ON DELETE CASCADE).
+    await repository.deletePage('issue30-legacy-plain');
+    const orphaned = await pool.query(
+      'SELECT count(*)::int AS n FROM share_revisions WHERE share_id = $1',
+      ['issue30-legacy-plain']
+    );
+    assert.equal(orphaned.rows[0].n, 0, 'revision payload never outlives its Share');
+
+    const repeat = await runMigrations(pool, { logger: { info() {} } });
+    assert.deepEqual(repeat, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007'] });
+    await repository.pool.end();
+  } finally {
     await pool.end();
   }
 });

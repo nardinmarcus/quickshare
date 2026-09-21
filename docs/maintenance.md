@@ -20,7 +20,9 @@ npm run maintenance -- resume
 
 ## 已覆盖的行为
 
-网页创建、Share API 创建、编辑、保护、克隆、单条/批量删除、Favorite Share、首页访问设置、managed Key 创建/轮换/删除，以及 `backfill-titles --write` 均通过发布事务 Interface。标题 backfill 的 dry-run 仍只读；`--write` 使用同一 client 查询和更新，不会因单连接池自锁，成功输出也在提交后。
+网页创建、Share API 创建、编辑、保护、克隆、单条/批量删除、Favorite Share、首页访问设置、managed Key 创建/轮换/删除，以及 `backfill-titles --write` 均通过发布事务 Interface。标题 backfill 的 dry-run 仍只读；`--write` 使用同一 client 查询和更新，不会因单连接池自锁，成功输出也在提交后。编辑与标题回填等一切内容写入口都走同一内容版本协议：写入前校验当前内容基线，写入在同一事务内推进 `current_revision` 并落入不可变快照，不存在无版本写入。
+
+**基线回填（`npm run backfill-revisions`，#30）不是普通内容写入，而是受控维护窗口的专用 DML：**dry-run 只读、不要求暂停；`--write` 在维护闸内要求同一事务读到的 `publishing_writes_paused` 为 `true`（`allowPaused` 只是绕过拒绝，脚本另行检查 live 值），否则以 `BASELINE_WINDOW_REQUIRED` 拒绝。它只为缺少 Revision 1 的存量 Share 按原 ID/URL/正文/标题补写快照（`created_at` 记录实际回填/捕获时刻，`pages.created_at` 原值不动，不伪造更早历史）与一条 `page.revision.backfill` 审计；快照行带 `source='baseline-backfill'`、`actor='maintenance:baseline-backfill'`、`restored_from=NULL` 行级来源。不改动 `current_revision`、正文或任何上下架/访问状态；`current_revision ≠ 1` 且缺基线的行会被 `BASELINE_INCONSISTENT` 拒绝而不猜测历史。重复运行全部 skipped。它不执行 pause/resume，也不代替旧写入者退出证据；完整切换流程见 [Revision 切换手册](revisions-rollout.md)。
 
 认证、CSRF 与 Origin 检查仍先执行，原有未授权拒绝不变。允许进入写入流程的请求在暂停时返回 HTTP 503：
 

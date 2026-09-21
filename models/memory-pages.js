@@ -1,10 +1,23 @@
 const { invalidApiKey } = require('../utils/apiKeyIdentity');
 const { maintenanceError } = require('./publishing');
 const { isAccessUpdate, assertAccessRevision } = require('../utils/shareAccess');
+const { isContentRevision, assertContentRevision, contentError, contentSnapshotHash } = require('../utils/contentRevision');
 const {
   buildManagementDailyStats,
   managementDateRange
 } = require('../utils/management-time');
+
+function revisionConflictProjection(page) {
+  return {
+    id: page.id,
+    currentRevision: String(page.current_revision),
+    htmlContent: page.html_content,
+    codeType: page.code_type || 'html',
+    title: page.title,
+    description: page.description,
+    markdownTheme: page.markdown_theme || null
+  };
+}
 
 function filterAdminPages(pages, options = {}) {
   const search = options.search || '';
@@ -50,6 +63,7 @@ function filterAdminPages(pages, options = {}) {
 class MemoryPageRepository {
   constructor() {
     this.pages = new Map();
+    this.revisions = new Map();
     this.auditLogs = [];
     this.auditIdCounter = 0;
     this.apiKeys = new Map();
@@ -85,6 +99,9 @@ class MemoryPageRepository {
       // restores a stale snapshot over another writer's committed state.
       const transaction = Object.create(this);
       transaction.pages = structuredClone(this.pages);
+      // Revisions are cloned too: a failed transaction must not leak new
+      // snapshots into the committed store through inherited references.
+      transaction.revisions = structuredClone(this.revisions);
       transaction.apiKeys = structuredClone(this.apiKeys);
       transaction.auditLogs = [];
       transaction.auditIdCounter = 0;
@@ -92,6 +109,7 @@ class MemoryPageRepository {
       transaction.publishingWritesPaused = this.publishingWritesPaused;
       const result = await operation(transaction);
       this.pages = transaction.pages;
+      this.revisions = transaction.revisions;
       this.apiKeys = transaction.apiKeys;
       this.homepagePasswordRequired = transaction.homepagePasswordRequired;
       // Login audit events may arrive independently of publishing transactions.
@@ -148,7 +166,7 @@ class MemoryPageRepository {
       throw error;
     }
 
-    this.pages.set(page.id, {
+    const record = {
       id: page.id,
       html_content: page.htmlContent,
       created_at: page.createdAt,
@@ -162,10 +180,110 @@ class MemoryPageRepository {
       markdown_theme: page.markdownTheme || null,
       is_favorite: false,
       access_revision: '1',
+      current_revision: '1',
+      published: true,
       view_count: 0
-    });
+    };
+    this.pages.set(record.id, record);
+    // Baseline snapshot: same client/transaction as the materialized page.
+    // Row-level provenance mirrors the PostgreSQL adapter exactly (shared
+    // hash helper keeps digests identical across adapters).
+    const source = page.actorSource || 'web';
+    const actor = page.actorIdentity === undefined ? null : (page.actorIdentity || null);
+    this.revisions.set(record.id, new Map([
+      ['1', {
+        share_id: record.id,
+        revision: '1',
+        html_content: record.html_content,
+        code_type: record.code_type,
+        title: record.title,
+        description: record.description,
+        markdown_theme: record.markdown_theme,
+        created_at: record.created_at,
+        snapshot_hash: contentSnapshotHash({
+          htmlContent: record.html_content,
+          codeType: record.code_type,
+          title: record.title,
+          description: record.description,
+          markdownTheme: record.markdown_theme
+        }),
+        source,
+        actor,
+        restored_from: null
+      }]
+    ]));
 
-    return { id: page.id };
+    return { id: record.id };
+  }
+
+  async listContentRevisions(shareId) {
+    const revisions = this.revisions.get(shareId);
+    if (!revisions) return [];
+    return [...revisions.values()]
+      .sort((left, right) => BigInt(left.revision) - BigInt(right.revision) > 0n ? 1 : -1);
+  }
+
+  async listPagesMissingBaselineRevision(limit = 200) {
+    const missing = [];
+    for (const page of this.pages.values()) {
+      const revisions = this.revisions.get(page.id);
+      if (!revisions || !revisions.has('1')) {
+        missing.push({
+          id: page.id,
+          html_content: page.html_content,
+          code_type: page.code_type,
+          title: page.title,
+          description: page.description,
+          markdown_theme: page.markdown_theme,
+          created_at: page.created_at,
+          current_revision: page.current_revision
+        });
+      }
+      if (missing.length >= limit) break;
+    }
+    return missing;
+  }
+
+  async listPagesNeedingTitleBackfill(limit = 200) {
+    const matches = [];
+    for (const page of this.pages.values()) {
+      if (page.title === null || page.title === '' || page.title === page.id) {
+        matches.push({
+          id: page.id,
+          html_content: page.html_content,
+          code_type: page.code_type,
+          title: page.title,
+          created_at: page.created_at
+        });
+      }
+      if (matches.length >= limit) break;
+    }
+    return matches;
+  }
+
+  /** Dedicated baseline-window write; only the backfill job may call this. */
+  async createBaselineRevision(page) {
+    let revisions = this.revisions.get(page.id);
+    if (!revisions) {
+      revisions = new Map();
+      this.revisions.set(page.id, revisions);
+    }
+    if (revisions.has('1')) return false;
+    revisions.set('1', {
+      share_id: page.id,
+      revision: '1',
+      html_content: page.htmlContent,
+      code_type: page.codeType || 'html',
+      title: page.title || null,
+      description: page.description || null,
+      markdown_theme: page.markdownTheme || null,
+      created_at: page.createdAt,
+      snapshot_hash: contentSnapshotHash(page),
+      source: 'baseline-backfill',
+      actor: page.actorIdentity || 'maintenance:baseline-backfill',
+      restored_from: null
+    });
+    return true;
   }
 
   async createApiKey(apiKey) {
@@ -405,19 +523,81 @@ class MemoryPageRepository {
     if (isAccessUpdate(options) || options.accessPrecondition) {
       assertAccessRevision(options.expectedAccessRevision, page.access_revision);
     }
+
+    const contentSubmitted = options.htmlContent !== undefined || options.title !== undefined
+      || options.description !== undefined || options.markdownTheme !== undefined;
+    const contentConditional = contentSubmitted || options.contentPrecondition;
+    if (contentConditional) {
+      try {
+        if (!isContentRevision(options.expectedContentRevision)) {
+          throw contentError(options.expectedContentRevision === undefined ? 428 : 400,
+            options.expectedContentRevision === undefined
+              ? '请刷新 Share 后重新保存内容；未保存的输入已保留。'
+              : 'content baseline must be a positive decimal string');
+        }
+        assertContentRevision(options.expectedContentRevision, page.current_revision);
+      } catch (error) {
+        if (error.code === 'CONTENT_REVISION_CONFLICT') {
+          error.current = revisionConflictProjection(page);
+        }
+        throw error;
+      }
+    }
+
+    const nextContent = {
+      html_content: options.htmlContent !== undefined ? options.htmlContent : page.html_content,
+      title: options.title !== undefined ? (options.title || null) : page.title,
+      description: options.description !== undefined ? (options.description || null) : page.description,
+      markdown_theme: options.markdownTheme !== undefined ? (options.markdownTheme || null) : page.markdown_theme
+    };
+    const contentChanged = contentSubmitted && (
+      nextContent.html_content !== page.html_content
+      || nextContent.title !== page.title
+      || nextContent.description !== page.description
+      || nextContent.markdown_theme !== page.markdown_theme
+    );
+
     if ((options.isProtected !== undefined && (options.isProtected || page.is_protected === 1)) || (options.expiresAt !== undefined && options.expiresAt !== page.expires_at) || options.revokeAccess === true) {
       page.access_revision = (BigInt(page.access_revision) + 1n).toString();
     }
 
-    if (options.title !== undefined) {
-      page.title = options.title || null;
+    if (contentChanged) {
+      page.html_content = nextContent.html_content;
+      page.title = nextContent.title;
+      page.description = nextContent.description;
+      page.markdown_theme = nextContent.markdown_theme;
+      page.current_revision = (BigInt(page.current_revision) + 1n).toString();
+      // Snapshot and projection commit together: this method only runs inside
+      // the staged transaction whose collections replace the store on commit.
+      // Row-level provenance mirrors the PostgreSQL adapter (shared hash).
+      let revisions = this.revisions.get(id);
+      if (!revisions) {
+        revisions = new Map();
+        this.revisions.set(id, revisions);
+      }
+      const snapshotPayload = {
+        htmlContent: nextContent.html_content,
+        codeType: page.code_type || 'html',
+        title: nextContent.title,
+        description: nextContent.description,
+        markdownTheme: nextContent.markdown_theme
+      };
+      revisions.set(page.current_revision, {
+        share_id: id,
+        revision: page.current_revision,
+        html_content: nextContent.html_content,
+        code_type: snapshotPayload.codeType,
+        title: nextContent.title,
+        description: nextContent.description,
+        markdown_theme: nextContent.markdown_theme,
+        created_at: Date.now(),
+        snapshot_hash: contentSnapshotHash(snapshotPayload),
+        source: options.actorSource || 'dashboard-edit',
+        actor: options.actorIdentity === undefined ? 'owner-dashboard' : (options.actorIdentity || null),
+        restored_from: null
+      });
     }
-    if (options.description !== undefined) {
-      page.description = options.description || null;
-    }
-    if (options.htmlContent !== undefined) {
-      page.html_content = options.htmlContent;
-    }
+
     if (options.expiresAt !== undefined) {
       page.expires_at = options.expiresAt || null;
     }
@@ -426,21 +606,21 @@ class MemoryPageRepository {
       page.password_hash = options.passwordHash || null;
       page.encrypted_password = options.encryptedPassword || null;
     }
-    if (options.markdownTheme !== undefined) {
-      page.markdown_theme = options.markdownTheme || null;
-    }
 
     return options.returnUpdated ? { ...page } : true;
   }
 
   async deletePage(id) {
-    return this.pages.delete(id);
+    const deleted = this.pages.delete(id);
+    this.revisions.delete(id);
+    return deleted;
   }
 
   async deletePages(ids) {
     let count = 0;
     ids.forEach((id) => {
       if (this.pages.delete(id)) count += 1;
+      this.revisions.delete(id);
     });
     return count;
   }

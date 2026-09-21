@@ -70,6 +70,10 @@
         <dt>访问版本</dt>
         <dd id="access-revision-display"><%= sharedPage.accessRevision %></dd>
       </div>
+      <div>
+        <dt>内容版本</dt>
+        <dd id="content-revision-display"><%= sharedPage.currentRevision %></dd>
+      </div>
       <div class="admin-detail-wide">
         <dt>已解锁访问</dt>
         <dd>
@@ -173,9 +177,23 @@
       </div>
       <div class="admin-edit-actions">
         <button type="button" class="cyber-btn cyber-btn-secondary" id="edit-cancel">取消</button>
-        <button type="submit" class="cyber-btn" id="edit-save">保存修改</button>
+        <button type="submit" class="cyber-btn cyber-btn-secondary" id="edit-save-access">保存访问设置</button>
+        <button type="submit" class="cyber-btn" id="edit-save-content">保存内容</button>
+        <p class="admin-edit-hint">内容与访问设置分开保存：正文、标题、描述和主题写入内容版本并需要内容基线；密码保护与过期时间使用访问版本确认。</p>
       </div>
     </form>
+  </section>
+
+  <section class="card admin-card conflict-panel" id="conflict-panel" hidden aria-live="polite">
+    <h2 class="admin-section-title">检测到其他修改</h2>
+    <p id="conflict-summary" class="field-hint"></p>
+    <div id="conflict-meta" class="conflict-meta" hidden></div>
+    <p id="conflict-diff-status" class="field-hint" role="status"></p>
+    <div id="conflict-diff" class="conflict-diff" tabindex="0"></div>
+    <div class="admin-edit-actions">
+      <button type="button" class="cyber-btn cyber-btn-secondary" id="conflict-take-remote">采用当前远端，丢弃我的修改</button>
+      <button type="button" class="cyber-btn" id="conflict-save-mine">已查看差异，仍要保存我的版本</button>
+    </div>
   </section>
 
   <section class="card admin-card" id="content-section">
@@ -211,5 +229,6 @@
 <script src="/js/admin-favorite.js"></script>
 <script src="/js/admin-time.js"></script>
 <script src="/js/theme-sampler.js"></script>
+<script src="/js/source-diff.js"></script>
 <script src="/js/admin-detail.js"></script>
 <%- include('partials/footer', { page }) %>

@@ -70,6 +70,43 @@ test('title backfill CLI keeps dry-run read-only and gates --write on its single
   assert.equal((await repository.getById('backfill-maintenance')).title, 'Derived title');
 });
 
+test('baseline revision backfill CLI requires the live paused window and repeats skipped', async () => {
+  const env = { ...process.env, DATABASE_URL: url.href, POSTGRES_URL: '', DATABASE_MIGRATION_URL: '', DATABASE_URL_UNPOOLED: '', POSTGRES_URL_NON_POOLING: '', POSTGRES_SSL: 'false' };
+  const run = args => promisify(execFile)(process.execPath, ['scripts/backfill-page-revisions.js', ...args], { env, timeout: 8000 });
+
+  // A legacy-shaped row without a Revision 1 snapshot (pre-007 content).
+  await repository.create({ id: 'backfill-rev-maintenance', htmlContent: '<p>legacy body</p>', createdAt: 12345 });
+  await repository.pool.query('DELETE FROM share_revisions WHERE share_id = $1', ['backfill-rev-maintenance']);
+
+  // Dry run reads even while paused and never writes.
+  await repository.setPublishingWritesPaused(true);
+  const dryRun = await run([]);
+  assert.match(dryRun.stdout, /dry-run backfill-rev-maintenance: would backfill Revision 1/);
+  assert.equal((await repository.listContentRevisions('backfill-rev-maintenance')).length, 0);
+
+  // --write inside the live paused window succeeds and is exactly repeatable.
+  const writeRun = await run(['--write']);
+  assert.match(writeRun.stdout, /backfill backfill-rev-maintenance: Revision 1 written/);
+  assert.match(writeRun.stdout, /backfilled 1 of 1 scanned Shares/);
+  const repeatRun = await run(['--write']);
+  assert.match(repeatRun.stdout, /no Shares are missing Revision 1/);
+  const baseline = await repository.listContentRevisions('backfill-rev-maintenance');
+  assert.equal(baseline.length, 1);
+  assert.equal(baseline[0].html_content, '<p>legacy body</p>');
+  assert.equal((await repository.getById('backfill-rev-maintenance')).current_revision, '1');
+  await repository.setPublishingWritesPaused(false);
+
+  // --write outside the window refuses: allowPaused is not paused evidence.
+  await repository.create({ id: 'backfill-rev-open', htmlContent: '<p>open window</p>', createdAt: 12346 });
+  await repository.pool.query('DELETE FROM share_revisions WHERE share_id = $1', ['backfill-rev-open']);
+  await assert.rejects(run(['--write']), error => error.code === 1 && /BASELINE_WINDOW_REQUIRED/.test(error.stderr));
+  assert.equal((await repository.listContentRevisions('backfill-rev-open')).length, 0);
+  await repository.setPublishingWritesPaused(true);
+  const lateRun = await run(['--write']);
+  assert.match(lateRun.stdout, /backfill backfill-rev-open: Revision 1 written/);
+  await repository.setPublishingWritesPaused(false);
+});
+
 test('paused PostgreSQL view events retain access rejections, skip counting and allow reads', async () => {
   await repository.create({ id: 'event-public', htmlContent: '<h1>readable</h1>', createdAt: 1 });
   await repository.create({ id: 'event-locked', htmlContent: 'secret', createdAt: 1, isProtected: true });

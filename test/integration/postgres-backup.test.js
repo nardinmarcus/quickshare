@@ -30,6 +30,7 @@ for (const [label, value] of [['source', sourceUrl], ['restore', restoreUrl]]) {
 
 const {
   ACCESS_REVISION_DRILL_VALUE,
+  REVISION_DRILL_VALUE,
   FIXTURE,
   seedFixture
 } = require('../../scripts/backup-restore-check');
@@ -46,6 +47,9 @@ const restoreDocker = process.env.QS27_BACKUP_DOCKER_RESTORE || null;
 // with a message naming the integrator's post-#25-merge obligation — it is
 // never silently claimed.
 let hasAccessRevision = false;
+// Content Revision fixture gate (#30): false on a 001–006 base, where the
+// share_revisions branches are explicitly skipped, never silently claimed.
+let hasRevisions = false;
 
 const childEnv = sanitizeChildEnv(process.env, { SESSION_SECRET: FIXTURE.sessionSecret });
 
@@ -91,6 +95,7 @@ test.before(async () => {
     process.env.SESSION_SECRET = FIXTURE.sessionSecret;
     const seedResult = await seedFixture(sourcePool);
     hasAccessRevision = seedResult.accessRevisionSeeded === true;
+    hasRevisions = seedResult.revisionsSeeded === true;
 
     // Recreate the restore database from scratch so the drill proves a full restore.
     const quotedDatabase = `"${restoreDatabase.replace(/"/g, '""')}"`;
@@ -136,7 +141,14 @@ test('native backup captures a consistent snapshot with matched tooling', async 
   assert.match(manifest.toolVersion, /\(PostgreSQL\) 17/);
   assert.ok(Number.isFinite(manifest.durationsMs.dumpMs));
   assert.equal(manifest.testGuardBypassed, false);
-  assert.equal(JSON.stringify(manifest).includes('issue27local'), false);
+  // The manifest must never carry the credentials of the connection actually
+  // used for this run (the URL passwords), redacted or not.
+  const connectionPasswords = [sourceUrl, restoreUrl]
+    .map(value => { try { return decodeURIComponent(new URL(value).password); } catch { return ''; } })
+    .filter(value => value.length > 0);
+  for (const password of connectionPasswords) {
+    assert.equal(JSON.stringify(manifest).includes(password), false, 'connection credentials never enter manifests');
+  }
 });
 
 test('native restore rebuilds the database and passes full verification', async () => {
@@ -214,6 +226,8 @@ test('native restore rebuilds the database and passes full verification', async 
     'page-full-rows',
     'markdown-themes',
     'favorite-share',
+    'share-revisions',
+    'revision-current-pointer',
     'password-verify-and-decrypt',
     'expiry',
     'managed-api-keys',
@@ -226,7 +240,7 @@ test('native restore rebuilds the database and passes full verification', async 
   const settingsCheck = report.checks.find(check => check.name === 'siteSettings');
   assert.equal(settingsCheck.details.comparedColumns.includes('publishing_writes_paused'), true);
   const pageCheck = report.checks.find(check => check.name === 'pageInventory');
-  assert.equal(pageCheck.details.pageCount, 4);
+  assert.equal(pageCheck.details.pageCount, hasRevisions ? 5 : 4);
   assert.equal(pageCheck.details.comparedColumns.includes('markdown_theme'), true);
   assert.equal(pageCheck.details.comparedColumns.includes('is_favorite'), true);
   assert.equal(pageCheck.details.comparedColumns.includes('expires_at'), true);
@@ -257,6 +271,67 @@ test('native restore rebuilds the database and passes full verification', async 
   } else {
     // Schema 001–003 base: the column must NOT be claimed as covered.
     assert.equal(pageCheck.details.comparedColumns.includes('access_revision'), false);
+  }
+
+  if (hasRevisions) {
+    // #30: the new revision object and current pointer are verified with
+    // named columns and exact big-value preservation.
+    assert.equal(pageCheck.details.comparedColumns.includes('current_revision'), true, 'current_revision must be a named compared column');
+    assert.equal(pageCheck.details.comparedColumns.includes('published'), true, 'published must be a named compared column');
+    const revisionsCheck = report.checks.find(check => check.name === 'shareRevisions');
+    assert.equal(revisionsCheck.ok, true, `snapshot inventory issues: ${JSON.stringify(revisionsCheck.issues)}`);
+    assert.deepEqual(revisionsCheck.details.comparedColumns, [
+      'share_id', 'revision', 'html_content', 'code_type', 'title', 'description', 'markdown_theme', 'created_at',
+      'snapshot_hash', 'source', 'actor', 'restored_from'
+    ]);
+    assert.ok(revisionsCheck.details.snapshotCount >= 7, 'baselines + v2 + big-pointer snapshots restored');
+    const pointerCheck = report.checks.find(check => check.name === 'revisionCurrentPointer');
+    assert.equal(pointerCheck.ok, true, `pointer issues: ${JSON.stringify(pointerCheck.issues)}`);
+
+    const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+    try {
+      const restoredPointer = await restorePool.query(
+        'SELECT current_revision, published FROM pages WHERE id = $1',
+        [FIXTURE.pages.bigRevision]
+      );
+      assert.equal(restoredPointer.rows[0].current_revision, REVISION_DRILL_VALUE, 'big pointer stays an exact decimal string');
+      assert.equal(typeof restoredPointer.rows[0].current_revision, 'string');
+      assert.equal(restoredPointer.rows[0].published, true);
+      const restoredSnapshot = await restorePool.query(
+        'SELECT html_content, source, actor, restored_from FROM share_revisions WHERE share_id = $1 AND revision = $2',
+        [FIXTURE.pages.bigRevision, REVISION_DRILL_VALUE]
+      );
+      assert.equal(restoredSnapshot.rowCount, 1);
+      assert.equal(restoredSnapshot.rows[0].html_content, '<p>big revision body</p>');
+      assert.equal(restoredSnapshot.rows[0].source, 'baseline-backfill', 'snapshot provenance restores with the payload');
+      assert.equal(restoredSnapshot.rows[0].actor, 'maintenance:baseline-backfill');
+      assert.equal(restoredSnapshot.rows[0].restored_from, null);
+      const restoredV2 = await restorePool.query(
+        'SELECT title, current_revision FROM pages WHERE id = $1',
+        [FIXTURE.pages.markdownThemed]
+      );
+      assert.equal(restoredV2.rows[0].current_revision, '2', 'moved pointer restores exactly');
+      const restoredV2Row = await restorePool.query(
+        'SELECT snapshot_hash, source, actor, restored_from FROM share_revisions WHERE share_id = $1 AND revision = 2',
+        [FIXTURE.pages.markdownThemed]
+      );
+      assert.equal(restoredV2Row.rows[0].source, 'dashboard-edit');
+      assert.equal(restoredV2Row.rows[0].actor, 'owner-dashboard');
+      assert.equal(restoredV2Row.rows[0].restored_from, '1', 'synthetic non-null restore origin survives byte-exact (BIGINT as decimal string)');
+      assert.match(restoredV2Row.rows[0].snapshot_hash, /^[0-9a-f]{64}$/);
+      const restoredPublished = await restorePool.query(
+        'SELECT published FROM pages WHERE id = $1',
+        [FIXTURE.pages.protectedPage]
+      );
+      assert.equal(restoredPublished.rows[0].published, false, 'non-default published survives restore');
+    } finally {
+      await restorePool.end();
+    }
+  } else {
+    // Schema 001–006 base: the revision objects must NOT be claimed covered.
+    assert.equal(pageCheck.details.comparedColumns.includes('current_revision'), false);
+    assert.equal(pageCheck.details.comparedColumns.includes('published'), false);
+    assert.equal(report.checks.some(check => check.name === 'shareRevisions'), false);
   }
 
   const passwordCheck = report.checks.find(check => check.name === 'passwordVerifyAndDecrypt');
@@ -494,4 +569,177 @@ test('access_revision tamper in the restored database fails verification', async
     issue.field === 'access_revision'
     && issue.message.includes(ACCESS_REVISION_DRILL_VALUE)
     && issue.message.includes('9007199254740994')));
+});
+
+test('snapshot payload tamper fails the share-revisions check by field and key', async (t) => {
+  if (!hasRevisions) {
+    return t.skip('share_revisions absent on schema 001-006 base; integrator must exercise after merging #30');
+  }
+
+  const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
+  const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+  try {
+    await restorePool.query(
+      'UPDATE share_revisions SET html_content = $1 WHERE share_id = $2 AND revision = 2',
+      ['<p>tampered snapshot payload</p>', FIXTURE.pages.markdownThemed]
+    );
+  } finally {
+    await restorePool.end();
+  }
+
+  const result = await runStep(process.execPath, [
+    'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+    '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+    '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+    '--output', path.join(tmpDir, 'verification-snapshot-tamper.json')
+  ]);
+  assert.equal(result.code, 1);
+
+  const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-snapshot-tamper.json'), 'utf8'));
+  assert.equal(report.safeToServe, false);
+  const revisionsCheck = report.checks.find(check => check.name === 'shareRevisions');
+  assert.equal(revisionsCheck.ok, false, 'the dedicated snapshot check must fail, not only the overall exit');
+  assert.ok(revisionsCheck.issues.some(issue =>
+    issue.field === 'html_content'
+    && issue.shareId === FIXTURE.pages.markdownThemed
+    && issue.revision === '2'
+    && /tampered snapshot payload/.test(issue.message)), `issues: ${JSON.stringify(revisionsCheck.issues)}`);
+});
+
+test('current_revision pointer tamper fails the pointer-consistency check by name', async (t) => {
+  if (!hasRevisions) {
+    return t.skip('share_revisions absent on schema 001-006 base; integrator must exercise after merging #30');
+  }
+
+  const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
+  const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+  try {
+    await restorePool.query(
+      'UPDATE pages SET current_revision = 2 WHERE id = $1',
+      [FIXTURE.pages.publicHtml]
+    );
+  } finally {
+    await restorePool.end();
+  }
+
+  const result = await runStep(process.execPath, [
+    'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+    '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+    '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+    '--output', path.join(tmpDir, 'verification-pointer-tamper.json')
+  ]);
+  assert.equal(result.code, 1);
+
+  const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-pointer-tamper.json'), 'utf8'));
+  assert.equal(report.safeToServe, false);
+  const pointerCheck = report.checks.find(check => check.name === 'revisionCurrentPointer');
+  assert.equal(pointerCheck.ok, false, 'the dedicated pointer check must fail, not only the overall exit');
+  assert.ok(pointerCheck.issues.some(issue =>
+    issue.field === 'current_revision'
+    && issue.pageId === FIXTURE.pages.publicHtml
+    && /has no snapshot row/.test(issue.message)), `issues: ${JSON.stringify(pointerCheck.issues)}`);
+});
+
+test('published tamper fails the full-row page inventory with a named field issue', async (t) => {
+  if (!hasRevisions) {
+    return t.skip('published absent on schema 001-006 base; integrator must exercise after merging #30');
+  }
+
+  const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
+  const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+  try {
+    await restorePool.query(
+      'UPDATE pages SET published = TRUE WHERE id = $1',
+      [FIXTURE.pages.protectedPage]
+    );
+  } finally {
+    await restorePool.end();
+  }
+
+  const result = await runStep(process.execPath, [
+    'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+    '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+    '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+    '--output', path.join(tmpDir, 'verification-published-tamper.json')
+  ]);
+  assert.equal(result.code, 1);
+
+  const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-published-tamper.json'), 'utf8'));
+  assert.equal(report.safeToServe, false);
+  const pageCheck = report.checks.find(check => check.name === 'pageInventory');
+  assert.equal(pageCheck.ok, false);
+  assert.ok(pageCheck.issues.some(issue =>
+    issue.field === 'published'
+    && issue.pageId === FIXTURE.pages.protectedPage
+    && /published/.test(issue.message)), `issues: ${JSON.stringify(pageCheck.issues)}`);
+});
+
+test('snapshot_hash tamper fails the share-revisions check by field and key', async (t) => {
+  if (!hasRevisions) {
+    return t.skip('share_revisions absent on schema 001-006 base; integrator must exercise after merging #30');
+  }
+
+  const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
+  const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+  try {
+    await restorePool.query(
+      `UPDATE share_revisions SET snapshot_hash = repeat('0', 64)
+       WHERE share_id = $1 AND revision = 2`,
+      [FIXTURE.pages.markdownThemed]
+    );
+  } finally {
+    await restorePool.end();
+  }
+
+  const result = await runStep(process.execPath, [
+    'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+    '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+    '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+    '--output', path.join(tmpDir, 'verification-snapshot-hash-tamper.json')
+  ]);
+  assert.equal(result.code, 1);
+
+  const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-snapshot-hash-tamper.json'), 'utf8'));
+  assert.equal(report.safeToServe, false);
+  const revisionsCheck = report.checks.find(check => check.name === 'shareRevisions');
+  assert.equal(revisionsCheck.ok, false, 'the hash column must be explicitly compared, not ignored');
+  assert.ok(revisionsCheck.issues.some(issue =>
+    issue.field === 'snapshot_hash'
+    && issue.shareId === FIXTURE.pages.markdownThemed
+    && issue.revision === '2'), `issues: ${JSON.stringify(revisionsCheck.issues)}`);
+});
+
+test('restored_from tamper fails the share-revisions check by field and key', async (t) => {
+  if (!hasRevisions) {
+    return t.skip('share_revisions absent on schema 001-006 base; integrator must exercise after merging #30');
+  }
+
+  const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
+  const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+  try {
+    await restorePool.query(
+      'UPDATE share_revisions SET restored_from = 9007199254740993 WHERE share_id = $1 AND revision = 2',
+      [FIXTURE.pages.markdownThemed]
+    );
+  } finally {
+    await restorePool.end();
+  }
+
+  const result = await runStep(process.execPath, [
+    'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+    '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+    '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+    '--output', path.join(tmpDir, 'verification-restored-from-tamper.json')
+  ]);
+  assert.equal(result.code, 1);
+
+  const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-restored-from-tamper.json'), 'utf8'));
+  assert.equal(report.safeToServe, false);
+  const revisionsCheck = report.checks.find(check => check.name === 'shareRevisions');
+  assert.equal(revisionsCheck.ok, false);
+  assert.ok(revisionsCheck.issues.some(issue =>
+    issue.field === 'restored_from'
+    && issue.shareId === FIXTURE.pages.markdownThemed
+    && issue.revision === '2'
+    && /9007199254740993/.test(issue.message)), `issues: ${JSON.stringify(revisionsCheck.issues)}`);
 });

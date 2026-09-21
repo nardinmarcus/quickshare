@@ -361,7 +361,7 @@ test('a Notion-to-Claude admin theme update preserves unrelated Share state', as
   const response = await jsonRequest(
     `/admin/pages/${id}`,
     { markdownTheme: 'claude' },
-    {},
+    { 'If-Match': `\"content:${id}:1\"` },
     'PUT'
   );
   const stored = await app.locals.pageRepository.getById(id);

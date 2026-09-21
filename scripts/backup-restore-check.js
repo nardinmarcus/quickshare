@@ -44,7 +44,8 @@ const FIXTURE = {
     publicHtml: 'issue27pub0010',
     markdownThemed: 'issue27md00010',
     protectedPage: 'issue27prot0001',
-    expiredPage: 'issue27exp00010'
+    expiredPage: 'issue27exp00010',
+    bigRevision: 'issue27big00001'
   },
   apiKey: {
     id: 'issue27key00001',
@@ -62,6 +63,13 @@ const FIXTURE = {
 // fixture stays honest: the gate is reported as not exercised, never claimed.
 const ACCESS_REVISION_DRILL_VALUE = '9007199254740993';
 
+// Content Revision fixture gate (#30). When the source schema carries the
+// `share_revisions` table and `pages.current_revision`/`published` (migration
+// 007), the drill seeds real snapshot rows — including a pointer beyond
+// 2^53 — so exact snapshot restore, pointer consistency and non-default
+// `published` are provable. On a 001–006 base the gate reports honestly.
+const REVISION_DRILL_VALUE = '9007199254740993';
+
 async function probeAccessRevisionColumn(pool) {
   const result = await pool.query(
     `SELECT EXISTS (
@@ -70,6 +78,19 @@ async function probeAccessRevisionColumn(pool) {
        WHERE table_schema = 'public'
          AND table_name = 'pages'
          AND column_name = 'access_revision'
+     ) AS present`
+  );
+
+  return result.rows[0].present === true;
+}
+
+async function probeShareRevisionsTable(pool) {
+  const result = await pool.query(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM information_schema.tables
+       WHERE table_schema = 'public'
+         AND table_name = 'share_revisions'
      ) AS present`
   );
 
@@ -153,7 +174,107 @@ async function seedFixture(pool) {
     );
   }
 
-  return { accessRevisionSeeded };
+  const revisionsSeeded = await probeShareRevisionsTable(pool);
+  if (revisionsSeeded) {
+    // Snapshot provenance uses the real application vocabulary; hashes are
+    // computed with the shared canonical digest so a tampered hash byte
+    // fails the restore verification by field.
+    const { contentSnapshotHash } = require('../utils/contentRevision');
+    const hashOf = row => contentSnapshotHash({
+      htmlContent: row.html_content,
+      codeType: row.code_type,
+      title: row.title,
+      description: row.description,
+      markdownTheme: row.markdown_theme
+    });
+    // Revision 1 baselines for every seeded Share, straight from the live
+    // projection, exactly as the real baseline backfill would write them —
+    // including the actual capture moment in created_at.
+    const capturedAt = Date.now();
+    const livePages = (await pool.query('SELECT id, html_content, code_type, title, description, markdown_theme, created_at FROM pages ORDER BY id ASC')).rows;
+    for (const row of livePages) {
+      const snapshot = {
+        share_id: row.id,
+        revision: 1,
+        html_content: row.html_content,
+        code_type: row.code_type || 'html',
+        title: row.title,
+        description: row.description,
+        markdown_theme: row.markdown_theme,
+        created_at: capturedAt
+      };
+      await pool.query(
+        `INSERT INTO share_revisions (
+           share_id, revision, html_content, code_type, title, description, markdown_theme, created_at,
+           snapshot_hash, source, actor, restored_from
+         )
+         VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8, 'baseline-backfill', 'maintenance:baseline-backfill', NULL)`,
+        [snapshot.share_id, snapshot.html_content, snapshot.code_type, snapshot.title,
+         snapshot.description, snapshot.markdown_theme, snapshot.created_at, hashOf(snapshot)]
+      );
+    }
+    // A second revision on the themed Share proves multi-revision restore and
+    // pointer movement; the materialized projection moves with it exactly as
+    // a real content save would commit them together. Its restored_from is a
+    // SYNTHETIC non-null value (there is no restore entry point in this
+    // milestone); restore must preserve it exactly.
+    const v2 = {
+      share_id: pages.markdownThemed,
+      html_content: '# QS27 drill markdown v2',
+      code_type: 'markdown',
+      title: 'QS27 drill markdown v2',
+      description: 'themed fixture v2',
+      markdown_theme: 'github',
+      created_at: base + 1500
+    };
+    await pool.query(
+      `INSERT INTO share_revisions (
+         share_id, revision, html_content, code_type, title, description, markdown_theme, created_at,
+         snapshot_hash, source, actor, restored_from
+       )
+       VALUES ($1, 2, $2, $3, $4, $5, $6, $7, $8, 'dashboard-edit', 'owner-dashboard', 1)`,
+      [v2.share_id, v2.html_content, v2.code_type, v2.title, v2.description,
+       v2.markdown_theme, v2.created_at, hashOf({ ...v2, revision: 2 })]
+    );
+    await pool.query(
+      `UPDATE pages SET current_revision = 2, html_content = '# QS27 drill markdown v2',
+         title = 'QS27 drill markdown v2', description = 'themed fixture v2'
+       WHERE id = $1`,
+      [pages.markdownThemed]
+    );
+    // Non-default published fixture: restore must preserve it exactly.
+    await pool.query('UPDATE pages SET published = FALSE WHERE id = $1', [pages.protectedPage]);
+    // A current pointer beyond 2^53 with real snapshot rows: BIGINT precision
+    // must survive dump → restore without passing through a float.
+    await pool.query(
+      `INSERT INTO pages (id, html_content, created_at, code_type, title, current_revision)
+       VALUES ($1, '<p>big revision body</p>', $2, 'html', 'QS27 big revision', $3)`,
+      [pages.bigRevision, base + 4000, REVISION_DRILL_VALUE]
+    );
+    const bigSnapshot = {
+      share_id: pages.bigRevision,
+      html_content: '<p>big revision body</p>',
+      code_type: 'html',
+      title: 'QS27 big revision',
+      description: null,
+      markdown_theme: null,
+      created_at: base + 4000
+    };
+    await pool.query(
+      `INSERT INTO share_revisions (
+         share_id, revision, html_content, code_type, title, description, markdown_theme, created_at,
+         snapshot_hash, source, actor, restored_from
+       )
+       VALUES
+         ($1, 1, $2, $3, $4, $5, $6, $7, $8, 'baseline-backfill', 'maintenance:baseline-backfill', NULL),
+         ($1, $9, $2, $3, $4, $5, $6, $7, $8, 'baseline-backfill', 'maintenance:baseline-backfill', NULL)`,
+      [bigSnapshot.share_id, bigSnapshot.html_content, bigSnapshot.code_type, bigSnapshot.title,
+       bigSnapshot.description, bigSnapshot.markdown_theme, bigSnapshot.created_at,
+       hashOf(bigSnapshot), REVISION_DRILL_VALUE]
+    );
+  }
+
+  return { accessRevisionSeeded, revisionsSeeded };
 }
 
 async function ensureContainerRunning(name, port, image) {
@@ -321,6 +442,11 @@ async function runDrill({ keepContainers = false, skipContainerSetup = false, ou
       // actually carries pages.access_revision (#25 migration 004). A 001–003
       // base must never claim schema004 coverage from this drill.
       accessRevision: seedResult.accessRevisionSeeded ? 'exercised' : 'absent-schema001-003',
+      // Content-revision coverage (#30 migration 007): snapshots seeded, big
+      // pointer exercised and non-default published preserved.
+      revisions: seedResult.revisionsSeeded ? 'exercised' : 'absent-schema001-006',
+      revisionCurrentPointer: seedResult.revisionsSeeded ? REVISION_DRILL_VALUE : null,
+      publishedFixture: seedResult.revisionsSeeded ? 'non-default-false-exercised' : 'absent-schema001-006',
       reconciliation: verification ? verification.reconciliation.status : 'not-available',
       safeToServe: false,
       durationsMs: {
@@ -376,8 +502,10 @@ if (require.main === module) {
 
 module.exports = {
   ACCESS_REVISION_DRILL_VALUE,
+  REVISION_DRILL_VALUE,
   FIXTURE,
   probeAccessRevisionColumn,
+  probeShareRevisionsTable,
   recreateRestoreDatabase,
   resetSourceDatabase,
   restoreUrlFor,

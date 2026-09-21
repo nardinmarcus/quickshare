@@ -2,11 +2,46 @@ const { invalidApiKey } = require('../utils/apiKeyIdentity');
 const { createPostgresPool } = require('./postgres-config');
 const { maintenanceError, PUBLISHING_LOCK } = require('./publishing');
 const { isAccessRevision, isAccessUpdate, requireAccessRevision, accessError } = require('../utils/shareAccess');
+const { isContentRevision, assertContentRevision, contentError, contentSnapshotHash } = require('../utils/contentRevision');
 const {
   buildManagementDailyStats,
   managementDateRange,
   managementRecentStart
 } = require('../utils/management-time');
+
+/**
+ * Row-level revision provenance (parent #24 §3): SHA-256 snapshot hash over
+ * the fixed payload, the real write path, a trusted actor where one exists
+ * (never secrets or invented identities) and the nullable restore origin
+ * (always NULL until a later ticket adds a real restore entry point).
+ * Repository-level defaults keep direct test fixtures honest-by-label; every
+ * production entry point passes explicit provenance (asserted in tests).
+ */
+function revisionProvenance(pageOrOptions, defaults) {
+  return {
+    snapshotHash: contentSnapshotHash(pageOrOptions),
+    source: pageOrOptions.actorSource || defaults.source,
+    actor: pageOrOptions.actorIdentity === undefined ? (defaults.actor || null) : (pageOrOptions.actorIdentity || null),
+    restoredFrom: null
+  };
+}
+
+/**
+ * Remote content projection returned with a 412 so the owner dashboard can
+ * show the real difference without granting any new management API surface.
+ * Never includes policy fields (password, expiry, favorite, views).
+ */
+function revisionConflictProjection(page) {
+  return {
+    id: page.id,
+    currentRevision: String(page.current_revision),
+    htmlContent: page.html_content,
+    codeType: page.code_type || 'html',
+    title: page.title,
+    description: page.description,
+    markdownTheme: page.markdown_theme || null
+  };
+}
 
 function buildAdminPageFilter(options = {}) {
   const conditions = [];
@@ -218,7 +253,100 @@ class PostgresPageRepository {
     );
 
     if (result.rowCount === 0) throw Object.assign(new Error('Share id already exists'), { code: '23505' });
+    // Every creation path (web, Share API, clone) writes the baseline snapshot
+    // on the same client/transaction; there is no versionless write entry.
+    const provenance = revisionProvenance(page, { source: 'web', actor: null });
+    await this.pool.query(
+      `
+        INSERT INTO share_revisions (
+          share_id, revision, html_content, code_type, title, description, markdown_theme, created_at,
+          snapshot_hash, source, actor, restored_from
+        )
+        VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL)
+      `,
+      [
+        page.id,
+        page.htmlContent,
+        page.codeType || 'html',
+        page.title || null,
+        page.description || null,
+        page.markdownTheme || null,
+        page.createdAt,
+        provenance.snapshotHash,
+        provenance.source,
+        provenance.actor
+      ]
+    );
     return { id: page.id };
+  }
+
+  async listContentRevisions(shareId) {
+    const result = await this.pool.query(
+      `
+        SELECT share_id, revision, html_content, code_type, title, description, markdown_theme, created_at,
+               snapshot_hash, source, actor, restored_from
+        FROM share_revisions
+        WHERE share_id = $1
+        ORDER BY revision ASC
+      `,
+      [shareId]
+    );
+    return result.rows;
+  }
+
+  async listPagesMissingBaselineRevision(limit = 200) {
+    const result = await this.pool.query(
+      `
+        SELECT p.id, p.html_content, p.code_type, p.title, p.description, p.markdown_theme, p.created_at, p.current_revision
+        FROM pages p
+        LEFT JOIN share_revisions r ON r.share_id = p.id AND r.revision = 1
+        WHERE r.share_id IS NULL
+        ORDER BY p.created_at ASC
+        LIMIT $1
+      `,
+      [limit]
+    );
+    return result.rows;
+  }
+
+  async listPagesNeedingTitleBackfill(limit = 200) {
+    const result = await this.pool.query(
+      `
+        SELECT id, html_content, code_type, title, created_at
+        FROM pages
+        WHERE title IS NULL OR title = '' OR title = id
+        ORDER BY created_at DESC
+        LIMIT $1
+      `,
+      [limit]
+    );
+    return result.rows;
+  }
+
+  /** Dedicated baseline-window write; only the backfill job may call this. */
+  async createBaselineRevision(page) {
+    const result = await this.pool.query(
+      `
+        INSERT INTO share_revisions (
+          share_id, revision, html_content, code_type, title, description, markdown_theme, created_at,
+          snapshot_hash, source, actor, restored_from
+        )
+        VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8, 'baseline-backfill', $9, NULL)
+        ON CONFLICT (share_id, revision) DO NOTHING
+      `,
+      [
+        page.id,
+        page.htmlContent,
+        page.codeType || 'html',
+        page.title || null,
+        page.description || null,
+        page.markdownTheme || null,
+        page.createdAt,
+        contentSnapshotHash(page),
+        page.actorIdentity || 'maintenance:baseline-backfill'
+      ]
+    );
+    return result.rowCount > 0;
   }
 
   async getById(id) {
@@ -459,29 +587,86 @@ class PostgresPageRepository {
   }
 
   async updatePage(id, options) {
+    // Baseline validation, snapshot decision and the materialized write must
+    // be atomic. Calls from publishing transactions reuse the transaction
+    // client; direct repository calls wrap themselves in a dedicated one so
+    // the CAS can never interleave with another writer between statements.
+    if (!this.transactionClient) {
+      return this.withTransaction(transaction => transaction.updatePage(id, options));
+    }
+    return this.updatePageInTransaction(id, options);
+  }
+
+  async updatePageInTransaction(id, options) {
     const conditional = isAccessUpdate(options) || options.accessPrecondition;
     if (conditional) requireAccessRevision(options.expectedAccessRevision);
-    const bumps = [];
-    if (options.revokeAccess === true || options.isProtected === true) bumps.push('TRUE');
-    else if (options.isProtected !== undefined) bumps.push('is_protected = 1');
+    const contentSubmitted = options.htmlContent !== undefined || options.title !== undefined
+      || options.description !== undefined || options.markdownTheme !== undefined;
+    const contentConditional = contentSubmitted || options.contentPrecondition;
+    if (contentConditional && !isContentRevision(options.expectedContentRevision)) {
+      throw contentError(options.expectedContentRevision === undefined ? 428 : 400,
+        options.expectedContentRevision === undefined
+          ? '请刷新 Share 后重新保存内容；未保存的输入已保留。'
+          : 'content baseline must be a positive decimal string');
+    }
+
+    // Lock the row first: baseline comparison, snapshot decision and the
+    // materialized write all observe the same committed state inside this
+    // transaction, and the lock releases only at COMMIT/ROLLBACK.
+    const current = await this.pool.query('SELECT * FROM pages WHERE id = $1 FOR UPDATE', [id]);
+    if (current.rowCount === 0) return false;
+    const page = current.rows[0];
+
+    if (contentConditional) {
+      try {
+        assertContentRevision(options.expectedContentRevision, page.current_revision);
+      } catch (error) {
+        if (error.code === 'CONTENT_REVISION_CONFLICT') {
+          error.current = revisionConflictProjection(page);
+        }
+        throw error;
+      }
+    }
+    if (conditional && String(page.access_revision) !== String(options.expectedAccessRevision)) {
+      throw accessError(412, 'Share 访问设置已更改，请刷新后重新确认；未保存的输入已保留。');
+    }
+
+    // Snapshot comparison runs on the canonical text values: an unchanged
+    // candidate must not create a revision, even when resubmitted.
+    const nextContent = {
+      html_content: options.htmlContent !== undefined ? options.htmlContent : page.html_content,
+      title: options.title !== undefined ? (options.title || null) : page.title,
+      description: options.description !== undefined ? (options.description || null) : page.description,
+      markdown_theme: options.markdownTheme !== undefined ? (options.markdownTheme || null) : page.markdown_theme
+    };
+    const contentChanged = contentSubmitted && (
+      nextContent.html_content !== page.html_content
+      || nextContent.title !== page.title
+      || nextContent.description !== page.description
+      || nextContent.markdown_theme !== page.markdown_theme
+    );
+
     const fields = [];
     const params = [];
     let paramIndex = 1;
+    const bumps = [];
+    if (options.revokeAccess === true || options.isProtected === true) bumps.push('TRUE');
+    else if (options.isProtected !== undefined) bumps.push('is_protected = 1');
 
-    if (options.title !== undefined) {
-      fields.push(`title = $${paramIndex}`);
-      params.push(options.title || null);
-      paramIndex += 1;
-    }
-    if (options.description !== undefined) {
-      fields.push(`description = $${paramIndex}`);
-      params.push(options.description || null);
-      paramIndex += 1;
-    }
-    if (options.htmlContent !== undefined) {
+    if (contentChanged) {
       fields.push(`html_content = $${paramIndex}`);
-      params.push(options.htmlContent);
+      params.push(nextContent.html_content);
       paramIndex += 1;
+      fields.push(`title = $${paramIndex}`);
+      params.push(nextContent.title);
+      paramIndex += 1;
+      fields.push(`description = $${paramIndex}`);
+      params.push(nextContent.description);
+      paramIndex += 1;
+      fields.push(`markdown_theme = $${paramIndex}`);
+      params.push(nextContent.markdown_theme);
+      paramIndex += 1;
+      fields.push('current_revision = current_revision + 1');
     }
     if (options.expiresAt !== undefined) {
       bumps.push(`expires_at IS DISTINCT FROM $${paramIndex}::bigint`);
@@ -500,34 +685,56 @@ class PostgresPageRepository {
       params.push(options.encryptedPassword || null);
       paramIndex += 1;
     }
-    if (options.markdownTheme !== undefined) {
-      fields.push(`markdown_theme = $${paramIndex}`);
-      params.push(options.markdownTheme || null);
-      paramIndex += 1;
-    }
 
     if (bumps.length) fields.push(`access_revision = access_revision + CASE WHEN ${bumps.join(' OR ')} THEN 1 ELSE 0 END`);
     if (fields.length === 0) {
-      if (!conditional && !options.returnUpdated) return true;
+      if (!options.returnUpdated) return true;
       fields.push('access_revision = access_revision');
     }
 
     params.push(id);
-    let condition = `id = $${paramIndex}`;
-    if (conditional) {
-      params.push(options.expectedAccessRevision);
-      condition += ` AND access_revision = $${paramIndex + 1}::bigint`;
-    }
     const result = await this.pool.query(
-      `UPDATE pages SET ${fields.join(', ')} WHERE ${condition} RETURNING *`,
+      `UPDATE pages SET ${fields.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
       params
     );
-    if (result.rowCount > 0) return options.returnUpdated ? result.rows[0] : true;
-    if (conditional) {
-      const existing = await this.pool.query('SELECT access_revision FROM pages WHERE id = $1', [id]);
-      if (existing.rowCount > 0) throw accessError(412, 'Share 访问设置已更改，请刷新后重新确认；未保存的输入已保留。');
+    if (result.rowCount === 0) return false;
+    const updated = result.rows[0];
+
+    if (contentChanged) {
+      // Snapshot and materialized projection commit in the same client
+      // transaction; a failure here rolls the whole save back.
+      const snapshotPayload = {
+        htmlContent: nextContent.html_content,
+        codeType: page.code_type || 'html',
+        title: nextContent.title,
+        description: nextContent.description,
+        markdownTheme: nextContent.markdown_theme
+      };
+      await this.pool.query(
+        `
+          INSERT INTO share_revisions (
+            share_id, revision, html_content, code_type, title, description, markdown_theme, created_at,
+            snapshot_hash, source, actor, restored_from
+          )
+          VALUES ($1, $2::bigint, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL)
+        `,
+        [
+          id,
+          updated.current_revision,
+          nextContent.html_content,
+          snapshotPayload.codeType,
+          nextContent.title,
+          nextContent.description,
+          nextContent.markdown_theme,
+          Date.now(),
+          contentSnapshotHash(snapshotPayload),
+          options.actorSource || 'dashboard-edit',
+          options.actorIdentity === undefined ? 'owner-dashboard' : (options.actorIdentity || null)
+        ]
+      );
     }
-    return false;
+
+    return options.returnUpdated ? updated : true;
   }
 
   async deletePage(id) {

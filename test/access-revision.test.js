@@ -15,10 +15,10 @@ test.before(async () => {
   origin = `http://127.0.0.1:${server.address().port}`;
 });
 test.after(() => server.close());
-async function request(path, method = 'GET', body, cookie) {
+async function request(path, method = 'GET', body, cookie, headers = {}) {
   return fetch(origin + path, {
     method,
-    headers: { 'Content-Type': 'application/json', Origin: origin, ...(cookie ? { Cookie: cookie } : {}) },
+    headers: { 'Content-Type': 'application/json', Origin: origin, ...(cookie ? { Cookie: cookie } : {}), ...headers },
     body: body === undefined ? undefined : JSON.stringify(body)
   });
 }
@@ -85,10 +85,13 @@ test('off then on, expiry change and explicit revoke advance only the target Sha
 test('content and Favorite Share changes preserve the access baseline and cookie', async () => {
   const id = await create();
   const cookie = await unlock(id);
-  const updated = await request(`/admin/pages/${id}`, 'PUT', { htmlContent: 'CONTENT ONLY' });
-  assert.equal((await updated.json()).page.accessRevision, '1');
+  const updated = await request(`/admin/pages/${id}`, 'PUT', { htmlContent: 'CONTENT ONLY' }, undefined, { 'If-Match': `\"content:${id}:1\"` });
+  const updatedBody = await updated.json();
+  assert.equal(updatedBody.page.accessRevision, '1');
+  assert.equal(updatedBody.page.currentRevision, '2');
   assert.equal((await request(`/admin/pages/${id}/favorite`, 'PUT', { isFavorite: true })).status, 200);
   assert.match(await (await request(`/admin/pages/${id}`)).text(), /"accessRevision":"1"/);
+  assert.match(await (await request(`/admin/pages/${id}`)).text(), /"currentRevision":"2"/);
   assert.match(await (await request(`/view/${id}`, 'GET', undefined, cookie)).text(), /CONTENT ONLY/);
   assert.equal((await request(`/view/${id}/view-event`, 'POST', undefined, cookie)).status, 204);
 });
@@ -98,8 +101,8 @@ test('access baseline accepts only canonical decimal strings and concurrent poli
   for (const value of [null, 1, '', '01', '0', '-1', '*', '1,2', '9223372036854775808']) {
     assert.equal((await request(`/admin/pages/${id}`, 'PUT', { revokeAccess: true, expectedAccessRevision: value })).status, 400);
   }
-  const responses = await Promise.all(['A', 'B'].map(title => request(`/admin/pages/${id}`, 'PUT', {
-    title, revokeAccess: true, expectedAccessRevision: '1'
+  const responses = await Promise.all(['A', 'B'].map(() => request(`/admin/pages/${id}`, 'PUT', {
+    revokeAccess: true, expectedAccessRevision: '1'
   })));
   assert.deepEqual(responses.map(r => r.status).sort(), [200, 412]);
 });
@@ -158,10 +161,12 @@ test('policy preconditions reject missing and stale baselines without partially 
   const changed = await request(`/admin/pages/${id}`, 'PUT', { revokeAccess: true, expectedAccessRevision: '1' });
   assert.equal(changed.status, 200);
   assert.equal((await changed.json()).page.accessRevision, '2');
-  const stale = await request(`/admin/pages/${id}`, 'PUT', { htmlContent: 'UNSAVED', isProtected: false, expectedAccessRevision: '1' });
+  // Content baseline is valid here, so the stale ACCESS baseline is what
+  // surfaces; the combined save must be rejected without saving either side.
+  const stale = await request(`/admin/pages/${id}`, 'PUT', { htmlContent: 'UNSAVED', isProtected: false, expectedAccessRevision: '1' }, undefined, { 'If-Match': `\"content:${id}:1\"` });
   assert.equal(stale.status, 412);
   const cookie = await unlock(id);
-  assert.match(await (await request(`/view/${id}`, 'GET', undefined, cookie)).text(), /ISSUE25 PRIVATE BODY/);
+  assert.doesNotMatch(await (await request(`/view/${id}`, 'GET', undefined, cookie)).text(), /UNSAVED/);
   assert.equal((await request(`/api/pages/${id}/protect`, 'POST', { isProtected: false })).status, 428);
   assert.equal((await request(`/api/pages/${id}/protect`, 'POST', { isProtected: false, expectedAccessRevision: '1' })).status, 412);
 });

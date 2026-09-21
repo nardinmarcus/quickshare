@@ -237,7 +237,8 @@ test('editing and expiring a Favorite Share preserves state and keeps admin favo
     headers: {
       Cookie: dashboardCookie,
       'Content-Type': 'application/json',
-      'X-CSRF-Token': csrfToken
+      'X-CSRF-Token': csrfToken,
+      'If-Match': `\"content:${sharedPage.urlId}:1\"`
     },
     body: JSON.stringify({
       expectedAccessRevision: '1',

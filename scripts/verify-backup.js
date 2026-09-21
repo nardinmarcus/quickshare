@@ -64,6 +64,8 @@ const COVERED_OBJECTS = [
   'page-full-rows',
   'markdown-themes',
   'favorite-share',
+  'share-revisions',
+  'revision-current-pointer',
   'password-verify-and-decrypt',
   'expiry',
   'managed-api-keys',
@@ -71,6 +73,15 @@ const COVERED_OBJECTS = [
   'site-settings',
   'migration-ledger'
 ];
+
+const REVISION_COMPARED_COLUMNS = Object.freeze([
+  'share_id', 'revision', 'html_content', 'code_type', 'title', 'description', 'markdown_theme', 'created_at',
+  'snapshot_hash', 'source', 'actor', 'restored_from'
+]);
+
+const POINTER_CONTENT_COLUMNS = Object.freeze([
+  'html_content', 'code_type', 'title', 'description', 'markdown_theme'
+]);
 
 function sha256Hex(value) {
   return require('crypto').createHash('sha256').update(String(value), 'utf8').digest('hex');
@@ -146,6 +157,82 @@ function comparePageInventory(sourceRows, restoreRows) {
     issues,
     contentHashes,
     comparedColumns
+  };
+}
+
+/**
+ * Field-specific comparison of the immutable snapshot inventory, keyed by
+ * (share_id, revision). A tampered snapshot is reported with its field and
+ * exact share/revision — never folded into a generic mismatch.
+ */
+function compareRevisionInventory(sourceRows, restoreRows) {
+  const keyOf = row => `${row.share_id}:${row.revision}`;
+  const sourceByKey = new Map(sourceRows.map(row => [keyOf(row), row]));
+  const restoreByKey = new Map(restoreRows.map(row => [keyOf(row), row]));
+  const issues = [];
+
+  for (const [key, sourceRow] of sourceByKey) {
+    const restoreRow = restoreByKey.get(key);
+    if (!restoreRow) {
+      issues.push({ field: 'revision', shareId: sourceRow.share_id, revision: String(sourceRow.revision), message: `missing snapshot ${key} on restore side` });
+      continue;
+    }
+    for (const column of REVISION_COMPARED_COLUMNS) {
+      if (valuesEqual(sourceRow[column], restoreRow[column])) continue;
+      issues.push({
+        field: column,
+        shareId: sourceRow.share_id,
+        revision: String(sourceRow.revision),
+        message: `snapshot ${column} drift for ${key}: source ${JSON.stringify(sourceRow[column])}, restore ${JSON.stringify(restoreRow[column])}`
+      });
+    }
+  }
+  for (const [key, restoreRow] of restoreByKey) {
+    if (!sourceByKey.has(key)) {
+      issues.push({ field: 'revision', shareId: restoreRow.share_id, revision: String(restoreRow.revision), message: `unexpected snapshot ${key} on restore side` });
+    }
+  }
+
+  return { ok: issues.length === 0, issues, comparedColumns: REVISION_COMPARED_COLUMNS };
+}
+
+/**
+ * Current-pointer consistency: every page's current_revision must exist as a
+ * snapshot whose content exactly matches the materialized projection, and
+ * published must be a real boolean. Runs per database side.
+ */
+function verifyRevisionPointers(pages) {
+  const issues = [];
+  const byKey = new Map();
+  return function check(revisions) {
+    byKey.clear();
+    for (const row of revisions) byKey.set(`${row.share_id}:${row.revision}`, row);
+    for (const page of pages) {
+      const pointer = page.current_revision === null || page.current_revision === undefined ? null : String(page.current_revision);
+      if (pointer === null) {
+        issues.push({ field: 'current_revision', pageId: page.id, message: `page ${page.id} is missing current_revision` });
+        continue;
+      }
+      const snapshot = byKey.get(`${page.id}:${pointer}`);
+      if (!snapshot) {
+        issues.push({ field: 'current_revision', pageId: page.id, message: `current_revision ${pointer} for ${page.id} has no snapshot row` });
+        continue;
+      }
+      for (const column of POINTER_CONTENT_COLUMNS) {
+        const snapshotValue = snapshot[column] === undefined ? null : snapshot[column];
+        const projectionValue = page[column] === undefined ? null : page[column];
+        if (valuesEqual(snapshotValue, projectionValue)) continue;
+        issues.push({
+          field: column,
+          pageId: page.id,
+          message: `snapshot/projection ${column} drift for ${page.id}@${pointer}: snapshot ${JSON.stringify(snapshotValue)}, projection ${JSON.stringify(projectionValue)}`
+        });
+      }
+      if (typeof page.published !== 'boolean') {
+        issues.push({ field: 'published', pageId: page.id, message: `published must be a boolean for ${page.id}` });
+      }
+    }
+    return { ok: issues.length === 0, issues, details: { pages: pages.length, snapshots: revisions.length } };
   };
 }
 
@@ -430,10 +517,12 @@ async function runVerification({
 
   try {
     // Two independent connections, queried concurrently.
-    const [sourcePages, restorePages, sourceAudit, restoreAudit, sourceKeys, restoreKeys, sourceSettings, restoreSettings, sourceLedger, restoreLedger] =
+    const [sourcePages, restorePages, sourceRevisions, restoreRevisions, sourceAudit, restoreAudit, sourceKeys, restoreKeys, sourceSettings, restoreSettings, sourceLedger, restoreLedger] =
       await Promise.all([
         sourcePool.query('SELECT * FROM pages ORDER BY id ASC'),
         restorePool.query('SELECT * FROM pages ORDER BY id ASC'),
+        sourcePool.query(`SELECT ${REVISION_COMPARED_COLUMNS.join(', ')} FROM share_revisions ORDER BY share_id ASC, revision ASC`),
+        restorePool.query(`SELECT ${REVISION_COMPARED_COLUMNS.join(', ')} FROM share_revisions ORDER BY share_id ASC, revision ASC`),
         sourcePool.query('SELECT action, page_id, details, ip, created_at FROM audit_logs ORDER BY id ASC'),
         restorePool.query('SELECT action, page_id, details, ip, created_at FROM audit_logs ORDER BY id ASC'),
         sourcePool.query(`SELECT ${API_KEY_COMPARED_COLUMNS.join(', ')} FROM api_keys ORDER BY id ASC`),
@@ -454,6 +543,27 @@ async function runVerification({
         comparedColumns: inventory.comparedColumns,
         contentHashes: Object.fromEntries(inventory.contentHashes)
       }
+    });
+
+    // Immutable content snapshots restore exactly, and every page's current
+    // pointer still names a snapshot identical to the materialized projection.
+    const revisionsInventory = compareRevisionInventory(sourceRevisions.rows, restoreRevisions.rows);
+    checks.push({
+      name: 'shareRevisions',
+      ok: revisionsInventory.ok,
+      issues: revisionsInventory.issues,
+      details: {
+        snapshotCount: restoreRevisions.rows.length,
+        comparedColumns: revisionsInventory.comparedColumns
+      }
+    });
+    const checkRestoredPointers = verifyRevisionPointers(restorePages.rows);
+    const restoredPointerCheck = checkRestoredPointers(restoreRevisions.rows);
+    checks.push({
+      name: 'revisionCurrentPointer',
+      ok: restoredPointerCheck.ok,
+      issues: restoredPointerCheck.issues,
+      details: restoredPointerCheck.details
     });
 
     const localMigrations = loadMigrations();
@@ -623,14 +733,18 @@ module.exports = {
   COVERED_OBJECTS,
   HARD_REVOCATION_AUDIT_ACTIONS,
   POLICY_FIELD_NAMES,
+  REVISION_COMPARED_COLUMNS,
+  POINTER_CONTENT_COLUMNS,
   buildVerificationReport,
   classifyRevocationCoverage,
   comparePageInventory,
+  compareRevisionInventory,
   findPostSnapshotRevocations,
   planApiKeyVerification,
   planCredentialVerification,
   reconciliationExitCode,
   runVerification,
   sha256Hex,
-  verifyMigrationLedger
+  verifyMigrationLedger,
+  verifyRevisionPointers
 };

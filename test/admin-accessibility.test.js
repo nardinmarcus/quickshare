@@ -231,7 +231,7 @@ test('detail editor discards hidden invalid passwords and invalidates stale prev
 
   assert.match(detailScript, /if \(!protectedCheckbox\.checked\) \{[\s\S]*?passwordInput\.value = ''/);
   assert.match(detailScript, /protectedCheckbox\.checked && customPassword && !customPasswordPattern\.test\(customPassword\)/);
-  assert.match(detailScript, /if \(protectedCheckbox\.checked && customPassword\) payload\.password = customPassword/);
+  assert.match(detailScript, /if \(protectedCheckbox\.checked && password\.value\) payload\.password = password\.value/);
   assert.match(detailScript, /function resetRenderedPreview\(\)/);
   assert.match(detailScript, /resetRenderedPreview\(\);/);
 });

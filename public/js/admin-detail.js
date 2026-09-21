@@ -5,7 +5,8 @@
   const editForm = document.getElementById('edit-form');
   const contentTextarea = document.getElementById('content-textarea');
   const cancelBtn = document.getElementById('edit-cancel');
-  const saveBtn = document.getElementById('edit-save');
+  const saveContentBtn = document.getElementById('edit-save-content');
+  const saveAccessBtn = document.getElementById('edit-save-access');
   const clearExpiresBtn = document.getElementById('clear-expires');
   const protectedCheckbox = document.getElementById('edit-protected');
   const protectionHint = document.getElementById('protection-hint');
@@ -24,14 +25,36 @@
   const pageDataElement = document.getElementById('page-data');
   const renderedPreview = document.getElementById('rendered-preview');
   const themeSelect = document.getElementById('edit-theme');
+  const contentRevisionDisplay = document.getElementById('content-revision-display');
+  const conflictPanel = document.getElementById('conflict-panel');
+  const conflictSummary = document.getElementById('conflict-summary');
+  const conflictMeta = document.getElementById('conflict-meta');
+  const conflictDiff = document.getElementById('conflict-diff');
+  const conflictDiffStatus = document.getElementById('conflict-diff-status');
+  const conflictTakeRemoteBtn = document.getElementById('conflict-take-remote');
+  const conflictSaveMineBtn = document.getElementById('conflict-save-mine');
   const adminTime = window.AdminTime;
+  const SourceDiff = window.SourceDiff;
   const customPasswordPattern = /^[A-Za-z0-9!@#$%^&*()_+\-=.,?~]{4,12}$/;
   const customPasswordError = '自定义密码必须为 4–12 位，仅可包含英文字母、数字及 !@#$%^&*()_+-=.,?~';
   let originalData = {};
+  // The textarea value captured when the current form baseline was set. A
+  // <textarea> normalizes CRLF/CR to LF in its .value, so an untouched or
+  // reverted body must never be re-sent: only an ACTUAL edit transmits
+  // htmlContent, keeping the server-side raw bytes byte-identical.
+  let baselineTextareaValue = null;
+  // The remote state behind the currently displayed conflict, if any.
+  let conflictRemote = null;
+  let saveKind = 'content';
 
   function csrfToken() {
     const meta = document.querySelector('meta[name="csrf-token"]');
     return meta ? meta.getAttribute('content') : '';
+  }
+
+  function contentIfMatch(data) {
+    // Strong HTTP entity-tag: always the double-quoted form.
+    return '"content:' + data.id + ':' + data.currentRevision + '"';
   }
 
   try {
@@ -68,6 +91,18 @@
     renderedPreview.dataset.loaded = 'true';
   }
 
+  function hideConflictPanel() {
+    conflictRemote = null;
+    conflictPanel.hidden = true;
+    conflictDiff.textContent = '';
+    conflictMeta.textContent = '';
+    conflictDiffStatus.textContent = '';
+  }
+
+  function captureContentBaseline() {
+    baselineTextareaValue = contentTextarea.value;
+  }
+
   function resetForm() {
     document.getElementById('edit-title').value = originalData.title || '';
     document.getElementById('edit-description').value = originalData.description || '';
@@ -89,6 +124,7 @@
     }
     updateProtectionHint(Boolean(originalData.isProtected));
     updatePasswordInputVisibility();
+    captureContentBaseline();
   }
 
   function enterEditMode() {
@@ -107,6 +143,7 @@
     editForm.hidden = true;
     contentTextarea.setAttribute('readonly', '');
     contentTextarea.classList.remove('admin-content-editable');
+    hideConflictPanel();
     resetForm();
     editBtn.focus();
   }
@@ -120,6 +157,7 @@
   function updateViewMode(data) {
     const revisionDisplay = document.getElementById('access-revision-display');
     if (revisionDisplay) revisionDisplay.textContent = data.accessRevision;
+    if (contentRevisionDisplay) contentRevisionDisplay.textContent = data.currentRevision;
     titleDisplay.textContent = data.title || data.id;
 
     if (data.description) {
@@ -154,6 +192,16 @@
     }
   }
 
+  function applySavedPage(page) {
+    originalData = {
+      ...originalData,
+      ...page,
+      markdownTheme: page.markdownTheme || ''
+    };
+    updateViewMode(originalData);
+    resetRenderedPreview();
+  }
+
   if (revokeBtn) revokeBtn.addEventListener('click', async function () {
     if (revokeBtn.disabled) return;
     revokeBtn.disabled = true;
@@ -168,10 +216,8 @@
       });
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || '撤销失败，请稍后重试');
-      originalData = { ...originalData, ...data.page };
-      updateViewMode(data.page);
+      applySavedPage(data.page);
       resetForm();
-      resetRenderedPreview();
       accessStatus.textContent = '已撤销此前的解锁访问；接收者需重新输入密码。公开 Share 仍可直接访问。';
     } catch (error) {
       accessStatus.textContent = error.message || '撤销失败，请稍后重试';
@@ -185,6 +231,226 @@
 
   editBtn.addEventListener('click', enterEditMode);
   cancelBtn.addEventListener('click', exitEditMode);
+
+  // Capture the initial (browser-normalized) body baseline for the rendered form.
+  captureContentBaseline();
+
+  function setSaving(saving) {
+    saveContentBtn.disabled = saving;
+    saveAccessBtn.disabled = saving;
+    editForm.setAttribute('aria-busy', String(saving));
+    saveContentBtn.textContent = saving && saveKind === 'content' ? '保存中…' : '保存内容';
+    saveAccessBtn.textContent = saving && saveKind === 'access' ? '保存中…' : '保存访问设置';
+  }
+
+  function validateCommonInputs() {
+    if (expiresInput.value) {
+      const expiresAt = adminTime.parseDateTimeLocal(expiresInput.value);
+      if (!Number.isFinite(expiresAt) || expiresAt < Date.now()) {
+        expiresHint.textContent = '过期时间不能早于当前时间';
+        expiresHint.className = 'field-hint error';
+        Toast.error('请设置有效的过期时间');
+        expiresInput.focus();
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function collectExpiresAt() {
+    const expiresAtValue = expiresInput.value;
+    const displayedExpiry = originalData.expiresAt ? adminTime.toDateTimeLocal(originalData.expiresAt) : '';
+    // datetime-local displays minutes; an untouched control must not round the policy instant.
+    return expiresAtValue === displayedExpiry
+      ? originalData.expiresAt
+      : expiresAtValue ? adminTime.parseDateTimeLocal(expiresAtValue) : null;
+  }
+
+  function readCustomPassword() {
+    const customPassword = passwordInput.value;
+    if (protectedCheckbox.checked && customPassword && !customPasswordPattern.test(customPassword)) {
+      passwordHint.textContent = customPasswordError;
+      passwordHint.className = 'field-hint error';
+      passwordInput.setAttribute('aria-invalid', 'true');
+      Toast.error(customPasswordError);
+      passwordInput.focus();
+      return { error: true };
+    }
+    return { error: false, value: customPassword };
+  }
+
+  async function saveContent(forceBaseline) {
+    const ifMatch = forceBaseline || contentIfMatch(originalData);
+    setSaving(true);
+    try {
+      const payload = {
+        title: document.getElementById('edit-title').value.trim() || null,
+        description: document.getElementById('edit-description').value.trim() || null
+      };
+      if (themeSelect) payload.markdownTheme = themeSelect.value;
+      // Candidate identity is preserved on EVERY content save path. A
+      // textarea normalizes CRLF/CR to LF in .value, so an untouched (or
+      // reverted) body transmits the ORIGINAL raw bytes from the page
+      // baseline — never its LF-normalized form. An actual edit transmits
+      // the edited value. "Save my version" therefore submits exactly the
+      // candidate the owner reviewed (user metadata + the shown body), never
+      // a silent merge that would keep a remote body under a new baseline.
+      payload.htmlContent = contentTextarea.value === baselineTextareaValue
+        ? originalData.htmlContent
+        : contentTextarea.value;
+
+      const response = await fetch('/admin/pages/' + encodeURIComponent(originalData.id), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-CSRF-Token': csrfToken(),
+          'If-Match': ifMatch
+        },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+
+      if (response.status === 412 && data.code === 'CONTENT_REVISION_CONFLICT') {
+        showConflict(data.current);
+        return;
+      }
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || '保存内容失败');
+      }
+
+      applySavedPage(data.page);
+      hideConflictPanel();
+      exitEditMode();
+      Toast.success('内容已保存');
+    } catch (error) {
+      Toast.error(error.message || '保存内容失败');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveAccess() {
+    if (!validateCommonInputs()) return;
+    const password = readCustomPassword();
+    if (password.error) return;
+
+    setSaving(true);
+    try {
+      const payload = {
+        isProtected: protectedCheckbox.checked,
+        expiresAt: collectExpiresAt(),
+        expectedAccessRevision: originalData.accessRevision
+      };
+      if (protectedCheckbox.checked && password.value) payload.password = password.value;
+
+      const response = await fetch('/admin/pages/' + encodeURIComponent(originalData.id), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-CSRF-Token': csrfToken()
+        },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || '保存访问设置失败');
+      }
+
+      applySavedPage(data.page);
+      hideConflictPanel();
+      exitEditMode();
+      Toast.success('访问设置已保存');
+    } catch (error) {
+      Toast.error(error.message || '保存访问设置失败');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function metaFields(remote) {
+    const fields = [
+      { label: '标题', remoteValue: remote.title, localValue: document.getElementById('edit-title').value.trim() || null },
+      { label: '描述', remoteValue: remote.description, localValue: document.getElementById('edit-description').value.trim() || null }
+    ];
+    if (themeSelect) {
+      fields.push({ label: 'Markdown 主题', remoteValue: remote.markdownTheme, localValue: themeSelect.value });
+    }
+    return fields;
+  }
+
+  async function showConflict(remote) {
+    if (!remote) {
+      Toast.error('内容已在此页面之外被修改，请刷新后重试');
+      return;
+    }
+    conflictRemote = remote;
+    conflictPanel.hidden = false;
+    conflictSummary.textContent = '此 Share 当前已是第 ' + remote.currentRevision + ' 版，你的编辑基于第 '
+      + originalData.currentRevision + ' 版。未保存的稿件已保留，请先查看差异，再选择采用远端或保留你的版本。';
+
+    SourceDiff.renderMetaChanges(conflictMeta, metaFields(remote));
+    conflictDiff.textContent = '';
+    conflictDiffStatus.textContent = '正在比较当前远端与你的稿件…';
+
+    // Compare remote (old) with the retained draft (new). Any result that
+    // belongs to an earlier comparison target is discarded inside SourceDiff.
+    const result = await SourceDiff.compare(remote.htmlContent, contentTextarea.value);
+    if (conflictRemote !== remote) return;
+
+    if (result.status === 'ok') {
+      SourceDiff.renderParts(conflictDiff, result.parts);
+      const changed = result.parts.some(part => part.added || part.removed);
+      conflictDiffStatus.textContent = changed
+        ? '以下为正文行级差异（当前远端 → 你的稿件）：'
+        : '正文没有行级差异；请检查上方标题、描述或主题的取值变化。';
+    } else {
+      // Timeout/worker failure: never show this as "no differences".
+      conflictDiff.textContent = '';
+      conflictDiffStatus.textContent = '差异过大，未完成比较。可分别打开公开页面与编辑框查看完整原稿。';
+    }
+  }
+
+  conflictTakeRemoteBtn.addEventListener('click', function () {
+    if (!conflictRemote) return;
+    originalData = {
+      ...originalData,
+      title: conflictRemote.title,
+      description: conflictRemote.description,
+      htmlContent: conflictRemote.htmlContent,
+      markdownTheme: conflictRemote.markdownTheme || '',
+      currentRevision: conflictRemote.currentRevision
+    };
+    hideConflictPanel();
+    resetForm();
+    updateViewMode(originalData);
+    resetRenderedPreview();
+    Toast.success('已采用当前远端内容，你的未保存修改已丢弃');
+  });
+
+  conflictSaveMineBtn.addEventListener('click', function () {
+    if (!conflictRemote) return;
+    // Explicit overwrite after the owner reviewed the difference: the fresh
+    // baseline comes from the conflict payload, never fetched silently.
+    saveContent('"content:' + originalData.id + ':' + conflictRemote.currentRevision + '"');
+  });
+
+  saveContentBtn.addEventListener('click', function () { saveKind = 'content'; });
+  saveAccessBtn.addEventListener('click', function () { saveKind = 'access'; });
+
+  editForm.addEventListener('submit', async function (event) {
+    event.preventDefault();
+    if (saveContentBtn.disabled) return;
+    if (saveKind === 'access') {
+      await saveAccess();
+      return;
+    }
+    // Content saves never submit access fields, so access-only validation
+    // must not block a content save.
+    await saveContent();
+  });
 
   clearExpiresBtn.addEventListener('click', function () {
     expiresInput.value = '';
@@ -245,88 +511,6 @@
       ? '<i class="fas fa-eye-slash" aria-hidden="true"></i>'
       : '<i class="fas fa-eye" aria-hidden="true"></i>';
     togglePasswordBtn.setAttribute('aria-label', isHidden ? '隐藏密码' : '显示密码');
-  });
-
-  editForm.addEventListener('submit', async function (event) {
-    event.preventDefault();
-
-    const title = document.getElementById('edit-title').value.trim();
-    const description = document.getElementById('edit-description').value.trim();
-    const expiresAtValue = expiresInput.value;
-    const displayedExpiry = originalData.expiresAt ? adminTime.toDateTimeLocal(originalData.expiresAt) : '';
-    // datetime-local displays minutes; an untouched control must not round the policy instant.
-    const expiresAt = expiresAtValue === displayedExpiry
-      ? originalData.expiresAt
-      : expiresAtValue ? adminTime.parseDateTimeLocal(expiresAtValue) : null;
-    const customPassword = passwordInput.value;
-
-    if (protectedCheckbox.checked && customPassword && !customPasswordPattern.test(customPassword)) {
-      passwordHint.textContent = customPasswordError;
-      passwordHint.className = 'field-hint error';
-      passwordInput.setAttribute('aria-invalid', 'true');
-      Toast.error(customPasswordError);
-      passwordInput.focus();
-      return;
-    }
-
-    if (expiresAtValue && (!Number.isFinite(expiresAt) || expiresAt < Date.now())) {
-      expiresHint.textContent = '过期时间不能早于当前时间';
-      expiresHint.className = 'field-hint error';
-      Toast.error('请设置有效的过期时间');
-      expiresInput.focus();
-      return;
-    }
-
-    const payload = {
-      title: title || null,
-      description: description || null,
-      htmlContent: contentTextarea.value,
-      isProtected: protectedCheckbox.checked,
-      expectedAccessRevision: originalData.accessRevision,
-      expiresAt
-    };
-    if (themeSelect) payload.markdownTheme = themeSelect.value;
-    if (protectedCheckbox.checked && customPassword) payload.password = customPassword;
-
-    saveBtn.disabled = true;
-    saveBtn.textContent = '保存中…';
-    editForm.setAttribute('aria-busy', 'true');
-
-    try {
-      const response = await fetch('/admin/pages/' + encodeURIComponent(originalData.id), {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          'X-CSRF-Token': csrfToken()
-        },
-        body: JSON.stringify(payload)
-      });
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || '保存修改失败');
-      }
-
-      originalData = {
-        ...originalData,
-        ...data.page,
-        markdownTheme: data.page.markdownTheme || ''
-      };
-      updateViewMode(data.page);
-      resetRenderedPreview();
-      if (document.getElementById('tab-rendered').getAttribute('aria-selected') === 'true') {
-        loadRenderedPreview();
-      }
-      exitEditMode();
-      Toast.success('修改已保存');
-    } catch (error) {
-      Toast.error(error.message || '保存修改失败');
-    } finally {
-      editForm.setAttribute('aria-busy', 'false');
-      saveBtn.disabled = false;
-      saveBtn.textContent = '保存修改';
-    }
   });
 
   const tabs = Array.from(document.querySelectorAll('.admin-tab'));

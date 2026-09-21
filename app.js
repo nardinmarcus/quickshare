@@ -15,6 +15,7 @@ const { managedIdentity } = require('./utils/apiKeyIdentity');
 const { CONTENT_TYPES, CREATE_SHARE, apiCapabilities } = require('./utils/apiCapabilities');
 const capabilities = apiCapabilities(config);
 const { isAccessRevision, requireAccessRevision } = require('./utils/shareAccess');
+const { contentEtag, requireContentBaselineFor } = require('./utils/contentRevision');
 const { publicShareProjection } = require('./utils/publicShareProjection');
 const { createPageRepository } = require('./models/pageRepository');
 const { createPublishing, sendPublishingError } = require('./models/publishing');
@@ -708,7 +709,7 @@ function parseFutureExpiry(expiresAt, now) {
   return { value, error: null };
 }
 
-async function createPageFromInput(input, repository) {
+async function createPageFromInput(input, repository, provenance = {}) {
   const {
     htmlContent,
     codeType,
@@ -760,7 +761,11 @@ async function createPageFromInput(input, repository) {
     description: pageDescription,
     createdAt,
     expiresAt: expiry.value,
-    markdownTheme: resolvedTheme
+    markdownTheme: resolvedTheme,
+    // Row-level revision provenance (#24 §3): the real write path plus a
+    // trusted actor where one exists (managed key logical id); never secrets.
+    actorSource: provenance.actorSource,
+    actorIdentity: provenance.actorIdentity
   }, repository);
 
   return {
@@ -1415,6 +1420,8 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       isProtected: sharedPage.is_protected === 1,
       isFavorite: sharedPage.is_favorite === true,
       accessRevision: sharedPage.access_revision,
+      currentRevision: sharedPage.current_revision,
+      published: sharedPage.published === true,
       password: visiblePagePassword(sharedPage),
       expiresAt: sharedPage.expires_at,
       markdownTheme: sharedPage.code_type === 'markdown'
@@ -1499,7 +1506,7 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
         });
       }
 
-      const { title, description, htmlContent, expiresAt, isProtected, password, markdownTheme } = req.body;
+      const { title, description, htmlContent, expiresAt, isProtected, password, markdownTheme, codeType } = req.body;
       const customPassword = parseCustomPassword(password);
 
       if (customPassword.error) {
@@ -1519,6 +1526,22 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
         updateOptions.revokeAccess = req.body.revokeAccess === true;
         // Keep even unchanged protection submissions conditional on the displayed baseline.
         updateOptions.accessPrecondition = true;
+      }
+      // Row-level revision provenance: the owner dashboard is the trusted actor.
+      updateOptions.actorSource = 'dashboard-edit';
+      updateOptions.actorIdentity = 'owner-dashboard';
+
+      // Content edits (body, title, description, Markdown theme) require a
+      // concrete strong content baseline; a combined save must pass both
+      // baselines atomically inside the repository update.
+      const contentSubmitted = htmlContent !== undefined || title !== undefined
+        || description !== undefined || markdownTheme !== undefined;
+      if (contentSubmitted) {
+        if (codeType !== undefined && codeType !== page.code_type) {
+          return (res) => res.status(400).json({ success: false, code: 'INVALID_CONTENT_REVISION', error: '内容类型在创建后固定，不能修改' });
+        }
+        const baseline = requireContentBaselineFor(req.params.id, req.get('If-Match'));
+        updateOptions.expectedContentRevision = baseline.revision;
       }
 
       if (title !== undefined) {
@@ -1567,11 +1590,14 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
       if (!saved) return (res) => res.status(404).json({ success: false, error: 'Share not found' });
 
       const updatedPage = saved;
-
+      const contentRevision = String(updatedPage.current_revision);
       await repository.createAuditLog({
         action: 'page.update',
         pageId: req.params.id,
-        details: JSON.stringify({ fields: Object.keys(updateOptions) }),
+        details: JSON.stringify({
+          fields: Object.keys(updateOptions),
+          revision: contentRevision
+        }),
         ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
       });
 
@@ -1585,6 +1611,7 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
           codeType: updatedPage.code_type,
           isProtected: updatedPage.is_protected === 1,
           accessRevision: updatedPage.access_revision,
+          currentRevision: contentRevision,
           password: visiblePagePassword(updatedPage),
           expiresAt: updatedPage.expires_at,
           markdownTheme: updatedPage.markdown_theme,
@@ -1597,6 +1624,20 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
     if (sendPublishingError(res, error)) return;
     if (error.code?.startsWith('ACCESS_') || error.code === 'INVALID_ACCESS_REVISION') {
       return res.status(error.status).json({ success: false, code: error.code, error: error.message });
+    }
+    if (error.code === 'CONTENT_PRECONDITION_REQUIRED' || error.code === 'INVALID_CONTENT_REVISION') {
+      return res.status(error.status).json({ success: false, code: error.code, error: error.message });
+    }
+    if (error.code === 'CONTENT_REVISION_CONFLICT') {
+      // The dashboard owns this route; the conflict payload carries the remote
+      // content so the owner can compare it with the retained draft. Policy
+      // fields are never included.
+      return res.status(error.status).json({
+        success: false,
+        code: error.code,
+        error: error.message,
+        current: error.current || null
+      });
     }
     console.error('Update page failed:', error);
     return res.status(500).json({
@@ -1695,7 +1736,9 @@ app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requir
         expiresAt: null,
         markdownTheme: page.code_type === 'markdown'
           ? resolveMarkdownThemeId(page.markdown_theme)
-          : null
+          : null,
+        actorSource: 'clone',
+        actorIdentity: 'owner-dashboard'
       }, repository);
 
       return (res) => res.redirect('/admin/pages/' + encodeURIComponent(newId));
@@ -1711,7 +1754,7 @@ app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requir
 app.post('/api/pages/create', privateNoStore, requireBrowserPublishAccess, parseShareJson, requireBrowserPublishCsrf, async (req, res) => {
   try {
     const respond = await publishing.run(async (repository) => {
-      const result = await createPageFromInput(req.body, repository);
+      const result = await createPageFromInput(req.body, repository, { actorSource: 'web', actorIdentity: null });
 
       if (result.error) {
         return (res) => res.status(400).json({
@@ -1793,7 +1836,11 @@ app.get('/api/v1/capabilities', privateNoStore, requireApiKey, (req, res) => {
 app.post(CREATE_SHARE.path, privateNoStore, requireApiKey, parseShareJson, async (req, res) => {
   try {
     const respond = await publishing.run(async (repository) => {
-      const result = await createPageFromInput(req.body, repository);
+      // Trusted actor identity: managed keys carry their logical key id;
+      // legacy environment keys are recorded as such. Never the secret.
+      const identity = req.apiKeyIdentity || {};
+      const actorIdentity = identity.credentialKind === 'managed' ? `api-key:${identity.id}` : 'legacy-api-key';
+      const result = await createPageFromInput(req.body, repository, { actorSource: 'api', actorIdentity });
 
       if (result.error) {
         return (res) => res.status(400).json({ success: false, error: result.error });

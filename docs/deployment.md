@@ -42,7 +42,7 @@ npm run hash-password -- "your-admin-password"
    ```
 
    首次执行应列出 applied；紧接着的第二次必须全部 skipped。命令结束后立即移除该 job 的 secret 和环境变量。
-4. 核对 `public.quickshare_schema_migrations`、`pages`、`audit_logs`、`api_keys`、`site_settings`、记录数和索引。当前迁移台账应包含 `001`–`006`；`api_keys.credential_version` 必须为正 BIGINT，初始为 1，已有 ID/hash 保持；`pages.access_revision` 必须保留精确 BIGINT 版本；`site_settings.publishing_writes_paused` 必须为 `BOOLEAN NOT NULL DEFAULT FALSE`（已有维护状态不得被重置）；`pages.is_favorite` 必须为 `BOOLEAN NOT NULL DEFAULT FALSE`，且不存在 `NULL`。`site_settings.id=1` 必须存在，`homepage_password_required` 应与迁移前保持一致。
+4. 核对 `public.quickshare_schema_migrations`、`pages`、`share_revisions`、`audit_logs`、`api_keys`、`site_settings`、记录数和索引。当前迁移台账应包含 `001`–`007`；`api_keys.credential_version` 必须为正 BIGINT，初始为 1，已有 ID/hash 保持；`pages.access_revision` 必须保留精确 BIGINT 版本；`site_settings.publishing_writes_paused` 必须为 `BOOLEAN NOT NULL DEFAULT FALSE`（已有维护状态不得被重置）；`pages.is_favorite` 必须为 `BOOLEAN NOT NULL DEFAULT FALSE`，且不存在 `NULL`。迁移 `007` 后 `pages.current_revision` 必须为正 BIGINT（已有 Share 初始 1）、`pages.published` 为 `BOOLEAN NOT NULL DEFAULT TRUE`，`share_revisions(share_id, revision)` 为主键；新 Share 在网页/API/克隆创建时同时写入 Revision 1 快照。存量 Share 的 Revision 1 基线只能在受控维护窗口由专用基线回填补齐（见 [Revision 切换手册](revisions-rollout.md)），不由迁移或启动写入。`site_settings.id=1` 必须存在，`homepage_password_required` 应与迁移前保持一致。
 5. 在本地创建已审查的 release commit，但先不要 push `main`；从该 commit 部署 Preview 并完成下方 smoke。
 6. Preview 通过后才把同一 commit push 到 `main`，等待 CI 和 Vercel Production 自动部署，再用 `vercel inspect` 核对自定义域名指向该修订。
 
@@ -51,7 +51,7 @@ npm run hash-password -- "your-admin-password"
 ### 回滚与恢复
 
 - 迁移命令在 `COMMIT` 前失败：整批事务自动回滚，不会留下迁移记录；修正原因后重跑即可，无需数据恢复。
-- 新代码部署后需要回滚：只能使用已验证、同时理解维护闸与当前访问版本安全语义的兼容应用；忽略维护闸、`access_revision` 或 managed Key `credential_version` 锁内复核的旧版本不再是安全回滚候选。没有兼容候选时保持维护并向前修复。保留 `site_settings`、`pages.is_favorite`、访问版本及迁移记录，不执行破坏性 down migration。
+- 新代码部署后需要回滚：只能使用已验证、同时理解维护闸与当前访问版本/内容版本安全语义的兼容应用；忽略维护闸、`access_revision`、内容 `current_revision` 基线或 managed Key `credential_version` 锁内复核的旧版本不再是安全回滚候选。没有兼容候选时保持维护并向前修复。保留 `site_settings`、`pages.is_favorite`、访问/内容版本、`share_revisions` 及迁移记录，不执行破坏性 down migration。
 - `COMMIT` 后确认发生数据异常：先停止写入，再从迁移前的 provider branch / PITR 检查点恢复到新分支；核对表结构和记录数后才切换运行时连接。不要在未核验的生产主库上直接覆盖恢复。
 
 ### 写维护与旧写入者退出
@@ -67,7 +67,7 @@ npm run hash-password -- "your-admin-password"
 - `npm run backup:check` 端到端演练：一次性本地 PostgreSQL 17 容器 + 合成夹具 + `pg_dump`/`pg_restore` + 全量验证（正文摘要、ID、主题、收藏、密码校验/回显、有效期、Key、审计、站点设置、迁移台账），并记录快照点与耗时。恢复库中每条受保护页/Key 都必须被夹具实际验证，缺夹具即显式失败。
 - 恢复出的数据库永远报告 `safeToServe: false` 并保持离线。快照点后检测到撤销/清除事件（含真实审计词表中 `page.update` 的 `fields` 触及密码/保护/有效期）时验证 exit 2（`unreconciled`）；即使未检测到事件，审计历史也无法证明不存在（部分策略路由不写审计），报告为 `owner-review-required`（同样 exit 2）。重新启用恢复出的凭据或公开内容一律需要所有者复核后显式传入 `--reconciled`。
 - 脚本默认只接受 localhost 且库名以 `_test` 结尾的数据库；真实 secret 与加密材料不进入导出、日志或演练夹具。
-- 详细流程、实测结果与后续票扩展合同见 `docs/backup-restore.md`。访问版本化改造（`docs/access-revision-rollout.md`，由访问撤销票提供）落地后，恢复验证证据必须显式覆盖 `access_revision`。迁移 `005` 后夹具还应覆盖非默认 `publishing_writes_paused=true`；迁移 `006` 后显式比较 Key `credential_version='9007199254740993'`，把快照后轮换视为旧 secret 撤销，恢复后保持离线，不把暂停开关或验证通过等同于上线许可。
+- 详细流程、实测结果与后续票扩展合同见 `docs/backup-restore.md`。访问版本化改造（`docs/access-revision-rollout.md`，由访问撤销票提供）落地后，恢复验证证据必须显式覆盖 `access_revision`。迁移 `005` 后夹具还应覆盖非默认 `publishing_writes_paused=true`；迁移 `006` 后显式比较 Key `credential_version='9007199254740993'`，把快照后轮换视为旧 secret 撤销，恢复后保持离线，不把暂停开关或验证通过等同于上线许可。迁移 `007` 后夹具还须真实生成 Revision 快照、超过 2^53 的 `current_revision` 指针与非默认 `published=FALSE`，验证报告的 `shareRevisions`/`revisionCurrentPointer` 检查必须通过，且快照载荷/指针/`published` 的独立篡改分别被具名检查拒绝。
 
 ### 验证清单
 

@@ -837,12 +837,15 @@ test('dashboard page mutations accept the rendered CSRF token', async () => {
   assert.match(detailResponse.text, /name="_csrf"/);
 
   const csrfToken = detailCsrfMatch[1];
+  const currentRevision = detailResponse.text.match(/"currentRevision":"(\d+)"/);
+  assert.ok(currentRevision, 'detail embeds the content baseline');
   const updateResponse = await request(`/admin/pages/${updatePage.urlId}`, {
     method: 'PUT',
     headers: {
       Cookie: cookie,
       'Content-Type': 'application/json',
-      'X-CSRF-Token': csrfToken
+      'X-CSRF-Token': csrfToken,
+      'If-Match': `\"content:${updatePage.urlId}:${currentRevision[1]}\"`
     },
     body: JSON.stringify({ title: 'Updated with CSRF' })
   });
