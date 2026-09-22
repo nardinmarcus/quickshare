@@ -31,6 +31,7 @@ for (const [label, value] of [['source', sourceUrl], ['restore', restoreUrl]]) {
 const {
   ACCESS_REVISION_DRILL_VALUE,
   REVISION_DRILL_VALUE,
+  UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE,
   OPERATION_FIXTURE,
   FIXTURE,
   seedFixture
@@ -364,10 +365,18 @@ test('native restore rebuilds the database and passes full verification', async 
       assert.equal(restoredV2Row.rows[0].restored_from, '1', 'synthetic non-null restore origin survives byte-exact (BIGINT as decimal string)');
       assert.match(restoredV2Row.rows[0].snapshot_hash, /^[0-9a-f]{64}$/);
       const restoredPublished = await restorePool.query(
-        'SELECT published FROM pages WHERE id = $1',
-        [FIXTURE.pages.protectedPage]
+        'SELECT published, access_revision FROM pages WHERE id = $1',
+        [FIXTURE.pages.markdownThemed]
       );
-      assert.equal(restoredPublished.rows[0].published, false, 'non-default published survives restore');
+      // #35 publication-state coverage: the REAL owner-unpublish end state —
+      // published FALSE and the bumped access revision TOGETHER — survives
+      // restore byte-exactly. Losing either half must fail verification.
+      assert.equal(restoredPublished.rows[0].published, false, 'the unpublish state survives restore');
+      assert.equal(
+        String(restoredPublished.rows[0].access_revision),
+        UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE,
+        'the unpublish bump travels as an exact decimal string (beyond 2^53)'
+      );
     } finally {
       await restorePool.end();
     }
@@ -388,8 +397,8 @@ test('native restore rebuilds the database and passes full verification', async 
     const operationsCheck = report.checks.find(check => check.name === 'publishOperations');
     assert.ok(operationsCheck, 'the publishOperations check is always reported when the table exists');
     assert.equal(operationsCheck.ok, true, `operation issues: ${JSON.stringify(operationsCheck.issues)}`);
-    assert.equal(operationsCheck.details.operationCount, hasPurgeColumns ? 5 : 4,
-      'committed creation + tombstone + #33 restore + #33 content-update (+ #34 receipt-purged) restored');
+    assert.equal(operationsCheck.details.operationCount, hasPurgeColumns ? 6 : 5,
+      'committed creation + tombstone + #33 restore + #33 content-update (+ #34 receipt-purged) + #35 unpublish restored');
     assert.equal(operationsCheck.details.tombstoneCount, 1, 'the deletion tombstone restores as a tombstone');
     if (hasPurgeColumns) {
       assert.equal(operationsCheck.details.receiptPurgedCount, 1,
@@ -413,6 +422,10 @@ test('native restore rebuilds the database and passes full verification', async 
       const updateRow = restoredOps.rows.find(row => row.request_id === OPERATION_FIXTURE.contentUpdateRequestId);
       assert.ok(restoreRow && restoreRow.receipt_encrypted, 'the #33 restore row carries its encrypted receipt');
       assert.ok(updateRow && updateRow.receipt_encrypted, 'the #33 content-update row carries its encrypted receipt');
+      // #35: the unpublish ledger row travels with its receipt, proving the
+      // publish-action history is part of every trustworthy backup.
+      const unpublishRow = restoredOps.rows.find(row => row.request_id === OPERATION_FIXTURE.unpublishRequestId);
+      assert.ok(unpublishRow && unpublishRow.receipt_encrypted, 'the #35 unpublish row carries its receipt');
     } finally {
       await restorePool.end();
     }
@@ -796,9 +809,11 @@ test('published tamper fails the full-row page inventory with a named field issu
   const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
   const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
   try {
+    // The themed Share is the #35 unpublished fixture (published FALSE):
+    // flipping it TRUE on the restore side must fail verification by name.
     await restorePool.query(
       'UPDATE pages SET published = TRUE WHERE id = $1',
-      [FIXTURE.pages.protectedPage]
+      [FIXTURE.pages.markdownThemed]
     );
   } finally {
     await restorePool.end();
@@ -818,8 +833,68 @@ test('published tamper fails the full-row page inventory with a named field issu
   assert.equal(pageCheck.ok, false);
   assert.ok(pageCheck.issues.some(issue =>
     issue.field === 'published'
-    && issue.pageId === FIXTURE.pages.protectedPage
+    && issue.pageId === FIXTURE.pages.markdownThemed
     && /published/.test(issue.message)), `issues: ${JSON.stringify(pageCheck.issues)}`);
+});
+
+test('an unpublish-state tamper fails verification and reverting the restore returns to exit 0', async (t) => {
+  if (!hasRevisions || !hasAccessRevision) {
+    return t.skip('publication-state columns absent on this schema base; integrator must exercise after merging #35');
+  }
+
+  // Named tamper chain, part 1: on the restore side ONLY, resurrect the
+  // unpublished Share by flipping published — the exact failure mode of a
+  // rollback target that ignores `published`. The verifier must exit 1 and
+  // name the page and field; it must never wave the restore through.
+  let manifestPath = path.join(
+    tmpDir,
+    fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json'))
+  );
+  const tamperPool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+  try {
+    await tamperPool.query(
+      'UPDATE pages SET published = TRUE WHERE id = $1',
+      [FIXTURE.pages.markdownThemed]
+    );
+  } finally {
+    await tamperPool.end();
+  }
+
+  const tampered = await runStep(process.execPath, [
+    'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+    '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+    '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+    '--output', path.join(tmpDir, 'verification-unpublish-tamper.json')
+  ]);
+  assert.equal(tampered.code, 1, 'the resurrected unpublished Share fails verification (exit 1)');
+
+  const tamperReport = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-unpublish-tamper.json'), 'utf8'));
+  assert.equal(tamperReport.safeToServe, false, 'a resurrected Share is never safe to serve');
+  const tamperPageCheck = tamperReport.checks.find(check => check.name === 'pageInventory');
+  assert.equal(tamperPageCheck.ok, false);
+  assert.ok(tamperPageCheck.issues.some(issue =>
+    issue.field === 'published' && issue.pageId === FIXTURE.pages.markdownThemed),
+    `issues: ${JSON.stringify(tamperPageCheck.issues)}`);
+
+  // Named tamper chain, part 2: REVERT by re-restoring the SAME manifest
+  // into the target, then verification returns to exit 0 — proving the
+  // revert path (not a stale pass) restores a trustworthy state.
+  const revert = await runStep(process.execPath, [
+    'scripts/restore-db.js', '--manifest', manifestPath, '--target-url', restoreUrl,
+    ...(restoreDocker ? ['--docker', restoreDocker] : [])
+  ]);
+  assert.equal(revert.code, 0, revert.stderr);
+
+  const reverted = await runStep(process.execPath, [
+    'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+    '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+    '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+    '--output', path.join(tmpDir, 'verification-unpublish-reverted.json')
+  ]);
+  assert.equal(reverted.code, 0, 'after the revert the full verification passes again');
+
+  const revertedReport = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-unpublish-reverted.json'), 'utf8'));
+  assert.equal(revertedReport.safeToServe, false, 'even a clean verify stays fail-closed without owner reconciliation (--reconciled was given, safeToServe remains an operator decision)');
 });
 
 test('publish_operations receipt tamper fails the dedicated operations check by namespace and request id', async (t) => {

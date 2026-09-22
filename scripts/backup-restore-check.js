@@ -41,8 +41,10 @@ const FIXTURE = {
   restoreContainer: process.env.Q27_DRILL_RESTORE_CONTAINER || 'issue27-pg-restore',
   srcPort: Number(process.env.Q27_DRILL_SRC_PORT) || 5541,
   restorePort: Number(process.env.Q27_DRILL_RESTORE_PORT) || 5542,
-  sourceDatabase: 'issue27_src_test',
-  restoreDatabase: 'issue27_restore_test',
+  // Database names are overridable for the same reason: an isolated run can
+  // keep its whole drill (containers AND databases) inside its own namespace.
+  sourceDatabase: process.env.Q27_DRILL_SRC_DATABASE || 'issue27_src_test',
+  restoreDatabase: process.env.Q27_DRILL_RESTORE_DATABASE || 'issue27_restore_test',
   pages: {
     publicHtml: 'issue27pub0010',
     markdownThemed: 'issue27md00010',
@@ -84,8 +86,17 @@ const OPERATION_FIXTURE = {
   tombstoneRequestId: 'issue32-op-000000000002',
   restoreRequestId: 'issue33-op-000000000003',
   contentUpdateRequestId: 'issue33-op-000000000004',
-  purgedReceiptRequestId: 'issue34-op-000000000005'
+  purgedReceiptRequestId: 'issue34-op-000000000005',
+  unpublishRequestId: 'issue35-op-000000000006'
 };
+
+// Publication-state fixture gate (#35). When migration 007's `published`
+// column exists, the drill seeds the REAL end state of an owner unpublish on
+// the themed Share: published = FALSE AND a bumped access_revision — the
+// exact pair the #35 transition commits in one transaction. The value is the
+// access-revision drill value advanced by exactly one bump, still beyond
+// 2^53, so dump→restore proves the transition state survives byte-exactly.
+const UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE = '9007199254740994';
 
 async function probePublishOperationsTable(pool) {
   const result = await pool.query(
@@ -287,8 +298,15 @@ async function seedFixture(pool) {
        WHERE id = $1`,
       [pages.markdownThemed]
     );
-    // Non-default published fixture: restore must preserve it exactly.
-    await pool.query('UPDATE pages SET published = FALSE WHERE id = $1', [pages.protectedPage]);
+    // #35 publication-state fixture: the themed Share carries the exact end
+    // state of a real owner unpublish — published FALSE and the bumped
+    // access revision together, both non-default, both beyond float safety.
+    // Restore must preserve the pair exactly; apps that ignore `published`
+    // are NOT rollback candidates (see docs/deployment.md).
+    await pool.query(
+      'UPDATE pages SET published = FALSE, access_revision = $2::bigint WHERE id = $1',
+      [pages.markdownThemed, UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE]
+    );
     // A current pointer beyond 2^53 with real snapshot rows: BIGINT precision
     // must survive dump → restore without passing through a float.
     await pool.query(
@@ -334,7 +352,8 @@ async function seedFixture(pool) {
        VALUES ($1, $2, 'create', $3, NULL, $4, '1', $5, $6, $7, NULL),
               ($1, $8, 'create', $9, NULL, $10, '1', $5, NULL, $7, $11),
               ($1, $12, 'restore', $13, $14, $14, '2', $5, $15, $7, NULL),
-              ($1, $16, 'content-update', $17, $18, $18, '2', $5, $19, $7, NULL)`,
+              ($1, $16, 'content-update', $17, $18, $18, '2', $5, $19, $7, NULL),
+              ($1, $20, 'unpublish', $21, $18, $18, '2', $22, $23, $7, NULL)`,
       [
         OPERATION_FIXTURE.namespace,
         OPERATION_FIXTURE.requestId,
@@ -354,7 +373,11 @@ async function seedFixture(pool) {
         OPERATION_FIXTURE.contentUpdateRequestId,
         '0'.repeat(64),
         pages.protectedPage,
-        updateReceipt
+        updateReceipt,
+        OPERATION_FIXTURE.unpublishRequestId,
+        '3'.repeat(64),
+        UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE,
+        encryptSecret(JSON.stringify({ changed: true, published: false }))
       ]
     );
   }
@@ -586,7 +609,14 @@ async function runDrill({ keepContainers = false, skipContainerSetup = false, ou
       // must compare tombstones on identity only and detect resurrection.
       revisionPurgeTombstones: seedResult.purgeSeeded ? 'exercised' : 'absent-schema001-008',
       revisionCurrentPointer: seedResult.revisionsSeeded ? REVISION_DRILL_VALUE : null,
-      publishedFixture: seedResult.revisionsSeeded ? 'non-default-false-exercised' : 'absent-schema001-006',
+      // #35 publication-state coverage (migration 007 column): the themed
+      // Share carries the REAL owner-unpublish end state — published FALSE
+      // and the bumped access revision together — plus its unpublish ledger
+      // row. A restore that loses either half fails verification by name,
+      // and apps that ignore `published` are not rollback candidates.
+      publicationState: seedResult.revisionsSeeded ? 'unpublished-exercised' : 'absent-schema001-006',
+      publicationStateAccessRevision: seedResult.revisionsSeeded ? UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE : null,
+      publishedFixture: seedResult.revisionsSeeded ? 'non-default-false-with-bumped-access' : 'absent-schema001-006',
       reconciliation: verification ? verification.reconciliation.status : 'not-available',
       safeToServe: false,
       durationsMs: {
@@ -643,6 +673,7 @@ if (require.main === module) {
 module.exports = {
   ACCESS_REVISION_DRILL_VALUE,
   REVISION_DRILL_VALUE,
+  UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE,
   OPERATION_FIXTURE,
   FIXTURE,
   probeAccessRevisionColumn,

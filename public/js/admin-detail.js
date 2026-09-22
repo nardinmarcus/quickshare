@@ -1,6 +1,9 @@
 (function () {
   const editBtn = document.getElementById('edit-toggle-btn');
   const revokeBtn = document.getElementById('revoke-access-btn');
+  const unpublishBtn = document.getElementById('unpublish-btn');
+  const republishBtn = document.getElementById('republish-btn');
+  const publishActionStatus = document.getElementById('publish-action-status');
   const accessStatus = document.getElementById('access-action-status');
   const editForm = document.getElementById('edit-form');
   const contentTextarea = document.getElementById('content-textarea');
@@ -159,6 +162,7 @@
 
   function enterEditMode() {
     if (revokeBtn) revokeBtn.disabled = true;
+    publishButtons().forEach(function (button) { button.disabled = true; });
     editBtn.hidden = true;
     editForm.hidden = false;
     contentTextarea.removeAttribute('readonly');
@@ -170,6 +174,7 @@
 
   function exitEditMode() {
     if (revokeBtn) revokeBtn.disabled = false;
+    publishButtons().forEach(function (button) { button.disabled = false; });
     editBtn.hidden = false;
     editForm.hidden = true;
     contentTextarea.setAttribute('readonly', '');
@@ -303,6 +308,101 @@
 
   editBtn.addEventListener('click', enterEditMode);
   cancelBtn.addEventListener('click', exitEditMode);
+
+  // ---- #35 owner publish-state transitions (unpublish/republish). ----
+  //
+  // Same identity discipline as content saves: one explicit intent carries
+  // one client-generated request id in the dashboard-session namespace; a
+  // lost response keeps the ORIGINAL id so the retry confirms the committed
+  // result via the operation ledger instead of duplicating the transition.
+  // The draft key is the DISPLAYED access revision: the buttons are disabled
+  // while editing and the page reloads after every definitive outcome, so a
+  // stale baseline can never be silently re-submitted.
+
+  function publishButtons() {
+    return [unpublishBtn, republishBtn].filter(Boolean);
+  }
+
+  async function performPublishState(action) {
+    const button = action === 'unpublish' ? unpublishBtn : republishBtn;
+    if (!button || button.disabled) return;
+    const label = action === 'unpublish' ? '下架' : '重新发布';
+    const expectedAccessRevision = String(originalData.accessRevision);
+    const draftKey = JSON.stringify([expectedAccessRevision]);
+    let claimedRequestId = null;
+
+    publishButtons().forEach(function (item) {
+      item.disabled = true;
+      item.setAttribute('aria-busy', 'true');
+    });
+    if (publishActionStatus) publishActionStatus.textContent = label === '下架' ? '正在下架…' : '正在重新发布…';
+
+    try {
+      if (PublishingRequest) {
+        const claim = PublishingRequest.claimDashboardIntentId({
+          kind: action,
+          shareId: originalData.id,
+          draftKey: draftKey,
+          summary: { title: originalData.title || originalData.id }
+        });
+        if (claim.mode === 'blocked') {
+          Toast.error('存在属于其他后台会话的未确认' + label + '请求，本次提交已被阻止；可在管理后台按请求标识核对。');
+          return;
+        }
+        claimedRequestId = claim.requestId;
+      }
+
+      const response = await fetch('/admin/pages/' + encodeURIComponent(originalData.id) + '/' + action, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-CSRF-Token': csrfToken(),
+          ...(claimedRequestId ? { 'Idempotency-Key': claimedRequestId } : {})
+        },
+        body: JSON.stringify({ expectedAccessRevision: expectedAccessRevision })
+      });
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok || !data || !data.success) {
+        // 412/428/409 and other refusals never rotate the id silently;
+        // refreshing the page re-baselines the displayed access revision.
+        throw new Error((data && data.error) || (label + '结果未确认，原请求标识已保留'));
+      }
+
+      if (PublishingRequest) PublishingRequest.confirmDashboardCompleted(action, originalData.id);
+
+      Toast.success(data.replayed
+        ? '已确认上次' + label + '请求的结果（访问版本 ' + data.accessRevision + '），页面即将刷新'
+        : (action === 'unpublish'
+          ? '已下架：公开地址现返回 404，页面即将刷新'
+          : '已重新发布：此前解锁的访问已失效，页面即将刷新'));
+      // Reload instead of dressing the local state up as current: the view
+      // re-renders the badge, buttons and baseline from the server truth.
+      window.location.reload();
+    } catch (error) {
+      if (!claimedRequestId) {
+        Toast.error(error.message || label + '失败，请稍后重试');
+      } else if (error instanceof TypeError || error.message === 'Failed to fetch') {
+        Toast.error('网络失败，' + label + '结果未知：原请求标识已保留，再次点击将以原请求重试');
+      } else {
+        Toast.error(error.message || label + '失败，请稍后重试');
+      }
+      if (publishActionStatus && PublishingRequest) {
+        const intent = PublishingRequest.readDashboardIntent(action, originalData.id);
+        const message = PublishingRequest.dashboardIntentStatusMessage(intent, draftKey, label);
+        if (message) publishActionStatus.textContent = message;
+      }
+    } finally {
+      publishButtons().forEach(function (item) {
+        item.disabled = false;
+        item.setAttribute('aria-busy', 'false');
+      });
+    }
+  }
+
+  if (unpublishBtn) unpublishBtn.addEventListener('click', function () { performPublishState('unpublish'); });
+  if (republishBtn) republishBtn.addEventListener('click', function () { performPublishState('republish'); });
 
   // Capture the initial (browser-normalized) body baseline for the rendered form.
   captureContentBaseline();

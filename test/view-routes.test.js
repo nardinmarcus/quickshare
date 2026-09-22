@@ -173,3 +173,111 @@ test('expired rows remain available in admin while missing rows stay 404', async
   assert.equal(missingView.status, 404);
   assert.equal(missingMetadata.status, 404);
 });
+
+// ---- #35: unpublished Shares share the missing projection (neutral 404). ----
+
+test('an unpublished Share reads as the neutral 404 on every public surface', async () => {
+  await seedPage({ id: 'unpublished-page' });
+  const page = await app.locals.pageRepository.getById('unpublished-page');
+  const result = await app.locals.pageRepository.setPublished('unpublished-page', {
+    published: false,
+    expectedAccessRevision: String(page.access_revision),
+    returnUpdated: true
+  });
+  assert.equal(result.changed, true);
+
+  const view = await request('/view/unpublished-page');
+  assert.equal(view.status, 404);
+  assert.match(view.text, /页面不存在/);
+  assert.doesNotMatch(view.text, /unpublished-page body/);
+
+  const password = await request('/view/unpublished-page/password', {
+    method: 'POST',
+    body: JSON.stringify({ password: 'whatever' }),
+    headers: { 'Content-Type': 'application/json' }
+  });
+  assert.equal(password.status, 404);
+  assert.deepEqual(JSON.parse(password.text), { valid: false });
+
+  // Repository seam: getPublicById is THE public read; unpublished is null.
+  assert.equal(await app.locals.pageRepository.getPublicById('unpublished-page'), null);
+});
+
+test('expiry only classifies published Shares: unpublished+expired is 404, not 410', async () => {
+  await seedPage({ id: 'unpublished-expired', expiresAt: Date.now() - 60_000 });
+  const page = await app.locals.pageRepository.getById('unpublished-expired');
+  await app.locals.pageRepository.setPublished('unpublished-expired', {
+    published: false,
+    expectedAccessRevision: String(page.access_revision),
+    returnUpdated: true
+  });
+
+  const publicById = await app.locals.pageRepository.getPublicById('unpublished-expired', Date.now());
+  assert.equal(publicById, null, 'the public projection never exposes an unpublished Share');
+
+  const view = await request('/view/unpublished-expired');
+  assert.equal(view.status, 404);
+  assert.doesNotMatch(view.text, /已失效/);
+});
+
+test('republishing keeps password and expiry independent and revives access', async () => {
+  await seedPage({ id: 'unpublished-protected', password: '774411' });
+  const before = await app.locals.pageRepository.getById('unpublished-protected');
+  // Memory rows are live references: snapshot the baseline BEFORE any
+  // transition mutates the row in place.
+  const baselineRevision = String(before.access_revision);
+  const baselinePasswordHash = before.password_hash;
+  const baselineExpiry = before.expires_at;
+
+  // Unlock BEFORE any transition: this cookie binds the pre-down revision.
+  const unlockBefore = await request('/view/unpublished-protected/password', {
+    method: 'POST',
+    body: JSON.stringify({ password: '774411' }),
+    headers: { 'Content-Type': 'application/json' }
+  });
+  assert.equal(unlockBefore.status, 200);
+  const oldCookieHeader = ((unlockBefore.headers['set-cookie'] || [])[0] || '').split(';')[0];
+  assert.ok(oldCookieHeader, 'unlock minted a version-bound cookie');
+
+  await app.locals.pageRepository.setPublished('unpublished-protected', {
+    published: false,
+    expectedAccessRevision: String(before.access_revision),
+    returnUpdated: true
+  });
+  assert.equal((await request('/view/unpublished-protected')).status, 404);
+  assert.equal((await request('/view/unpublished-protected', { headers: { Cookie: oldCookieHeader } })).status, 404,
+    'the pre-down cookie cannot revive an unpublished Share either');
+
+  const afterDown = await app.locals.pageRepository.getById('unpublished-protected');
+  const result = await app.locals.pageRepository.setPublished('unpublished-protected', {
+    published: true,
+    expectedAccessRevision: String(afterDown.access_revision),
+    returnUpdated: true
+  });
+  assert.equal(result.changed, true);
+  const afterUp = result.page;
+
+  assert.equal(afterUp.password_hash, baselinePasswordHash, 'password untouched by either transition');
+  assert.equal(afterUp.expires_at, baselineExpiry, 'expiry untouched by either transition');
+  assert.equal(
+    String(afterUp.access_revision) === String(BigInt(baselineRevision) + 2n),
+    true,
+    'both transitions bumped the revision exactly once each'
+  );
+
+  // The pre-transition cookie is version-bound: the republished Share is
+  // locked again for that visitor (neutral password form, HTTP 200).
+  const viewWithOldCookie = await request('/view/unpublished-protected', { headers: { Cookie: oldCookieHeader } });
+  assert.equal(viewWithOldCookie.status, 200);
+  assert.match(viewWithOldCookie.text, /password/i);
+  assert.doesNotMatch(viewWithOldCookie.text, /unpublished-protected body/);
+
+  const unlockAfter = await request('/view/unpublished-protected/password', {
+    method: 'POST',
+    body: JSON.stringify({ password: '774411' }),
+    headers: { 'Content-Type': 'application/json' }
+  });
+  assert.equal(unlockAfter.status, 200);
+  const freshCookie = ((unlockAfter.headers['set-cookie'] || [])[0] || '').split(';')[0];
+  assert.equal((await request('/view/unpublished-protected', { headers: { Cookie: freshCookie } })).status, 200);
+});

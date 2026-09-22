@@ -333,3 +333,102 @@ test('restore digest covers the target, expected revision and exact source revis
     operationRequestDigest({ ...RESTORE_BASE, targetId: 'share33b' })
   );
 });
+
+// ---- #35 publish-state operations: digest input and state-transition replay ----
+
+const {
+  normalizePublishStateDigestInput,
+  classifyOperationReplay
+} = require('../models/publishingOperations');
+
+const UNPUBLISH_DIGEST_BASE = {
+  action: 'unpublish',
+  targetId: 'share35a',
+  fields: normalizePublishStateDigestInput({ expectedAccessRevision: '7' }).fields
+};
+
+test('publish-state digest covers the exact expected access revision', () => {
+  assert.equal(UNPUBLISH_DIGEST_BASE.fields.expectedAccessRevision, '7');
+  assert.equal(
+    operationRequestDigest(UNPUBLISH_DIGEST_BASE),
+    operationRequestDigest({ ...UNPUBLISH_DIGEST_BASE })
+  );
+  assert.notEqual(
+    operationRequestDigest(UNPUBLISH_DIGEST_BASE),
+    operationRequestDigest({ ...UNPUBLISH_DIGEST_BASE, fields: { expectedAccessRevision: '8' } }),
+    'a different access baseline is a different publish-state request'
+  );
+  assert.notEqual(
+    operationRequestDigest(UNPUBLISH_DIGEST_BASE),
+    operationRequestDigest({ ...UNPUBLISH_DIGEST_BASE, action: 'republish' }),
+    'unpublish and republish never share digest space'
+  );
+  assert.notEqual(
+    operationRequestDigest(UNPUBLISH_DIGEST_BASE),
+    operationRequestDigest({ ...UNPUBLISH_DIGEST_BASE, targetId: 'share35b' })
+  );
+});
+
+function replayRepositoryStub(page) {
+  return {
+    async getById() { return page || null; },
+    async getContentRevision() {
+      // Simulates a purged/absent snapshot payload: publish-state results are
+      // state transitions, not content, so replay must not depend on this.
+      return null;
+    }
+  };
+}
+
+function publishStateRecord(overrides = {}) {
+  return {
+    action: 'unpublish',
+    request_digest: operationRequestDigest(UNPUBLISH_DIGEST_BASE),
+    deleted_at: null,
+    result_share_id: 'share35a',
+    result_revision: '3',
+    result_access_revision: '8',
+    receipt_encrypted: encodeOperationReceipt({ changed: true, published: false }),
+    ...overrides
+  };
+}
+
+test('a publish-state replay confirms from the record and receipt without needing the snapshot', async () => {
+  const page = { id: 'share35a', access_revision: '9', is_protected: 0 };
+  const outcome = await classifyOperationReplay(replayRepositoryStub(page), {
+    record: publishStateRecord(),
+    requestDigest: operationRequestDigest(UNPUBLISH_DIGEST_BASE)
+  });
+  assert.equal(outcome.kind, 'replay');
+  assert.equal(outcome.publishState, true);
+  assert.equal(outcome.receipt.changed, true);
+  assert.equal(outcome.receipt.published, false);
+  assert.equal(outcome.accessUnchanged, false, 'the share moved on; the replay still confirms the commit');
+});
+
+test('publish-state replays keep the conflict and result-unavailable boundaries', async () => {
+  const page = { id: 'share35a', access_revision: '8', is_protected: 0 };
+  const conflict = await classifyOperationReplay(replayRepositoryStub(page), {
+    record: publishStateRecord(),
+    requestDigest: 'different-digest'
+  });
+  assert.equal(conflict.kind, 'conflict');
+
+  const deleted = await classifyOperationReplay(replayRepositoryStub(page), {
+    record: publishStateRecord({ deleted_at: Date.now() }),
+    requestDigest: operationRequestDigest(UNPUBLISH_DIGEST_BASE)
+  });
+  assert.equal(deleted.kind, 'result-unavailable');
+
+  const missingShare = await classifyOperationReplay(replayRepositoryStub(null), {
+    record: publishStateRecord(),
+    requestDigest: operationRequestDigest(UNPUBLISH_DIGEST_BASE)
+  });
+  assert.equal(missingShare.kind, 'result-unavailable');
+
+  const unreadableReceipt = await classifyOperationReplay(replayRepositoryStub(page), {
+    record: publishStateRecord({ receipt_encrypted: 'not-a-valid-receipt' }),
+    requestDigest: operationRequestDigest(UNPUBLISH_DIGEST_BASE)
+  });
+  assert.equal(unreadableReceipt.kind, 'result-unavailable');
+});

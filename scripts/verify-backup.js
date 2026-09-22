@@ -43,6 +43,13 @@ const HARD_REVOCATION_AUDIT_ACTIONS = new Set([
   'page.delete',
   'page.delete.batch',
   'page.revision.purge',
+  // #35: publication transitions revoke public access (unpublish) or retire
+  // every unlock cookie (both bump the access revision). A post-snapshot
+  // unpublish/republish marks a restored database unreconciled: fail closed
+  // and keep it private until the owner re-reviews — apps that ignore
+  // `published` are never rollback candidates.
+  'page.unpublish',
+  'page.republish',
   'api_key.delete',
   'api_key.rotate'
 ]);

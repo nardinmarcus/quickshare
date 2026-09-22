@@ -9,9 +9,33 @@
 - Existing `POST /api/pages/:id/protect` callers must first retain the `accessRevision` from their explicitly authenticated `GET /api/pages/:id/protect` response (`{ success: true, accessRevision: "1" }`) and send that exact string as `expectedAccessRevision`. This private/no-store baseline read uses the same frontend owner session authorization as the protection write; it returns no title, description, source, password or other Share metadata, and remains available for expired Shares. Anonymous visitors, visitor unlock cookies and create-only API Keys do not authorize it. Dashboard detail continues to embed its own baseline. Do not silently fetch a new baseline to retry a stale save. A successful protection update returns its committed revision, not a later concurrent writer's revision. Write authentication and CSRF requirements are unchanged.
 - Public `GET /api/pages/:id` and `GET /view/:id` share one projection: missing is 404, expired is 410, locked metadata is 403 and the locked view is a neutral password form. Errors and locked HTML source/OG use no content-derived metadata; the site identity icon remains the generic cover. Only a valid current-version visitor unlock permits protected public metadata/content. Owner sessions and API Keys are not visitor unlocks; visitor unlocks do not authorize management. Ordinary public Share titles/descriptions remain intact. All these responses are private/no-store; third-party cached cards cannot be recalled.
 - Missing policy precondition returns 428 (`ACCESS_PRECONDITION_REQUIRED`); malformed/noncanonical/out-of-range revision returns 400 (`INVALID_ACCESS_REVISION`); stale baseline returns 412 (`ACCESS_REVISION_CONFLICT`). A rejected combined save changes neither content nor policy. Content-only updates remain supported without an access condition.
-- The password verifier captures the revision with the hash before asynchronous verification. It never signs a subsequently fetched revision. `GET /view/:id` remains read-only. View-event success is one conditional UPDATE, checking current expiry/protection/revision without rereading the body.
+- The password verifier captures the revision with the hash before asynchronous verification. It never signs a subsequently fetched revision. `GET /view/:id` remains read-only. View-event success is one conditional UPDATE, checking current published/expiry/protection/revision without rereading the body.
 
-These slices do **not** introduce content Revisions, publishing state, grants or maintenance mode. Shared deployment/backup documentation is owned by #27.
+## Publication transitions (#35)
+
+Owner unpublish and republish each advance the access revision atomically
+with the `published` flip in one transaction. Version-bound cookies minted
+under an older revision are dead after EITHER transition — unpublishing
+makes every public surface answer the neutral missing 404, and republishing
+reopens the SAME URL with the password and expiry unchanged but every old
+unlock cookie dead. Neither transition touches password, expiry, content
+revisions, history, Favorite Share, view counts or grants.
+
+Public ordering is fixed and neutral: the public read seam never exposes an
+unpublished Share, so unpublished/missing/deleted answer 404 BEFORE any
+expiry classification — expiry only ever applies to published Shares, and
+an expired+unpublished Share reads as 404. No 404/410 path leaks
+title/description/body; locked metadata stays 403 with no content-derived
+fields. View events check `published` in their conditional UPDATE: an
+unpublished Share is never counted (404), including while writes are paused.
+
+Owner unpublish/republish requests carry a required request id and the
+displayed `expectedAccessRevision`; stale baselines answer 412 and a lost
+response replays the committed result from the operation ledger. See
+[publishing-operations](publishing-operations.md) for the full action
+contract.
+
+These slices do **not** introduce content Revisions, grants or maintenance mode. Shared deployment/backup documentation is owned by #27.
 
 ## Separately authorized deployment procedure
 

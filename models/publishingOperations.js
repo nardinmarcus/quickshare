@@ -235,6 +235,31 @@ function normalizeRestoreDigestInput({ expectedRevision, sourceRevision }) {
 }
 
 /**
+ * #35 owner publish-state digest input: action (unpublish | republish) +
+ * target share + the exact expected access revision. The publication target
+ * itself is carried by the ACTION, never by a field, so the two transitions
+ * can never share digest space.
+ */
+function normalizePublishStateDigestInput({ expectedAccessRevision }) {
+  return {
+    fields: {
+      expectedAccessRevision: String(expectedAccessRevision)
+    }
+  };
+}
+
+/**
+ * Publish-state ledger actions (#35): their committed result is a STATE
+ * transition, not content — replay confirmation relies on the operation
+ * record and its receipt while the Share exists, never on snapshot
+ * availability (the then-current content revision may be purged later
+ * without invalidating the confirmation).
+ */
+function isPublishStateAction(action) {
+  return action === 'unpublish' || action === 'republish';
+}
+
+/**
  * Creates a Share with collision-safe id retries. The id is generated HERE —
  * after the caller computed the request digest — so retries of the same
  * operation stay digest-identical.
@@ -369,6 +394,9 @@ function buildCreationOperationRecord({
  * reading the owner's later edits. Per #24 §8 the availability of the result
  * Share AND its committed Revision is re-checked first; anything missing
  * answers 410 without leaking that version's metadata and never rebuilds.
+ * #35 publish-state results are the approved exception: their result is a
+ * STATE transition, so only the Share's existence and a readable receipt are
+ * re-checked — a later purged content revision cannot un-confirm them.
  * The access-policy re-check only decides whether the sensitive generated
  * password may be returned; it does not select which metadata is shown.
  */
@@ -383,6 +411,29 @@ async function classifyOperationReplay(repository, { record, requestDigest }) {
   const page = await repository.getById(record.result_share_id);
   if (!page) {
     return { kind: 'result-unavailable' };
+  }
+
+  // #35: a publish-state result is confirmable from the record plus its
+  // receipt while the Share exists — BEFORE any content-revision check,
+  // because the committed state transition does not depend on snapshot
+  // availability. No content metadata is served from here.
+  if (isPublishStateAction(record.action)) {
+    const receipt = decodeOperationReceipt(record.receipt_encrypted);
+    if (!receipt || typeof receipt !== 'object') {
+      return { kind: 'result-unavailable' };
+    }
+    return {
+      kind: 'replay',
+      publishState: true,
+      action: record.action,
+      record,
+      receipt,
+      page,
+      accessUnchanged: String(page.access_revision) === String(record.result_access_revision),
+      result: null,
+      receiptPassword: null,
+      revisionRow: null
+    };
   }
 
   // Result Revision availability (#24 §8: Share/Revision existence is
@@ -464,6 +515,8 @@ module.exports = {
   normalizeContentUpdateDigestInput,
   validateDashboardUpdateInput,
   normalizeRestoreDigestInput,
+  normalizePublishStateDigestInput,
+  isPublishStateAction,
   validatePublishingRequestId,
   createPageWithUniqueId,
   executeNormalizedCreate,

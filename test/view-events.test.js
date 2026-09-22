@@ -255,3 +255,35 @@ test('browser reporter sends once and falls back to keepalive fetch', () => {
   assert.equal(fallback.fetchCalls[0].options.credentials, 'same-origin');
   assert.equal(fallback.fetchCalls[0].options.keepalive, true);
 });
+
+// ---- #35: unpublished Shares are never counted and answer the missing 404. ----
+
+test('view events never count an unpublished Share, including expired+unpublished', async () => {
+  const repository = app.locals.pageRepository;
+  await seedPage({ id: 'event-unpublished' });
+  await seedPage({ id: 'event-unpub-expired', expiresAt: Date.now() - 60_000 });
+  for (const id of ['event-unpublished', 'event-unpub-expired']) {
+    const page = await repository.getById(id);
+    const result = await repository.setPublished(id, {
+      published: false,
+      expectedAccessRevision: String(page.access_revision),
+      returnUpdated: true
+    });
+    assert.equal(result.changed, true);
+  }
+
+  const unpublished = await request('/view/event-unpublished/view-event', {
+    method: 'POST',
+    headers: sameOriginHeaders()
+  });
+  assert.equal(unpublished.status, 404);
+
+  const expiredUnpublished = await request('/view/event-unpub-expired/view-event', {
+    method: 'POST',
+    headers: sameOriginHeaders()
+  });
+  assert.equal(expiredUnpublished.status, 404, 'unpublished outranks expiry');
+
+  assert.equal((await repository.getById('event-unpublished')).view_count, 0);
+  assert.equal((await repository.getById('event-unpub-expired')).view_count, 0);
+});

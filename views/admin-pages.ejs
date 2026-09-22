@@ -160,6 +160,9 @@
                     <% if (sharedPage.description) { %>
                       <p class="admin-page-description"><%= sharedPage.description %></p>
                     <% } %>
+                    <% if (sharedPage.published === false) { %>
+                      <span class="admin-unpublished-badge">已下架</span>
+                    <% } %>
                     <% if (isExpired) { %>
                       <span class="admin-expired-badge">已过期</span>
                     <% } else if (isExpiringSoon) { %>
@@ -213,6 +216,21 @@
                         <i class="fas fa-copy" aria-hidden="true"></i>
                       </button>
                     </form>
+                    <button
+                      type="button"
+                      class="admin-publish-toggle"
+                      data-publish-toggle
+                      data-page-id="<%= sharedPage.id %>"
+                      data-page-title="<%= sharedPage.title || sharedPage.id %>"
+                      data-published="<%= sharedPage.published === false ? 'false' : 'true' %>"
+                      data-access-revision="<%= sharedPage.access_revision %>"
+                      aria-pressed="<%= sharedPage.published === false ? 'true' : 'false' %>"
+                      aria-busy="false"
+                      aria-label="<%= sharedPage.published === false ? `重新发布分享 ${sharedPage.title || sharedPage.id}` : `下架分享 ${sharedPage.title || sharedPage.id}` %>"
+                    >
+                      <i class="fas <%= sharedPage.published === false ? 'fa-play' : 'fa-pause' %>" aria-hidden="true"></i>
+                      <span class="sr-only"><%= sharedPage.published === false ? '重新发布' : '下架' %></span>
+                    </button>
                     <button
                       type="button"
                       class="admin-delete-btn"

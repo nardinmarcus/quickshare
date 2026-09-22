@@ -472,11 +472,17 @@ class PostgresPageRepository {
   }
 
   async getPublicById(id, now = Date.now()) {
+    // #35 public unification: an unpublished Share has NO public projection.
+    // Returning null routes every public surface (view page, OG, metadata
+    // API, password POST) through the existing neutral missing-404 path, and
+    // unpublished is evaluated BEFORE expiry: expiry only ever classifies
+    // published Shares, so an expired+unpublished Share reads as 404.
     const result = await this.pool.query(
       `
         SELECT *, (expires_at IS NOT NULL AND expires_at <= $2) AS is_expired
         FROM pages
         WHERE id = $1
+          AND published
         LIMIT 1
       `,
       [id, now]
@@ -533,7 +539,7 @@ class PostgresPageRepository {
 
     const result = await this.pool.query(
       `
-        SELECT id, created_at, code_type, title, description, is_protected, is_favorite, encrypted_password, expires_at, COALESCE(view_count, 0) AS view_count
+        SELECT id, created_at, code_type, title, description, is_protected, is_favorite, encrypted_password, expires_at, COALESCE(view_count, 0) AS view_count, published, access_revision
         FROM pages
         ${whereClause}
         ORDER BY ${orderColumn} ${orderDirection}
@@ -557,9 +563,10 @@ class PostgresPageRepository {
 
   async recordViewEvent(id, now = Date.now(), accessRevision = null) {
     if (this.publishingWritesPaused) {
-      const state = await this.pool.query('SELECT is_protected, expires_at, access_revision FROM pages WHERE id = $1 LIMIT 1', [id]);
+      const state = await this.pool.query('SELECT is_protected, expires_at, access_revision, published FROM pages WHERE id = $1 LIMIT 1', [id]);
       const page = state.rows[0];
       if (!page) return 'not_found';
+      if (page.published === false) return 'not_found';
       if (page.expires_at !== null && Number(page.expires_at) <= now) return 'expired';
       if (page.is_protected === 1 && page.access_revision !== accessRevision) return 'protected';
       throw maintenanceError();
@@ -569,6 +576,7 @@ class PostgresPageRepository {
         UPDATE pages
         SET view_count = COALESCE(view_count, 0) + 1
         WHERE id = $1
+          AND published
           AND (expires_at IS NULL OR expires_at > $2)
           AND (COALESCE(is_protected, 0) <> 1 OR access_revision = $3::bigint)
         RETURNING id
@@ -581,12 +589,18 @@ class PostgresPageRepository {
     }
 
     const stateResult = await this.pool.query(
-      'SELECT is_protected, expires_at FROM pages WHERE id = $1 LIMIT 1',
+      'SELECT is_protected, expires_at, published FROM pages WHERE id = $1 LIMIT 1',
       [id]
     );
     const page = stateResult.rows[0];
 
     if (!page) {
+      return 'not_found';
+    }
+
+    // #35: unpublished never counts and reads as missing (404), evaluated
+    // before expiry so expired+unpublished also answers 404.
+    if (page.published === false) {
       return 'not_found';
     }
 
@@ -654,6 +668,40 @@ class PostgresPageRepository {
 
   async updateProtection(id, options) {
     return this.updatePage(id, options);
+  }
+
+  /**
+   * #35 owner publication transition. One atomic statement sets `published`
+   * AND advances `access_revision`; the row is locked and compared against
+   * the caller's expected access revision first (412 on a stale baseline).
+   * A same-state transition is the approved unchanged no-op: no bump, no
+   * side effects. Password, expiry, content revisions, history, Favorite and
+   * view counts are never touched.
+   */
+  async setPublished(id, options) {
+    if (!this.transactionClient) {
+      return this.withTransaction(transaction => transaction.setPublished(id, options));
+    }
+    return this.setPublishedInTransaction(id, options);
+  }
+
+  async setPublishedInTransaction(id, options) {
+    requireAccessRevision(options.expectedAccessRevision);
+    const current = await this.pool.query('SELECT * FROM pages WHERE id = $1 FOR UPDATE', [id]);
+    if (current.rowCount === 0) return null;
+    const page = current.rows[0];
+    if (String(page.access_revision) !== String(options.expectedAccessRevision)) {
+      throw accessError(412, 'Share 访问设置已更改，请刷新后重新确认；未保存的输入已保留。');
+    }
+    const target = options.published === true;
+    if (Boolean(page.published) === target) {
+      return { changed: false, page };
+    }
+    const updated = await this.pool.query(
+      'UPDATE pages SET published = $2, access_revision = access_revision + 1 WHERE id = $1 RETURNING *',
+      [id, target]
+    );
+    return { changed: true, page: updated.rows[0] };
   }
 
   async setFavorite(id, isFavorite) {

@@ -58,9 +58,10 @@ npm run verify:backup -- --source-url <src> --restore-url <restore> \
 - 密码**校验与回显**双重能力：恢复库上 `password_hash` 可验证夹具密码，`encrypted_password` 可用夹具会话密钥解密回显；
 - managed Key 行与 secret 校验，显式比较 `credential_version`；迁移 `006` 后夹具使用 `'9007199254740993'`，验证原生恢复的 BIGINT 十进制字符串保真及仅版本篡改时失败；
 - 审计日志（快照点两侧一致）；
-- 发布操作记录（迁移 `008` 起的 `publish_operations` 全表逐列对比：`(actor_namespace, request_id)` 主键、HMAC 请求摘要、加密回执 `receipt_encrypted`、删除墓碑 `deleted_at`；迁移 `009` 起加入回执清除时刻 `purged_at`。夹具含一条已提交创建（带加密回执）、一条删除墓碑（回执已清）与一条 #34 回执被清除的操作（`receipt_encrypted=NULL`、`purged_at` 已记录）；恢复库单独篡改回执、墓碑位或 `purged_at` 时 `publishOperations` 检查必须按字段与 request id 具名失败）；
+- 发布操作记录（迁移 `008` 起的 `publish_operations` 全表逐列对比：`(actor_namespace, request_id)` 主键、HMAC 请求摘要、加密回执 `receipt_encrypted`、删除墓碑 `deleted_at`；迁移 `009` 起加入回执清除时刻 `purged_at`。夹具含一条已提交创建（带加密回执）、一条删除墓碑（回执已清）、一条 #34 回执被清除的操作（`receipt_encrypted=NULL`、`purged_at` 已记录）与一条 #35 `unpublish` 操作（回执 `{changed, published}`）；恢复库单独篡改回执、墓碑位或 `purged_at` 时 `publishOperations` 检查必须按字段与 request id 具名失败）；
 - 内容快照墓碑（迁移 `009` 起的 `share_revisions.purged_at`）：墓碑行按身份/来源/时间/`purged_at` 列对比；任何载荷或快照哈希字节在墓碑上「复活」都按字段具名失败（`revision-purge-tombstones` 覆盖项），无载荷快照绝不与存活正文重算哈希比对；`shareRevisions` 检查报告 `tombstoneCount`/`liveCount`；
 - 站点设置全行（迁移 `005` 后夹具将 `publishing_writes_paused` 置为非默认 `true`，必须完整恢复；恢复库单独篡改此值时 `siteSettings` 检查必须失败）；
+- 发布状态（#35）：迁移 `007` 起夹具在主题 Share 上写入真实的所有者下架终态——`published = FALSE` 且 `access_revision` 推进到 `'9007199254740994'`（即访问版本夹具值 +1，仍超出 2^53），两者必须成对完整恢复；单独篡改 `published`（复活已下架 Share）或单独篡改该 `access_revision` 都必须按字段与页面具名失败（exit 1），revert（用同一 manifest 重新恢复）后 VERIFY 回到 exit 0。忽略 `published` 的旧应用不是安全回滚候选；
 - 迁移台账（恢复库、源库与本地 `db/migrations` 三方一致，checksum 不符即失败）。
 
 **夹具覆盖诚实性**：恢复库中每一条受保护页与每一条 managed Key 都必须被夹具材料实际验证；没有对应夹具条目时，验证以“incomplete fixture coverage”显式失败（exit 1），绝不把这些行的功能检查静默标为通过。夹具中引用但恢复库不存在的条目同样报错。报告同时记录快照点（`snapshotAt` + `snapshotWalLsn`）与各步骤真实耗时（`durationsMs`）。
@@ -71,17 +72,17 @@ npm run verify:backup -- --source-url <src> --restore-url <restore> \
 
 - 恢复脚本只写数据库，绝不连接应用；验证报告永远输出 `safeToServe: false`、`isolation: offline-by-default`。恢复出的数据库默认不对外服务。
 - **报告不存在“not-required”结果。**验证对快照点之后的撤销/清除给出两种结论，均需所有者处理后显式传入 `--reconciled`（布尔 flag，不接值）才退出 0：
-  - `unreconciled`：检测到快照点之后的撤销/清除事件——`page.delete`、`page.delete.batch`、`page.revision.purge`（#34 版本清除）、`api_key.delete`、`api_key.rotate`，以及携带 `fields` 含 `isProtected`/`passwordHash`/`encryptedPassword`/`expiresAt`/`revokeAccess` 的 `page.update`（即应用真实发出的审计词表，`fields` 来自 `JSON.stringify({ fields: Object.keys(updateOptions) })`）；
+  - `unreconciled`：检测到快照点之后的撤销/清除事件——`page.delete`、`page.delete.batch`、`page.revision.purge`（#34 版本清除）、`page.unpublish`、`page.republish`（#35 发布状态转换：下架撤销公开访问，两个转换都推进访问版本）、`api_key.delete`、`api_key.rotate`，以及携带 `fields` 含 `isProtected`/`passwordHash`/`encryptedPassword`/`expiresAt`/`revokeAccess` 的 `page.update`（即应用真实发出的审计词表，`fields` 来自 `JSON.stringify({ fields: Object.keys(updateOptions) })`）；
   - `owner-review-required`：未检测到事件也**不构成“无事发生”的证明**——部分策略路由（如旧版 `POST /api/pages/:id/protect`）不写审计行，审计历史无法证明 absence，因此任何恢复默认都需要所有者复核后显式确认。
 - 两种状态下恢复库都保持离线；`--reconciled` 只表示“所有者已完成人工复核”这一显式动作，不改变 `safeToServe: false` 的报告值。演练脚本（`npm run backup:check`）因夹具完全合成且历史已知，由编排器自身传入该 flag 并在摘要中如实记录 reconciliation 状态。
-- 当前 schema 尚无 published/disabled 字段；「恢复即重新上线」永远不是本工具的结论，需要单独的所有者决策与后续票的机制。
+- `published` 列自迁移 `007` 起存在并由 #35 夹具实际验证：恢复库中 `published=false` 的 Share 保持下架，「恢复即重新上线」永远不是本工具的结论，需要单独的所有者决策；忽略 `published` 的旧应用不是安全回滚候选。
 
 ## 凭据与安全边界
 
 - 脚本不加载 `.env`；URL 一律显式传入，子进程环境会剥离继承的 `DATABASE_URL`、`SESSION_SECRET` 等再注入合成值。
 - manifest 与日志只含 redacted URL；密码不出现在任何产物中。
 - 测试与演练只用合成 secret；生产备份属于单独授权的运维操作（脚本提供显式 `--allow-non-test` 逃生口并在 manifest 中记录绕过标记）。
-- 恢复库保持私有：不要把恢复库 URL 配置给任何 QuickShare 运行环境。恢复到 `publishing_writes_paused=true` 也不替代隔离或所有者复核；若快照值为 false，更不能直接开放。受控暂停、旧写入者退出/排空与恢复写入流程见 [写维护手册](maintenance.md)。
+- 恢复库保持私有：不要把恢复库 URL 配置给任何 QuickShare 运行环境。恢复到 `publishing_writes_paused=true` 也不替代隔离或所有者复核；若快照值为 false，更不能直接开放。`published` 列自迁移 `007` 起存在并由 #35 夹具实际验证：恢复库中 `published=false` 的 Share 保持下架，「恢复即重新上线」永远不是本工具的结论，需要单独的所有者决策；忽略 `published` 的旧应用不是安全回滚候选。受控暂停、旧写入者退出/排空与恢复写入流程见 [写维护手册](maintenance.md)。
 
 ## 后续票的扩展合同
 

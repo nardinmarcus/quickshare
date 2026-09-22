@@ -82,6 +82,59 @@ an id cannot undo a possibly committed operation. The explicit conflict
 resolution action authorizes a new baseline; transport failure retains that
 chosen baseline and id for retry.
 
+## Owner publish-state transitions (#35)
+
+Two dashboard actions complete the lifecycle: **`unpublish`**
+(`POST /admin/pages/:id/unpublish`) and **`republish`**
+(`POST /admin/pages/:id/republish`), both behind the dashboard session,
+CSRF, a REQUIRED `Idempotency-Key` and a REQUIRED `expectedAccessRevision`
+(428 missing / 400 malformed). The digest covers the exact expected access
+revision with the ACTION carrying the transition target, so the two actions
+never share digest space.
+
+One atomic publishing transaction per transition (lock order below): the
+Share row is locked, the baseline is re-checked inside the lock (stale →
+`412 ACCESS_REVISION_CONFLICT`), then `published` and `access_revision`
+advance together in one statement. Nothing else moves: password, expiry,
+content revisions, history, Favorite Share and view counts are untouched,
+and a missing Share is a controlled `404 SHARE_NOT_FOUND`.
+
+- Same-state repeat with a NEW request id records a successful no-op:
+  `changed: false`, no bump, no duplicate audit entry.
+- A lost response retried with the ORIGINAL id and ORIGINAL (now stale)
+  baseline replays the committed result BEFORE any CAS (`replayed: true`) —
+  the result is confirmed from the ledger record plus its encrypted receipt
+  (`{changed, published}`), never re-derived from the live row. A publish-
+  state result is a STATE transition: its confirmation does not depend on
+  the committed content revision's availability, so a later purge of that
+  revision cannot un-confirm it (the approved exception to the content-
+  family revision check; conflicts and result-unavailable answers behave
+  exactly as for every other action).
+- The ledger row records the then-current content revision as owner-review
+  metadata; the transition itself never moves it.
+- Audit: `page.unpublish` / `page.republish`, committed in the same
+  transaction. Both are hard revocation evidence for backup reconciliation
+  (see [backup-restore](backup-restore.md)).
+- The write-maintenance gate applies like every publishing write; paused
+  writes answer `503 PUBLISHING_MAINTENANCE`.
+
+**Public semantics (unified, #24 §5):** the adapters' public read seam
+(`getPublicById`) never exposes an unpublished Share — every public surface
+(view page, OG, metadata API, password POST) answers the neutral missing
+404, with no content-derived metadata in any 404/410 path. Unpublished is
+evaluated BEFORE expiry, so expiry only ever classifies published Shares
+and an expired+unpublished Share reads as 404. View events never count an
+unpublished Share (`404`, no increment), including while writes are paused.
+Both transitions bump the access revision, so unlock cookies minted under
+an older revision are dead after either one (#25 version-bound check);
+republishing resumes the SAME URL with the password and expiry unchanged.
+
+The owner dashboard keeps read, edit, history, restore, favorite and clone
+for unpublished and expired Shares; only the public projection narrows.
+The list and detail views render the published/unpublished state with the
+toggle actions; each click carries the row's displayed access revision as
+the baseline and an operation id in the dashboard-session namespace.
+
 ## Digest before randomness
 
 The operation digest is an HMAC-SHA256 keyed by the application secret over
@@ -166,9 +219,9 @@ recover.
 
 The dashboard's Share list has a “按请求标识核对创建操作” panel backed by
 `GET /admin/operations?requestId=…`. It lists every namespace's record for
-that id with status, action (`create`, `clone`, `content-update`, `restore`)
-and Share/version metadata. Owner review never returns receipts; it cannot
-be used to replay secrets across identities.
+that id with status, action (`create`, `clone`, `content-update`, `restore`,
+`unpublish`, `republish`) and Share/version metadata. Owner review never
+returns receipts; it cannot be used to replay secrets across identities.
 
 ## Backup and restore
 

@@ -371,6 +371,14 @@ window.Toast = {
     'publish-session': '网页发布会话',
     'dashboard-session': '后台会话'
   };
+  var ACTION_LABELS = {
+    'create': '创建',
+    'clone': '克隆',
+    'content-update': '内容保存',
+    'restore': '恢复',
+    'unpublish': '下架',
+    'republish': '重新发布'
+  };
 
   // RFC 4122 UUID v4 (8-4-4-4-12, version 4, IEEE-802 variant), matching
   // #24 L207. crypto.randomUUID is used where available.
@@ -496,6 +504,108 @@ window.Toast = {
     reconcileCloneIntents();
   }
 
+  /*
+   * #35 owner publish-state toggles (list rows). Same identity discipline as
+   * the clone intents: one confirmed click carries one request id; a lost
+   * response keeps the id so the next click replays the committed result via
+   * the operation ledger instead of duplicating the side effect. The row's
+   * embedded access revision is the draft key: after a confirmed transition
+   * the list re-renders with the new baseline, so a stale pending id can
+   * never be silently re-submitted against it.
+   */
+  var PUBLISH_INTENT_STORAGE_KEY = 'quickshare.publish-state.intent';
+
+  function readPublishIntent() {
+    try {
+      return JSON.parse(window.sessionStorage.getItem(PUBLISH_INTENT_STORAGE_KEY) || 'null');
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function persistPublishIntent(intent) {
+    try {
+      if (intent === null) window.sessionStorage.removeItem(PUBLISH_INTENT_STORAGE_KEY);
+      else window.sessionStorage.setItem(PUBLISH_INTENT_STORAGE_KEY, JSON.stringify(intent));
+    } catch (error) { /* identity still covers this page view */ }
+  }
+
+  function publishActionFor(control) {
+    return control.dataset.published === 'true' ? 'unpublish' : 'republish';
+  }
+
+  function initPublishToggles() {
+    document.querySelectorAll('[data-publish-toggle]').forEach(function (control) {
+      control.addEventListener('click', async function () {
+        if (control.disabled) return;
+        var pageId = control.dataset.pageId;
+        var pageTitle = control.dataset.pageTitle || pageId;
+        var action = publishActionFor(control);
+        var expectedAccessRevision = String(control.dataset.accessRevision || '');
+        var actionLabel = action === 'unpublish' ? '下架' : '重新发布';
+
+        if (!window.confirm(
+          action === 'unpublish'
+            ? '下架后「' + pageTitle + '」的公开地址将立即返回 404；密码、有效期与内容保持不变。继续下架？'
+            : '重新发布「' + pageTitle + '」后公开访问恢复；密码与有效期保持不变，此前解锁的访问需重新输入密码。继续？'
+        )) return;
+
+        // One explicit intent carries one id: an unconfirmed intent for the
+        // SAME target+action+baseline is the retry path.
+        var intent = readPublishIntent();
+        var isRetryable = intent
+          && intent.targetId === pageId
+          && intent.action === action
+          && intent.expectedAccessRevision === expectedAccessRevision
+          && REQUEST_ID_PATTERN.test(intent.requestId);
+        var requestId = isRetryable ? intent.requestId : generateRequestId();
+        persistPublishIntent({ requestId: requestId, targetId: pageId, action: action, expectedAccessRevision: expectedAccessRevision });
+
+        control.disabled = true;
+        control.setAttribute('aria-busy', 'true');
+        try {
+          var response = await fetch('/admin/pages/' + encodeURIComponent(pageId) + '/' + action, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+              'X-CSRF-Token': dashboardCsrfToken(),
+              'Idempotency-Key': requestId
+            },
+            body: JSON.stringify({ expectedAccessRevision: expectedAccessRevision })
+          });
+          var data = await response.json().catch(function () { return null; });
+
+          if (!response.ok || !data || !data.success) {
+            // 412 and other refusals never rotate the id: refresh re-baselines.
+            throw new Error((data && data.error) || (actionLabel + '结果未确认，原请求标识已保留'));
+          }
+
+          // Definitive outcome: consume the intent, then reload so the list
+          // reflects the true committed state (fresh result or ledger replay).
+          persistPublishIntent(null);
+          Toast.success(data.replayed
+            ? '已确认上次' + actionLabel + '请求的结果，页面即将刷新'
+            : (action === 'unpublish' ? '已下架：公开地址现返回 404' : '已重新发布：此前解锁的访问已失效'));
+          setTimeout(function () { window.location.reload(); }, 800);
+        } catch (error) {
+          var networkUnknown = error instanceof TypeError || error.message === 'Failed to fetch';
+          Toast.error(networkUnknown
+            ? '网络失败，' + actionLabel + '结果未知：原请求标识已保留，再次点击将以原请求重试'
+            : (error.message || actionLabel + '失败，请稍后重试'));
+          control.disabled = false;
+          control.setAttribute('aria-busy', 'false');
+        }
+      });
+    });
+  }
+
+  // Guarded like the clone-intent init so non-browser harnesses without
+  // event delegation still load the rest of admin.js.
+  if (typeof document.querySelectorAll === 'function') {
+    initPublishToggles();
+  }
+
   function formatManagementTime(epochMs) {
     try {
       return new Date(Number(epochMs)).toLocaleString('zh-CN', {
@@ -538,7 +648,7 @@ window.Toast = {
 
       var cells = [
         NAMESPACE_LABELS[operation.namespaceKind] || operation.namespaceKind,
-        operation.action === 'clone' ? '克隆' : '创建',
+        ACTION_LABELS[operation.action] || operation.action,
         statusLabel(operation.status)
       ];
       cells.forEach(function (text) {

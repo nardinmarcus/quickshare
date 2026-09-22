@@ -79,6 +79,23 @@
         <dt>内容版本</dt>
         <dd id="content-revision-display"><%= sharedPage.currentRevision %></dd>
       </div>
+      <div>
+        <dt>发布状态</dt>
+        <dd id="publish-state-display">
+          <span id="publish-state-value" class="admin-status <%= sharedPage.published ? 'public' : 'unpublished' %>"><%= sharedPage.published ? '已发布' : '已下架' %></span>
+          <span class="admin-muted"><%= sharedPage.published ? '公开访问中' : '公开地址现返回 404' %></span>
+        </dd>
+      </div>
+      <div class="admin-detail-wide">
+        <dt>发布操作</dt>
+        <dd>
+          <button type="button" class="cyber-btn cyber-btn-secondary" id="unpublish-btn" <%= sharedPage.published ? '' : 'hidden' %> aria-busy="false" aria-describedby="publish-action-hint">下架</button>
+          <button type="button" class="cyber-btn cyber-btn-secondary" id="republish-btn" <%= sharedPage.published ? 'hidden' : '' %> aria-busy="false" aria-describedby="publish-action-hint">重新发布</button>
+          <p id="publish-action-hint" class="field-hint">下架或重新发布都会推进访问版本：旧解锁凭证立即失效；密码、有效期、内容版本与收藏保持不变。下架后公开地址返回 404，可随时重新发布。</p>
+          <p class="field-hint">本次提交的访问基线：<code id="publish-access-baseline"><%= sharedPage.accessRevision %></code>；若页面提示访问设置已更改，请刷新后重新操作。</p>
+          <p id="publish-action-status" class="field-hint" role="status" aria-live="polite"></p>
+        </dd>
+      </div>
       <div class="admin-detail-wide">
         <dt>已解锁访问</dt>
         <dd>

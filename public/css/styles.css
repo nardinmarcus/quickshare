@@ -1641,6 +1641,36 @@ body:hover::-webkit-scrollbar,
   background: var(--error-bg);
 }
 
+/* #35: publication state — paused/unpublished presentation. */
+.admin-status.unpublished {
+  color: var(--text-secondary);
+  background: var(--result-bg);
+  border: 1px solid var(--border-color);
+}
+
+.admin-publish-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  color: var(--text-primary);
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.admin-publish-toggle:hover {
+  border-color: var(--primary);
+  background: var(--button-hover);
+}
+
+.admin-publish-toggle:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .admin-icon-link {
   display: inline-flex;
   align-items: center;
@@ -2257,6 +2287,20 @@ body:hover::-webkit-scrollbar,
   background: rgba(245, 158, 11, 0.15);
   color: #f59e0b;
   border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.admin-unpublished-badge {
+  display: inline-block;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-top: 0.35rem;
+  background: rgba(100, 116, 139, 0.18);
+  color: var(--text-secondary);
+  border: 1px solid rgba(100, 116, 139, 0.35);
 }
 
 /* Modal */

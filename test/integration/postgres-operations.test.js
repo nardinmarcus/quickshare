@@ -876,3 +876,243 @@ for (const action of ['content-update', 'restore']) {
     assert.equal(String((await repository.getById(id)).current_revision), '4');
   });
 }
+
+// ---- #35: owner publication transitions on real PostgreSQL ----
+
+async function pgPublishState(id, action, expectedAccessRevision, requestId) {
+  const response = await fetch(`${origin}/admin/pages/${id}/${action}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json', Origin: origin,
+      ...(requestId ? { 'Idempotency-Key': requestId } : {})
+    },
+    body: JSON.stringify({ expectedAccessRevision: String(expectedAccessRevision) })
+  });
+  const text = await response.text();
+  return { status: response.status, body: JSON.parse(text), text };
+}
+
+test('unpublish/republish advance published+access_revision atomically and touch nothing else', async () => {
+  const id = await pgCreateShare({ htmlContent: '<h1>PG35 ATOMIC</h1>', codeType: 'html', title: 'Pg35 atomic' });
+
+  const down = await pgPublishState(id, 'unpublish', '1', 'pg35-unpub-atomic-001');
+  assert.equal(down.status, 200);
+  assert.equal(down.body.changed, true);
+  assert.equal(down.body.accessRevision, '2');
+  assert.equal(down.body.page.published, false);
+
+  const row = (await repository.pool.query('SELECT published, access_revision, current_revision, is_protected, expires_at, view_count FROM pages WHERE id = $1', [id])).rows[0];
+  assert.equal(row.published, false);
+  assert.equal(String(row.access_revision), '2');
+  assert.equal(String(row.current_revision), '1', 'content revision untouched');
+  assert.equal(row.is_protected, 0, 'protection untouched');
+  assert.equal(row.expires_at, null, 'expiry untouched');
+  assert.equal(Number(row.view_count || 0), 0, 'view count untouched');
+
+  const up = await pgPublishState(id, 'republish', '2', 'pg35-repub-atomic-001');
+  assert.equal(up.status, 200);
+  assert.equal(up.body.accessRevision, '3');
+  assert.equal(up.body.published, true);
+
+  const auditActions = (await repository.pool.query(
+    'SELECT action FROM audit_logs WHERE page_id = $1 AND action IN ($2, $3) ORDER BY created_at ASC',
+    [id, 'page.unpublish', 'page.republish']
+  )).rows.map(row => row.action);
+  assert.deepEqual(auditActions, ['page.unpublish', 'page.republish']);
+
+  const ledger = (await repository.pool.query(
+    "SELECT action, result_revision, result_access_revision FROM publish_operations WHERE request_id IN ('pg35-unpub-atomic-001', 'pg35-repub-atomic-001') ORDER BY created_at ASC"
+  )).rows;
+  assert.equal(ledger.length, 2);
+  assert.equal(ledger[0].action, 'unpublish');
+  assert.equal(String(ledger[0].result_access_revision), '2');
+  assert.equal(ledger[1].action, 'republish');
+  assert.equal(String(ledger[1].result_access_revision), '3');
+
+  const sameState = await pgPublishState(id, 'republish', '3', 'pg35-repub-atomic-002');
+  assert.equal(sameState.status, 200);
+  assert.equal(sameState.body.changed, false, 'same-state repeat records unchanged');
+  assert.equal(String((await repository.pool.query('SELECT access_revision FROM pages WHERE id = $1', [id])).rows[0].access_revision), '3', 'same-state repeat does not bump');
+});
+
+test('two independent connections racing the same publication baseline let exactly one transition win', async () => {
+  const id = await pgCreateShare({ htmlContent: '<h1>PG35 RACE</h1>', codeType: 'html', title: 'Pg35 race' });
+
+  // Rendezvous INSIDE both transactions before the Share row lock; distinct
+  // backend PIDs prove this is a real two-connection race.
+  const runTransaction = repository.withPublishingTransaction;
+  const backendPids = new Set();
+  let release;
+  const barrier = new Promise(resolve => { release = resolve; });
+  repository.withPublishingTransaction = function (operation) {
+    return runTransaction.call(this, async tx => {
+      backendPids.add((await tx.pool.query('SELECT pg_backend_pid() AS pid')).rows[0].pid);
+      if (backendPids.size === 2) release();
+      await barrier;
+      return operation(tx);
+    });
+  };
+  const requestIdA = 'pg35-race-a-0123456';
+  const requestIdB = 'pg35-race-b-0123456';
+  const [winner, loser] = await Promise.all([
+    pgPublishState(id, 'unpublish', '1', requestIdA),
+    pgPublishState(id, 'unpublish', '1', requestIdB)
+  ]).finally(() => { repository.withPublishingTransaction = runTransaction; });
+  assert.equal(backendPids.size, 2, 'two distinct PostgreSQL connections reached the barrier');
+  console.log('issue35 publish-state race backend PIDs:', [...backendPids]);
+
+  const statuses = [winner.status, loser.status].sort();
+  assert.deepEqual(statuses, [200, 412], 'exactly one transition commits; the stale one answers 412');
+  const committed = winner.status === 200 ? winner : loser;
+  assert.equal(committed.body.accessRevision, '2');
+  assert.equal(String((await repository.pool.query('SELECT access_revision, published FROM pages WHERE id = $1', [id])).rows[0].access_revision), '2');
+  assert.equal((await repository.pool.query(
+    'SELECT count(*)::int AS n FROM publish_operations WHERE request_id LIKE $1', ['pg35-race-%'])).rows[0].n, 1,
+    'only the committed transition leaves a ledger row');
+
+  // The COMMITTED transition's client had its response lost: retrying with
+  // the SAME id and ORIGINAL (now stale) baseline replays the committed
+  // result instead of re-running the CAS.
+  const winnerRequestId = winner.status === 200 ? requestIdA : requestIdB;
+  const loserRequestId = winner.status === 200 ? requestIdB : requestIdA;
+  const replay = await pgPublishState(id, 'unpublish', '1', winnerRequestId);
+  assert.equal(replay.status, 200);
+  assert.equal(replay.body.replayed, true, 'the ledger confirms the committed result');
+  assert.equal(replay.body.changed, true);
+  assert.equal(replay.body.accessRevision, '2');
+
+  // The REFUSED racer received a definitive 412 (not a lost response): its
+  // id never committed, so retrying it stays a live CAS and answers 412
+  // again against the new baseline — never a fabricated replay.
+  const refusedRetry = await pgPublishState(id, 'unpublish', '1', loserRequestId);
+  assert.equal(refusedRetry.status, 412);
+  assert.equal(String((await repository.pool.query('SELECT access_revision FROM pages WHERE id = $1', [id])).rows[0].access_revision), '2', 'replays and refusals never re-bump');
+});
+
+test('a publish-state transition never blocks or moves the content family: unpublish and content save coexist', async () => {
+  const id = await pgCreateShare({ htmlContent: '<h1>PG35 FAMILY</h1>', codeType: 'html', title: 'Pg35 family' });
+  const baseline = String((await repository.pool.query('SELECT current_revision FROM pages WHERE id = $1', [id])).rows[0].current_revision);
+
+  // A publication transition while a content save is in flight: the two
+  // families touch the same row but different columns; the content CAS is
+  // unaffected by the access_revision bump.
+  const runTransaction = repository.withPublishingTransaction;
+  const backendPids = new Set();
+  let release;
+  const barrier = new Promise(resolve => { release = resolve; });
+  repository.withPublishingTransaction = function (operation) {
+    return runTransaction.call(this, async tx => {
+      backendPids.add((await tx.pool.query('SELECT pg_backend_pid() AS pid')).rows[0].pid);
+      if (backendPids.size === 2) release();
+      await barrier;
+      return operation(tx);
+    });
+  };
+  const [down, save] = await Promise.all([
+    pgPublishState(id, 'unpublish', '1', 'pg35-family-unpub-01'),
+    fetch(`${origin}/admin/pages/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Origin: origin, 'If-Match': `"content:${id}:${baseline}"` },
+      body: JSON.stringify({ htmlContent: '<h1>PG35 FAMILY V2</h1>' })
+    }).then(async response => ({ status: response.status, body: await response.json() }))
+  ]).finally(() => { repository.withPublishingTransaction = runTransaction; });
+  assert.equal(backendPids.size, 2, 'two distinct PostgreSQL connections reached the barrier');
+  assert.equal(down.status, 200);
+  assert.equal(save.status, 200, 'the content save wins its own CAS against the unpublish');
+
+  const row = (await repository.pool.query('SELECT published, access_revision, current_revision FROM pages WHERE id = $1', [id])).rows[0];
+  assert.equal(row.published, false);
+  assert.equal(String(row.access_revision), '2', 'exactly one access bump');
+  assert.equal(String(row.current_revision), '2', 'exactly one content revision');
+  assert.equal(save.body.page.htmlContent, '<h1>PG35 FAMILY V2</h1>');
+});
+
+test('an injected COMMIT-time failure rolls back the publication transition, audit and ledger as one unit', async () => {
+  const id = await pgCreateShare({ htmlContent: '<h1>PG35 ROLLBACK</h1>', codeType: 'html', title: 'Pg35 rollback' });
+  const requestId = 'pg35-rollback-unpub-01';
+
+  const observer = await repository.pool.connect();
+  let observerReleased = false;
+  try {
+    await observer.query(`
+      CREATE FUNCTION issue35_unpub_barrier() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'issue35 injected unpublish failure'; END $$;
+      CREATE CONSTRAINT TRIGGER issue35_unpub_barrier AFTER INSERT ON publish_operations
+      DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION issue35_unpub_barrier();
+    `);
+
+    const before = {
+      published: (await observer.query('SELECT published FROM pages WHERE id = $1', [id])).rows[0].published,
+      access: String((await observer.query('SELECT access_revision FROM pages WHERE id = $1', [id])).rows[0].access_revision),
+      audits: (await observer.query('SELECT count(*)::int AS n FROM audit_logs')).rows[0].n
+    };
+
+    const response = await pgPublishState(id, 'unpublish', '1', requestId);
+    assert.equal(response.status, 500, 'the injected failure surfaces as an error, never success');
+
+    const after = {
+      published: (await repository.pool.query('SELECT published FROM pages WHERE id = $1', [id])).rows[0].published,
+      access: String((await repository.pool.query('SELECT access_revision FROM pages WHERE id = $1', [id])).rows[0].access_revision),
+      audits: (await repository.pool.query('SELECT count(*)::int AS n FROM audit_logs')).rows[0].n
+    };
+    assert.equal(after.published, before.published, 'no half-committed publication state survives');
+    assert.equal(after.access, before.access, 'the access revision never moved');
+    assert.equal(after.audits, before.audits, 'no half-committed audit entry survives');
+    assert.equal((await repository.pool.query(
+      'SELECT count(*)::int AS n FROM publish_operations WHERE request_id = $1', [requestId])).rows[0].n, 0,
+      'no half-committed ledger row survives');
+
+    // Remove the injection BEFORE the unknown-outcome client retries: the
+    // retry runs as a fresh request and commits exactly once.
+    await observer.query('DROP FUNCTION IF EXISTS issue35_unpub_barrier() CASCADE');
+    await observer.release();
+    observerReleased = true;
+  } finally {
+    if (!observerReleased) {
+      await observer.query('DROP FUNCTION IF EXISTS issue35_unpub_barrier() CASCADE').catch(() => {});
+      observer.release();
+    }
+  }
+
+  const retry = await pgPublishState(id, 'unpublish', '1', requestId);
+  assert.equal(retry.status, 200);
+  assert.equal(retry.body.changed, true);
+  assert.equal(retry.body.accessRevision, '2');
+  assert.equal(String((await repository.pool.query('SELECT access_revision FROM pages WHERE id = $1', [id])).rows[0].access_revision), '2');
+  assert.equal((await repository.pool.query(
+    'SELECT count(*)::int AS n FROM publish_operations WHERE request_id = $1', [requestId])).rows[0].n, 1,
+  'the retry commits exactly one ledger row');
+});
+
+test('access revision bumps stay exact past 2^53 and the stale unlock cookie loses every race', async () => {
+  const id = await pgCreateShare({ htmlContent: '<h1>PG35 BIGINT</h1>', codeType: 'html', title: 'Pg35 bigint', isProtected: true, password: 'pg35pass' });
+  const huge = '9007199254740993'; // 2^53 + 1
+  await repository.pool.query('UPDATE pages SET access_revision = $1::bigint WHERE id = $2', [huge, id]);
+
+  const down = await pgPublishState(id, 'unpublish', huge, 'pg35-bigint-unpub-001');
+  assert.equal(down.status, 200);
+  assert.equal(down.body.accessRevision, '9007199254740994', 'the bump is exact decimal arithmetic, never a float');
+  assert.equal(down.body.page.accessRevision, '9007199254740994');
+
+  const up = await pgPublishState(id, 'republish', '9007199254740994', 'pg35-bigint-repub-001');
+  assert.equal(up.status, 200);
+  assert.equal(up.body.accessRevision, '9007199254740995');
+
+  const stored = String((await repository.pool.query('SELECT access_revision FROM pages WHERE id = $1', [id])).rows[0].access_revision);
+  assert.equal(stored, '9007199254740995');
+  assert.equal(BigInt(stored) > BigInt(Number.MAX_SAFE_INTEGER), true);
+
+  // Cookie revival refusal at the database boundary: an unlock minted under
+  // the pre-transition revision neither counts nor authorizes after BOTH
+  // transitions moved the revision (protected Share: revision mismatch is
+  // the refusal).
+  const oldRevisionView = await repository.recordViewEvent(id, Date.now(), '9007199254740993');
+  assert.equal(oldRevisionView, 'protected', 'the old-version cookie is refused (403 family)');
+  assert.equal(Number((await repository.pool.query('SELECT view_count FROM pages WHERE id = $1', [id])).rows[0].view_count || 0), 0);
+
+  // While unpublished, even the CURRENT revision cookie is refused as missing.
+  await pgPublishState(id, 'unpublish', '9007199254740995', 'pg35-bigint-unpub-002');
+  const unpublishedView = await repository.recordViewEvent(id, Date.now(), '9007199254740996');
+  assert.equal(unpublishedView, 'not_found', 'unpublished never counts');
+  assert.equal(Number((await repository.pool.query('SELECT view_count FROM pages WHERE id = $1', [id])).rows[0].view_count || 0), 0);
+});

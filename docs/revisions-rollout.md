@@ -89,3 +89,14 @@ env -u DATABASE_URL -u POSTGRES_URL -u DATABASE_MIGRATION_URL \
 - **前端**：`admin-history.js` 新增清除对话框——逐字确认输入门控确认按钮，Enter（确认匹配时）与 Escape（空闲时）键盘可达，busy 期间两个键与取消均失效；成功文案只承诺「在线保存的该版本内容已清除、仅保留墓碑」，并明示其他 Revision 中相同片段、离线备份与接收者下载不受影响；已清除行的信息动作与比较 410 目标给出精确状态，绝不冒充「无差异」。
 - **备份**：verify 清单新增 `revision-purge-tombstones` 与 `operation-receipt-purges`；`shareRevisions` 对比列含 `purged_at`，墓碑上任何载荷字节复活按字段具名失败；`page.revision.purge` 进入快照点后硬撤销审计词表。drill 夹具含一条真实墓碑与一条回执被清除的操作，具名篡改（墓碑复活/回执复活）必须失败、revert 后验 VERIFY 通过。
 - **验证入口**：Memory HTTP（revision-purge）、前端 VM（revision-purge-ui：确认门控、Enter/Escape、busy 保护、拒绝与网络未知、重复清除文案、410 状态）、真实 PostgreSQL（postgres-purge：迁移 009 列、事务原子性注入回滚、双连接行锁竞争、BIGINT 精确版本、跨命名空间回执隔离、重复幂等）、备份集成（postgres-backup 墓碑/回执具名篡改）。浏览器验收需另外提供绑定源码的逐字确认、当前版本禁用与 390/明暗截图；本手册不是这些检查已通过的证明。
+
+## #35 增量：Owner 下架/重新发布与公开语义统一（T11）
+
+在 #30–#34 之上，#35 交付所有者的发布状态生命周期与统一的公开投影。无新迁移（复用 007 的 `pages.published` 与 004 的 `access_revision`）。无 API Key 或 CLI 入口（`share:publish` 作用域与 Key 上下架接口属 #39）。
+
+- **转换语义**：`POST /admin/pages/:id/unpublish|republish`（`requireDashboardApiAdmin` + CSRF + 必需 `Idempotency-Key` + 必需 `expectedAccessRevision`）。发布事务内锁 Share 行、锁内复检访问基线（陈旧 412），同一条语句翻转 `published` 并推进 `access_revision`——密码、有效期、内容版本、历史、Favorite、浏览量一律不动；Share 缺失为 `404 SHARE_NOT_FOUND`。同状态重复（新请求标识）记录 `changed:false` 成功结果：不推进版本、不重复审计。
+- **重放闭环**：发布状态操作的结果是状态转换而非内容——重放只要求 Share 仍存在且回执可读，不依赖提交时内容版本的可用性（该版本随后被清除不能否定已确认的下架）。丢响应重试携带原标识与原（已陈旧）基线，先于任何 CAS 确认已提交结果（`replayed:true`，`accessRevision` 为提交时值）；同标识不同基线 409。
+- **公开语义统一**：公开读缝（`getPublicById`）对下架 Share 返回空——视图页、OG、元信息 API、密码 POST 全部走中性「不存在」404，任何 404/410 路径无标题/简介/正文衍生信息。下架先于过期判定：过期只作用于已发布 Share，过期+下架读作 404。浏览事件的条件 UPDATE 带 `published` 条件：下架不计数（404），写维护暂停时同样拒绝。两个转换都推进访问版本，#25 版本绑定 Cookie 在任一转换后失效；重新发布沿用原 URL，密码与有效期不变。
+- **Owner 保留面**：下架/过期 Share 的读取、编辑、历史、恢复、收藏、克隆全部保持（#31–#34 语义不变）；仅公开投影收窄。列表行与详情页渲染已发布/已下架状态与切换操作，每次点击携带行内展示的访问版本作为基线与 dashboard 命名空间的操作标识；确认后重载真实服务端状态，丢响应保留原请求标识以原请求重试。
+- **审计与备份**：`page.unpublish`/`page.republish` 进入快照点后硬撤销审计词表；备份 drill 夹具写入真实下架终态（`published=FALSE` + 推进后的 `access_revision='9007199254740994'`）与一条 #35 `unpublish` 账本行，具名篡改（复活已下架 Share / 篡改推进后的访问版本）必须失败、revert 后 VERIFY 回到 exit 0。忽略 `published` 的旧应用不是安全回滚候选。
+- **验证入口**：Memory HTTP（publication-state：路由合同、统一 404/410/200 密码页、旧 Cookie 不复活、维护闸、Owner 保留面）、前端 VM（publication-state-ui：列表/详情渲染、意图复用、412 不静默换基线）、真实 PostgreSQL（postgres-operations：双 backend PID 转换竞争与内容族共存、COMMIT 时注入失败回滚、BIGINT 推进精确、Cookie 复活拒绝）、备份集成（postgres-backup：下架终态成对恢复断言、published 具名篡改 exit1→revert exit0）。浏览器验收需另外提供绑定源码的切换、旧 Cookie 视图、404/410 渲染与 390/明暗截图；本手册不是这些检查已通过的证明。

@@ -1,6 +1,6 @@
 const { invalidApiKey } = require('../utils/apiKeyIdentity');
 const { maintenanceError } = require('./publishing');
-const { isAccessUpdate, assertAccessRevision } = require('../utils/shareAccess');
+const { isAccessUpdate, assertAccessRevision, requireAccessRevision, accessError } = require('../utils/shareAccess');
 const { isContentRevision, assertContentRevision, contentError, contentSnapshotHash } = require('../utils/contentRevision');
 const {
   buildManagementDailyStats,
@@ -405,9 +405,13 @@ class MemoryPageRepository {
   }
 
   async getPublicById(id, now = Date.now()) {
+    // #35 public unification: an unpublished Share has NO public projection.
+    // Null routes every public surface through the neutral missing-404 path;
+    // unpublished is evaluated BEFORE expiry (expiry only classifies
+    // published Shares), matching the PostgreSQL adapter exactly.
     const page = this.pages.get(id);
 
-    if (!page) {
+    if (!page || page.published === false) {
       return null;
     }
 
@@ -470,7 +474,9 @@ class MemoryPageRepository {
         is_protected: page.is_protected,
         is_favorite: page.is_favorite,
         encrypted_password: page.encrypted_password,
-        expires_at: page.expires_at
+        expires_at: page.expires_at,
+        published: page.published === false ? false : true,
+        access_revision: page.access_revision
       }));
   }
 
@@ -528,6 +534,34 @@ class MemoryPageRepository {
     }
 
     return this.updatePage(id, options);
+  }
+
+  /**
+   * #35 owner publication transition. The access baseline is compared before
+   * the single atomic state write; a same-state transition is the approved
+   * unchanged no-op (no bump, no side effects). Password, expiry, content
+   * revisions, history, Favorite and view counts are never touched.
+   */
+  async setPublished(id, options) {
+    const page = this.pages.get(id);
+
+    if (!page) {
+      return null;
+    }
+
+    requireAccessRevision(options.expectedAccessRevision);
+    if (String(page.access_revision) !== String(options.expectedAccessRevision)) {
+      throw accessError(412, 'Share 访问设置已更改，请刷新后重新确认；未保存的输入已保留。');
+    }
+
+    const target = options.published === true;
+    if (Boolean(page.published) === target) {
+      return { changed: false, page };
+    }
+
+    page.published = target;
+    page.access_revision = (BigInt(page.access_revision) + 1n).toString();
+    return { changed: true, page };
   }
 
   async setFavorite(id, isFavorite) {
@@ -864,6 +898,12 @@ class MemoryPageRepository {
     const page = this.pages.get(id);
 
     if (!page) {
+      return 'not_found';
+    }
+
+    // #35: unpublished never counts and reads as missing (404), evaluated
+    // before expiry so expired+unpublished also answers 404.
+    if (page.published === false) {
       return 'not_found';
     }
 

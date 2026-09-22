@@ -46,6 +46,8 @@ const {
   normalizeContentUpdateDigestInput,
   validateDashboardUpdateInput,
   normalizeRestoreDigestInput,
+  normalizePublishStateDigestInput,
+  isPublishStateAction,
   operationStatusProjection
 } = require('./models/publishingOperations');
 const {
@@ -1897,6 +1899,7 @@ function adminPageProjection(page) {
     isProtected: page.is_protected === 1,
     accessRevision: String(page.access_revision),
     currentRevision: String(page.current_revision),
+    published: page.published === true,
     password: visiblePagePassword(page),
     expiresAt: page.expires_at,
     markdownTheme: page.markdown_theme,
@@ -2341,6 +2344,165 @@ app.post('/admin/pages/:id/restore', requireDashboardApiAdmin, parseShareJson, r
     console.error('Restore page revision failed:', error);
     return res.status(500).json({ success: false, error: 'Failed to restore revision' });
   }
+});
+
+// ---- Owner publication state (#35): unpublish/republish with unified
+// public semantics (#24 §5/§8/§9). ----
+//
+// One atomic publishing transaction per transition: the Share row is locked,
+// the expected access revision is re-checked inside the lock (412 on a stale
+// baseline), and `published` + `access_revision` advance together — never
+// touching password, expiry, content revisions, history, Favorite or view
+// counts. An operation id in the dashboard namespace makes the whole action
+// idempotent: a same-state repeat records `changed:false` without a second
+// bump; a lost response replays the committed result from the ledger.
+// Version-bound unlock cookies (#25) die with the bump on BOTH transitions.
+
+function stateReplayResponse(outcome, { requestId, action }) {
+  const { record, receipt } = outcome;
+  return (res) => res.json({
+    success: true,
+    replayed: true,
+    action,
+    requestId,
+    changed: Boolean(receipt.changed),
+    published: receipt.published === true,
+    accessRevision: String(record.result_access_revision)
+  });
+}
+
+async function handlePublishStateRequest(req, res, action) {
+  const requestIdHeader = req.get('Idempotency-Key');
+  if (!isvalidRequestId(requestIdHeader)) {
+    return res.status(400).json({ success: false, code: 'INVALID_REQUEST_ID', error: INVALID_REQUEST_ID_MESSAGE });
+  }
+
+  // Format-level precondition validation first (#24 §8 order); the live CAS
+  // itself runs inside the transaction against the locked row.
+  try {
+    requireAccessRevision(req.body?.expectedAccessRevision);
+  } catch (error) {
+    if (error.code === 'ACCESS_PRECONDITION_REQUIRED' || error.code === 'INVALID_ACCESS_REVISION') {
+      return res.status(error.status).json({ success: false, code: error.code, error: error.message });
+    }
+    throw error;
+  }
+  const expectedAccessRevision = String(req.body.expectedAccessRevision);
+
+  const digestInput = normalizePublishStateDigestInput({ expectedAccessRevision });
+  const requestDigest = createRequestDigest(digestInput.fields, { action, targetId: req.params.id });
+  const publishingOperation = {
+    actorNamespace: resolveDashboardCloneNamespace(req),
+    requestId: requestIdHeader,
+    action,
+    targetId: req.params.id,
+    requestDigest
+  };
+
+  try {
+    const respond = await publishing.run(async (repository, existingOperation) => {
+      // Replay confirmation BEFORE the share read and the CAS: a committed
+      // transition confirms its recorded result even when the retried
+      // baseline is long stale (#24 §8; same discipline as #32/#33).
+      if (existingOperation) {
+        const outcome = await classifyOperationReplay(repository, { record: existingOperation, requestDigest });
+        if (outcome.kind === 'conflict') {
+          return (res) => res.status(409).json({
+            success: false,
+            code: 'REQUEST_ID_CONFLICT',
+            requestId: requestIdHeader,
+            retryable: false,
+            error: '同一请求标识对应了不同的请求内容'
+          });
+        }
+        if (outcome.kind === 'result-unavailable') {
+          return (res) => res.status(410).json({
+            success: false,
+            code: 'RESULT_UNAVAILABLE',
+            requestId: requestIdHeader,
+            retryable: false,
+            error: '该操作已提交，但其结果已被永久删除'
+          });
+        }
+        return stateReplayResponse(outcome, { requestId: requestIdHeader, action });
+      }
+
+      const page = await repository.getById(req.params.id);
+      if (!page) {
+        return (res) => res.status(404).json({ success: false, code: 'SHARE_NOT_FOUND', error: 'Share not found' });
+      }
+
+      const result = await repository.setPublished(req.params.id, {
+        published: action === 'republish',
+        expectedAccessRevision,
+        returnUpdated: true
+      });
+      if (!result || !result.page) {
+        return (res) => res.status(404).json({ success: false, code: 'SHARE_NOT_FOUND', error: 'Share not found' });
+      }
+      const updatedPage = result.page;
+      const accessRevision = String(updatedPage.access_revision);
+
+      // Same-state repeat: confirm success, record the no-op result, but no
+      // bump and no duplicate audit side effect.
+      if (result.changed) {
+        await repository.createAuditLog({
+          action: action === 'unpublish' ? 'page.unpublish' : 'page.republish',
+          pageId: req.params.id,
+          details: JSON.stringify({ accessRevision, changed: true }),
+          ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+        });
+      }
+
+      if (publishingOperation) {
+        // Commits in the SAME transaction as the state change and the audit
+        // entry; the unique constraint is the final dedupe guard. The
+        // result's content revision is recorded as owner-review metadata —
+        // the transition itself never moves it.
+        await repository.createPublishingOperation({
+          actor_namespace: publishingOperation.actorNamespace,
+          request_id: requestIdHeader,
+          action,
+          request_digest: requestDigest,
+          target_id: req.params.id,
+          result_share_id: req.params.id,
+          result_revision: String(updatedPage.current_revision),
+          result_access_revision: accessRevision,
+          receipt_encrypted: encodeOperationReceipt({
+            changed: result.changed,
+            published: action === 'republish'
+          }),
+          created_at: Date.now()
+        });
+      }
+
+      return (res) => res.json({
+        success: true,
+        changed: result.changed,
+        requestId: requestIdHeader,
+        published: action === 'republish',
+        accessRevision,
+        page: adminPageProjection(updatedPage)
+      });
+    }, { publishingOperation });
+    return respond(res);
+  } catch (error) {
+    if (sendPublishingError(res, error)) return;
+    if (error.code === 'ACCESS_PRECONDITION_REQUIRED' || error.code === 'INVALID_ACCESS_REVISION'
+      || error.code === 'ACCESS_REVISION_CONFLICT') {
+      return res.status(error.status).json({ success: false, code: error.code, error: error.message });
+    }
+    console.error('Publish-state transition failed:', error);
+    return res.status(500).json({ success: false, error: 'Failed to update publication state' });
+  }
+}
+
+app.post('/admin/pages/:id/unpublish', requireDashboardApiAdmin, parseSmallJsonBody, requireDashboardCsrf, (req, res) => {
+  return handlePublishStateRequest(req, res, 'unpublish');
+});
+
+app.post('/admin/pages/:id/republish', requireDashboardApiAdmin, parseSmallJsonBody, requireDashboardCsrf, (req, res) => {
+  return handlePublishStateRequest(req, res, 'republish');
 });
 
 // ---- Owner revision purge (#34): dashboard session + CSRF only. ----
