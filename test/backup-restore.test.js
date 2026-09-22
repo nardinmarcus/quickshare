@@ -439,6 +439,7 @@ test('verification reports never claim reconciliation is not required', () => {
     'expiry',
     'managed-api-keys',
     'audit-logs',
+    'publish-operations',
     'site-settings',
     'migration-ledger'
   ]);

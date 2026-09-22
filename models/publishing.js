@@ -9,7 +9,14 @@ function maintenanceError() {
 
 function createPublishing(repository) {
   return {
-    run(operation, { allowPaused = false, apiKeyIdentity } = {}) {
+    // publishingOperation (optional): { actorNamespace, requestId, action,
+    // targetId, requestDigest }. When present, the operation-record lock and
+    // lookup run inside the same transaction, after the maintenance gate and
+    // key verification, and BEFORE any Share read or write: a committed
+    // operation must be confirmed before expiry checks or a clone source
+    // re-read can reject the retry. `operation` receives the previously
+    // committed record (or null) as its second argument.
+    run(operation, { allowPaused = false, apiKeyIdentity, publishingOperation } = {}) {
       return repository.withPublishingTransaction(async transaction => {
         // The adapter has already acquired the maintenance lock. Check the
         // live setting on that same transaction, never a process-local cache.
@@ -18,7 +25,15 @@ function createPublishing(repository) {
         if (apiKeyIdentity?.credentialKind === 'managed') {
           await transaction.verifyApiKeyForWrite(apiKeyIdentity);
         }
-        return operation(transaction);
+        let existingOperation = null;
+        if (publishingOperation) {
+          await transaction.lockPublishingOperation(publishingOperation);
+          existingOperation = await transaction.findPublishingOperation(
+            publishingOperation.actorNamespace,
+            publishingOperation.requestId
+          );
+        }
+        return operation(transaction, existingOperation);
       });
     }
   };

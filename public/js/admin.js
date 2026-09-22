@@ -357,3 +357,260 @@ window.Toast = {
     }
   });
 })();
+
+/*
+ * Publish operation identity and owner review (#24 §8, #32).
+ */
+(function () {
+  'use strict';
+
+  var REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
+  var NAMESPACE_LABELS = {
+    'managed-key': '托管密钥',
+    'legacy-key': '旧版密钥',
+    'publish-session': '网页发布会话',
+    'dashboard-session': '后台会话'
+  };
+
+  // RFC 4122 UUID v4 (8-4-4-4-12, version 4, IEEE-802 variant), matching
+  // #24 L207. crypto.randomUUID is used where available.
+  function generateRequestId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return window.crypto.randomUUID();
+    }
+    var bytes = new Uint8Array(16);
+    window.crypto.getRandomValues(bytes);
+    var hex = '';
+    bytes.forEach(function (byte) { hex += (byte + 0x100).toString(16).slice(1); });
+    return hex.slice(0, 8)
+      + '-' + hex.slice(8, 12)
+      + '-4' + hex.slice(13, 16)
+      + '-' + ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16) + hex.slice(17, 20)
+      + '-' + hex.slice(20, 32);
+  }
+
+  // Every dashboard clone click is one explicit intent: generate the request
+  // id at submit time so a lost response can be retried by resubmitting the
+  // same form intent (the browser resends the same hidden value only if the
+  // id was kept; a fresh click gets a fresh id). Guarded so non-browser
+  // harnesses without event delegation still load the rest of admin.js.
+  // Clone intents persist {requestId, target} so a LOST clone response has a
+  // real retry path: resubmitting the same form intent reuses the id. The
+  // server marks completion with a readable, non-sensitive cookie
+  // (clone_intent_done=<requestId>); only a COMPLETED intent rotates — an
+  // unconfirmed one stays in the field so the retry reaches the server.
+  var CLONE_INTENT_STORAGE_KEY = 'quickshare.clone.intent';
+
+  function readCloneIntent() {
+    try {
+      return JSON.parse(window.sessionStorage.getItem(CLONE_INTENT_STORAGE_KEY) || 'null');
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function cloneCompletionCookieFor(requestId) {
+    var cookies = String(window.document.cookie || '').split(';');
+    for (var i = 0; i < cookies.length; i += 1) {
+      var parts = cookies[i].trim().split('=');
+      if (parts[0] === 'clone_intent_done' && parts.slice(1).join('=') === requestId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function reconcileCloneIntents() {
+    var intent = readCloneIntent();
+    if (!intent) return;
+    if (cloneCompletionCookieFor(intent.requestId)) {
+      try {
+        window.sessionStorage.removeItem(CLONE_INTENT_STORAGE_KEY);
+      } catch (error) { /* ignore */ }
+      document.querySelectorAll('[data-clone-request-id]').forEach(function (field) {
+        var form = field.closest && field.closest('form[data-clone-form]');
+        if (form && form.action && form.action.indexOf('/admin/pages/' + intent.targetId + '/clone') !== -1) {
+          field.value = '';
+        }
+      });
+    }
+    // Unconfirmed intents deliberately KEEP the hidden field value so the
+    // next submit retries the SAME clone request id.
+  }
+
+  window.QuickShareCloneIntents = {
+    state: readCloneIntent,
+    reconcile: reconcileCloneIntents,
+    persist: function (requestId, targetId) {
+      try {
+        window.sessionStorage.setItem(CLONE_INTENT_STORAGE_KEY, JSON.stringify({
+          requestId: requestId,
+          targetId: targetId
+        }));
+      } catch (error) { /* ignore */ }
+    }
+  };
+
+  if (typeof document.addEventListener === 'function') {
+    document.addEventListener('submit', function (event) {
+      var form = event.target;
+      if (!form || !form.matches || !form.matches('form[data-clone-form]')) return;
+      var field = form.querySelector('[data-clone-request-id]');
+      if (!field) return;
+      var intent = readCloneIntent();
+      var targetMatch = /\/admin\/pages\/([^/]+)\/clone/.exec(form.action || '');
+      var targetId = targetMatch ? decodeURIComponent(targetMatch[1]) : null;
+      var isCompletedIntent = intent
+        && intent.targetId === targetId
+        && cloneCompletionCookieFor(intent.requestId);
+
+      // An UNCONFIRMED intent for THIS target is the retry path: reuse its id
+      // even when the field rendered empty (e.g. after a failed navigation).
+      var isRetryableIntent = intent
+        && !isCompletedIntent
+        && intent.targetId === targetId
+        && REQUEST_ID_PATTERN.test(intent.requestId);
+
+      if (isRetryableIntent) {
+        field.value = intent.requestId;
+      } else if (!REQUEST_ID_PATTERN.test(field.value) || isCompletedIntent) {
+        field.value = generateRequestId();
+      }
+      if (isCompletedIntent) {
+        try {
+          window.sessionStorage.removeItem(CLONE_INTENT_STORAGE_KEY);
+        } catch (error) { /* ignore */ }
+      }
+      // Persist BEFORE navigation: if the response is lost, the retry (same
+      // form resubmitted, or after BFCache return) reuses this id.
+      window.QuickShareCloneIntents.persist(field.value, targetId);
+    }, true);
+
+    // Returning through history/BFCache must NOT blindly wipe the intent:
+    // reconcile decides — unconfirmed intents keep their id (retry), only
+    // completed ones clear the field so the next click is a new clone.
+    window.addEventListener('pageshow', function () {
+      reconcileCloneIntents();
+    });
+
+    reconcileCloneIntents();
+  }
+
+  function formatManagementTime(epochMs) {
+    try {
+      return new Date(Number(epochMs)).toLocaleString('zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        hour12: false
+      });
+    } catch (error) {
+      return String(epochMs);
+    }
+  }
+
+  function statusLabel(status) {
+    return status === 'succeeded' ? '已提交' : '结果已删除';
+  }
+
+  function renderResults(container, requestId, operations) {
+    container.hidden = false;
+    container.textContent = '';
+
+    if (!operations.length) {
+      var empty = document.createElement('p');
+      empty.className = 'operations-empty';
+      empty.textContent = '未找到该请求标识对应的已提交操作。';
+      container.appendChild(empty);
+      return;
+    }
+
+    var table = document.createElement('table');
+    table.className = 'admin-table operations-table';
+    var thead = document.createElement('thead');
+    thead.innerHTML = '<tr>' +
+      '<th scope="col">命名空间</th><th scope="col">动作</th><th scope="col">状态</th>' +
+      '<th scope="col">结果 Share</th><th scope="col">内容版本</th><th scope="col">访问版本</th>' +
+      '<th scope="col">时间</th></tr>';
+    table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    operations.forEach(function (operation) {
+      var tr = document.createElement('tr');
+
+      var cells = [
+        NAMESPACE_LABELS[operation.namespaceKind] || operation.namespaceKind,
+        operation.action === 'clone' ? '克隆' : '创建',
+        statusLabel(operation.status)
+      ];
+      cells.forEach(function (text) {
+        var td = document.createElement('td');
+        td.textContent = text;
+        tr.appendChild(td);
+      });
+
+      var shareCell = document.createElement('td');
+      if (operation.shareId) {
+        var link = document.createElement('a');
+        link.href = '/admin/pages/' + encodeURIComponent(operation.shareId);
+        link.textContent = operation.shareId;
+        shareCell.appendChild(link);
+      } else {
+        shareCell.textContent = '—';
+      }
+      tr.appendChild(shareCell);
+
+      [operation.revision || '—', operation.accessRevision || '—', formatManagementTime(operation.createdAt)]
+        .forEach(function (text) {
+          var td = document.createElement('td');
+          td.textContent = text;
+          tr.appendChild(td);
+        });
+
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    container.appendChild(table);
+
+    var summary = document.createElement('p');
+    summary.className = 'admin-muted';
+    summary.textContent = '请求标识 ' + requestId + '：' + operations.length + ' 条记录（仅元信息，无正文与密码）。';
+    container.appendChild(summary);
+  }
+
+  function initOperationsSearch() {
+    var form = document.getElementById('operations-search-form');
+    var container = document.getElementById('operations-search-result');
+    var input = document.getElementById('operations-request-id');
+    if (!form || !container || !input) return;
+
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var requestId = input.value.trim();
+
+      if (!REQUEST_ID_PATTERN.test(requestId)) {
+        container.hidden = false;
+        container.textContent = '请求标识必须为 16–128 位字母、数字、短横线或下划线。';
+        return;
+      }
+
+      fetch('/admin/operations?requestId=' + encodeURIComponent(requestId), {
+        headers: { 'Accept': 'application/json' }
+      }).then(function (response) {
+        return response.json().then(function (body) {
+          return { ok: response.ok, status: response.status, body: body };
+        });
+      }).then(function (result) {
+        if (!result.ok) {
+          container.hidden = false;
+          container.textContent = result.body && result.body.error ? result.body.error : '查询失败，请稍后重试。';
+          return;
+        }
+        renderResults(container, requestId, result.body.operations || []);
+      }).catch(function () {
+        container.hidden = false;
+        container.textContent = '查询失败，请稍后重试。';
+      });
+    });
+  }
+
+  initOperationsSearch();
+})();

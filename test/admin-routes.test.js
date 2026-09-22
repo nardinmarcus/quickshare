@@ -101,6 +101,13 @@ test('maintenance preserves both logins and reads while authentication and CSRF 
     const admin = await request('/admin/stats', { headers: { Cookie: dashboard } });
     assert.equal(admin.status, 200);
     const csrf = admin.text.match(/name="csrf-token" content="([^"]+)"/)[1];
+    // The real browser loads the homepage before any submit; that GET
+    // establishes the signed publish session used by the creation attempt.
+    const homepageForSession = await request('/', { headers: { Cookie: home } });
+    assert.equal(homepageForSession.status, 200);
+    const publishSession = homepageForSession.headers['set-cookie']?.find(value => value.startsWith('publish_session='));
+    assert.ok(publishSession, 'the homepage establishes the publish session');
+    const publishSessionCookie = publishSession.split(';')[0];
     assert.equal((await request('/', { headers: { Cookie: home } })).status, 200);
     assert.equal((await request('/admin/apis', { headers: { Cookie: dashboard } })).status, 200);
     for (const [cookie, token, expected] of [[undefined, undefined, 401], [home, csrf, 401], [dashboard, undefined, 403], [dashboard, csrf, 503]]) {
@@ -117,7 +124,7 @@ test('maintenance preserves both logins and reads while authentication and CSRF 
     const count = await repository.countPages();
     for (const [token, expected] of [[undefined, 403], [homeCsrf, 503]]) {
       const response = await request('/api/pages/create', {
-        method: 'POST', headers: { Cookie: home, 'Content-Type': 'application/json', ...(token ? { 'X-CSRF-Token': token } : {}) },
+        method: 'POST', headers: { Cookie: `${home}; ${publishSessionCookie}`, 'Content-Type': 'application/json', ...(token ? { 'X-CSRF-Token': token } : {}) },
         body: JSON.stringify({ htmlContent: '<h1>Must remain unsaved</h1>' })
       });
       assert.equal(response.status, expected);

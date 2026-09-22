@@ -25,7 +25,17 @@ test('Key discovery truthfully reports create-only identity, catalog and configu
   assert.equal(capabilities.status, 200);
   assert.deepEqual(capabilities.body.contentTypes, ['html', 'markdown', 'svg', 'mermaid']);
   assert.deepEqual(capabilities.body.markdownThemePresets, ['bytedance', 'github', 'apple', 'notion', 'claude', 'raycast', 'google', 'tesla', 'airbnb', 'bugatti', 'linear', 'playstation']);
-  assert.deepEqual(capabilities.body.operations, [{ id: 'share:create', method: 'POST', path: '/api/v1/share' }]);
+  assert.deepEqual(capabilities.body.operations, [
+    { id: 'share:create', method: 'POST', path: '/api/v1/share' },
+    { id: 'share:create:status', method: 'GET', path: '/api/v1/operations/:requestId' }
+  ]);
+  assert.deepEqual(capabilities.body.idempotency, {
+    header: 'Idempotency-Key',
+    pattern: '^[A-Za-z0-9_-]{16,128}$',
+    appliesTo: ['share:create'],
+    conflictStatus: 409,
+    replayRequiresSameInput: true
+  });
   assert.deepEqual(capabilities.body.limits, { shareRequestBodyBytes: 1024, smallRequestBodyBytes: 512, rawContentBytes: null });
   assert.match(capabilities.headers.get('cache-control'), /no-store/);
   const oversized = await fetch(base + '/api/v1/share', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Key': 'issue29-legacy' }, body: JSON.stringify({ htmlContent: 'a'.repeat(1024) }) });

@@ -70,6 +70,7 @@ const COVERED_OBJECTS = [
   'expiry',
   'managed-api-keys',
   'audit-logs',
+  'publish-operations',
   'site-settings',
   'migration-ledger'
 ];
@@ -81,6 +82,15 @@ const REVISION_COMPARED_COLUMNS = Object.freeze([
 
 const POINTER_CONTENT_COLUMNS = Object.freeze([
   'html_content', 'code_type', 'title', 'description', 'markdown_theme'
+]);
+
+// Publish operation records (#32): every column including the encrypted
+// receipt travels byte-identically; deleted-at tombstones restore as
+// tombstones. Rows are keyed by (actor_namespace, request_id).
+const OPERATION_COMPARED_COLUMNS = Object.freeze([
+  'actor_namespace', 'request_id', 'action', 'request_digest', 'target_id',
+  'result_share_id', 'result_revision', 'result_access_revision',
+  'receipt_encrypted', 'created_at', 'deleted_at'
 ]);
 
 function sha256Hex(value) {
@@ -517,7 +527,7 @@ async function runVerification({
 
   try {
     // Two independent connections, queried concurrently.
-    const [sourcePages, restorePages, sourceRevisions, restoreRevisions, sourceAudit, restoreAudit, sourceKeys, restoreKeys, sourceSettings, restoreSettings, sourceLedger, restoreLedger] =
+    const [sourcePages, restorePages, sourceRevisions, restoreRevisions, sourceAudit, restoreAudit, sourceKeys, restoreKeys, sourceOperations, restoreOperations, sourceSettings, restoreSettings, sourceLedger, restoreLedger] =
       await Promise.all([
         sourcePool.query('SELECT * FROM pages ORDER BY id ASC'),
         restorePool.query('SELECT * FROM pages ORDER BY id ASC'),
@@ -527,6 +537,8 @@ async function runVerification({
         restorePool.query('SELECT action, page_id, details, ip, created_at FROM audit_logs ORDER BY id ASC'),
         sourcePool.query(`SELECT ${API_KEY_COMPARED_COLUMNS.join(', ')} FROM api_keys ORDER BY id ASC`),
         restorePool.query(`SELECT ${API_KEY_COMPARED_COLUMNS.join(', ')} FROM api_keys ORDER BY id ASC`),
+        sourcePool.query(`SELECT ${OPERATION_COMPARED_COLUMNS.join(', ')} FROM publish_operations ORDER BY actor_namespace ASC, request_id ASC`),
+        restorePool.query(`SELECT ${OPERATION_COMPARED_COLUMNS.join(', ')} FROM publish_operations ORDER BY actor_namespace ASC, request_id ASC`),
         sourcePool.query('SELECT * FROM site_settings ORDER BY id ASC'),
         restorePool.query('SELECT * FROM site_settings ORDER BY id ASC'),
         sourcePool.query('SELECT version, name, checksum, applied_at FROM quickshare_schema_migrations ORDER BY version ASC'),
@@ -614,6 +626,44 @@ async function runVerification({
       ok: keyRowIssues.length === 0 && keyPlan.ok,
       issues: [...keyRowIssues, ...keyPlan.issues],
       details: { ...keyPlan.details, comparedColumns: API_KEY_COMPARED_COLUMNS }
+    });
+
+    // Publish operation records and deletion tombstones (#32): full-row
+    // parity including encrypted receipts; each side is reported per row so
+    // a missing or altered operation names its (namespace, request id).
+    const operationIssues = [];
+    const sourceOperationsByKey = new Map(
+      sourceOperations.rows.map(row => [`${row.actor_namespace}\u0000${row.request_id}`, row])
+    );
+    const restoreOperationsByKey = new Map(
+      restoreOperations.rows.map(row => [`${row.actor_namespace}\u0000${row.request_id}`, row])
+    );
+    for (const [key, sourceRow] of sourceOperationsByKey) {
+      const restoreRow = restoreOperationsByKey.get(key);
+      if (!restoreRow) {
+        operationIssues.push({ field: 'publish_operations', requestId: sourceRow.request_id, message: `operation ${key.replace('\u0000', '|')} missing on restore side` });
+        continue;
+      }
+      for (const column of OPERATION_COMPARED_COLUMNS) {
+        if (!valuesEqual(sourceRow[column], restoreRow[column])) {
+          operationIssues.push({ field: 'publish_operations', requestId: sourceRow.request_id, message: `column ${column} differs for operation ${key.replace('\u0000', '|')}` });
+        }
+      }
+    }
+    for (const [key] of restoreOperationsByKey) {
+      if (!sourceOperationsByKey.has(key)) {
+        operationIssues.push({ field: 'publish_operations', message: `operation ${key.replace('\u0000', '|')} missing on source side` });
+      }
+    }
+    checks.push({
+      name: 'publishOperations',
+      ok: operationIssues.length === 0,
+      issues: operationIssues,
+      details: {
+        operationCount: restoreOperations.rows.length,
+        tombstoneCount: restoreOperations.rows.filter(row => row.deleted_at !== null && row.deleted_at !== undefined).length,
+        comparedColumns: OPERATION_COMPARED_COLUMNS
+      }
     });
 
     const settingsIssues = rowsEqual(sourceSettings.rows, restoreSettings.rows)

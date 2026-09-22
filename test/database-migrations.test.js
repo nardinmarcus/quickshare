@@ -55,7 +55,8 @@ test('migrations contain every runtime table, column, index, and site setting', 
     '004_page_access_revision.sql',
     '005_publishing_writes_paused.sql',
     '006_api_key_credential_version.sql',
-    '007_share_revisions.sql'
+    '007_share_revisions.sql',
+    '008_publish_operations.sql'
   ]);
   assert.match(migrations[0].sql, /CREATE TABLE IF NOT EXISTS public\.pages/i);
   assert.match(migrations[0].sql, /ADD COLUMN IF NOT EXISTS password_hash/i);
@@ -91,6 +92,43 @@ test('migrations contain every runtime table, column, index, and site setting', 
   assert.match(migrations[6].sql, /actor TEXT,/i);
   assert.match(migrations[6].sql, /restored_from BIGINT,/i);
   assert.doesNotMatch(migrations[6].sql, /password|expires_at|is_favorite|view_count/i);
+  // #32: idempotent publish operations. The (actor_namespace, request_id)
+  // ledger commits with its result, holds encrypted receipts only, and
+  // carries NO foreign key: deletion tombstones outlive the Share lifecycle.
+  assert.match(migrations[7].sql, /CREATE TABLE IF NOT EXISTS public\.publish_operations/i);
+  assert.match(migrations[7].sql, /PRIMARY KEY \(actor_namespace, request_id\)/i);
+  assert.match(migrations[7].sql, /request_digest TEXT NOT NULL/i);
+  assert.match(migrations[7].sql, /receipt_encrypted TEXT/i);
+  assert.match(migrations[7].sql, /deleted_at BIGINT/i);
+  assert.match(migrations[7].sql, /CREATE INDEX IF NOT EXISTS publish_operations_result_share_idx/i);
+  assert.doesNotMatch(migrations[7].sql, /REFERENCES public\.pages/i,
+    { message: 'operation records must be independent of the pages lifecycle' });
+});
+
+// #32 boundary: migrations 001-007 are accepted history; this ticket may
+// only add 008. Their bytes are pinned so any accidental touch fails here.
+test('accepted migrations 001-007 keep their recorded byte identity', () => {
+  const { createHash } = require('node:crypto');
+  const migrations = loadMigrations();
+  const recordedChecksums = {
+    '001_baseline.sql': 'cc3f6b15aacc440d347137cbf545a67a56cff24f5bff9d3a4ddc156e01758864',
+    '002_site_settings.sql': 'cbd1bcc11c4a9c158e6a4c6a9f94f07ba6f809e844b8dc38afd1bd286087ba57',
+    '003_page_favorites.sql': 'b3780fb75edd16e556868a7f4d0043f587c5a47122cbc81f558d9969dbc4df7e',
+    '004_page_access_revision.sql': 'b6d0c91f4bb0647a7138260314a9884de28b8e4a07f058eeb7a3ebaace42bc07',
+    '005_publishing_writes_paused.sql': '295b7667dee2662094b63542650dcbb815daf457a8a3b21f4f7f46b662895031',
+    '006_api_key_credential_version.sql': 'e935ff208dfdf297d61659ac61b72f2bdbc4973a6f5872c175e088791d050ac3',
+    '007_share_revisions.sql': 'c34867fb0c303d832ec9a77e0adcb25639defc4d6a5fb2621c90f978d4018810'
+  };
+
+  for (const migration of migrations) {
+    const expected = recordedChecksums[migration.name];
+    if (!expected) continue; // 008 and later are owned by their own tickets.
+    assert.equal(
+      createHash('sha256').update(migration.sql).digest('hex'),
+      expected,
+      `${migration.name} must stay byte-identical`
+    );
+  }
 });
 
 test('migration runner applies pending files once and releases its client', async () => {
@@ -107,8 +145,8 @@ test('migration runner applies pending files once and releases its client', asyn
   const second = await runMigrations(fake.pool, { logger: { info() {} } });
   const migrationSql = loadMigrations().map(migration => migration.sql.trim());
 
-  assert.deepEqual(first, { applied: ['001', '002', '003', '004', '005', '006', '007'], skipped: [] });
-  assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007'] });
+  assert.deepEqual(first, { applied: ['001', '002', '003', '004', '005', '006', '007', '008'], skipped: [] });
+  assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007', '008'] });
   for (const sql of migrationSql) {
     assert.equal(fake.queries.filter(query => query.sql === sql).length, 1);
   }

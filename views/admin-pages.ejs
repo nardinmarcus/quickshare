@@ -206,8 +206,9 @@
                       <i class="<%= sharedPage.is_favorite ? 'fas' : 'far' %> fa-star admin-favorite-icon" aria-hidden="true"></i>
                       <span class="sr-only admin-favorite-label"><%= sharedPage.is_favorite ? '取消收藏' : '收藏' %></span>
                     </button>
-                    <form method="post" action="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>/clone" class="admin-inline-form">
+                    <form method="post" action="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>/clone" class="admin-inline-form" data-clone-form>
                       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                      <input type="hidden" name="requestId" data-clone-request-id value="">
                       <button type="submit" class="admin-clone-btn" aria-label="克隆分享 <%= sharedPage.title || sharedPage.id %>">
                         <i class="fas fa-copy" aria-hidden="true"></i>
                       </button>
@@ -251,7 +252,28 @@
   </section>
 </div>
 
-<div id="delete-modal" class="admin-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title" aria-describedby="delete-modal-description" aria-busy="false" hidden>
+  <section class="card admin-card" id="operations-review">
+    <h2 class="admin-section-title">按请求标识核对创建操作</h2>
+    <p class="admin-muted">同一请求标识在不同凭据命名空间会分条列出；此处只显示状态与 Share/版本元信息，不显示正文或密码。生成的密码只能由创建者以原请求重放取回。</p>
+    <form id="operations-search-form" class="admin-search-form" role="search">
+      <div class="admin-search-box">
+        <i class="fas fa-fingerprint" aria-hidden="true"></i>
+        <input
+          type="text"
+          id="operations-request-id"
+          name="requestId"
+          placeholder="输入 Idempotency-Key / requestId（16–128 位）"
+          aria-label="请求标识"
+          autocomplete="off"
+          spellcheck="false"
+        >
+      </div>
+      <button type="submit" class="cyber-btn cyber-btn-secondary">核对</button>
+    </form>
+    <div id="operations-search-result" role="region" aria-live="polite" aria-label="操作核对结果" hidden></div>
+  </section>
+
+  <div id="delete-modal" class="admin-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title" aria-describedby="delete-modal-description" aria-busy="false" hidden>
   <div class="admin-modal-backdrop" aria-hidden="true"></div>
   <div class="admin-modal-content" tabindex="-1">
     <h3 id="delete-modal-title">确认删除</h3>

@@ -5428,3 +5428,37 @@ body:hover::-webkit-scrollbar,
     grid-template-columns: 1fr;
   }
 }
+
+/* Owner publish-operation review (#32): requestId result lookup panel. */
+#operations-review {
+  margin-top: 1.25rem;
+}
+
+#operations-review .admin-search-form {
+  margin-top: 0.75rem;
+}
+
+#operations-review #operations-request-id {
+  min-width: min(360px, 100%);
+}
+
+.operations-table {
+  margin-top: 0.9rem;
+}
+
+.operations-table .admin-table,
+.admin-table.operations-table {
+  min-width: 0;
+}
+
+.operations-empty {
+  margin-top: 0.9rem;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 720px) {
+  .admin-table.operations-table {
+    display: block;
+    overflow-x: auto;
+  }
+}

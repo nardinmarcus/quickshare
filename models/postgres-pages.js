@@ -791,7 +791,81 @@ class PostgresPageRepository {
 
   async deletePages(ids) {
     if (!Array.isArray(ids) || ids.length === 0) return 0;
-    const result = await this.pool.query('DELETE FROM pages WHERE id = ANY($1)', [ids]);
+    // Deterministic row-lock order for batch deletes: sorted Share ids.
+    const sorted = [...ids].sort();
+    const result = await this.pool.query('DELETE FROM pages WHERE id = ANY($1)', [sorted]);
+    return result.rowCount;
+  }
+
+  // Publish operation records (#24 §8). The advisory transaction lock keeps
+  // concurrent same-key creators serialized before the lookup; the primary
+  // key on (actor_namespace, request_id) stays the final guard.
+  async lockPublishingOperation({ actorNamespace, requestId }) {
+    if (!this.transactionClient) throw new Error('Operation locking requires a publishing transaction');
+    await this.pool.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [actorNamespace, requestId]);
+    return true;
+  }
+
+  async findPublishingOperation(actorNamespace, requestId) {
+    const result = await this.pool.query(
+      'SELECT * FROM publish_operations WHERE actor_namespace = $1 AND request_id = $2 LIMIT 1',
+      [actorNamespace, requestId]
+    );
+    return result.rows[0] || null;
+  }
+
+  async findPublishingOperationsByRequestId(requestId) {
+    const result = await this.pool.query(
+      'SELECT * FROM publish_operations WHERE request_id = $1 ORDER BY created_at ASC',
+      [requestId]
+    );
+    return result.rows;
+  }
+
+  async createPublishingOperation(record) {
+    const result = await this.pool.query(
+      `
+        INSERT INTO publish_operations (
+          actor_namespace, request_id, action, request_digest, target_id,
+          result_share_id, result_revision, result_access_revision,
+          receipt_encrypted, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (actor_namespace, request_id) DO NOTHING
+      `,
+      [
+        record.actor_namespace,
+        record.request_id,
+        record.action,
+        record.request_digest,
+        record.target_id ?? null,
+        record.result_share_id ?? null,
+        record.result_revision ?? null,
+        record.result_access_revision ?? null,
+        record.receipt_encrypted ?? null,
+        record.created_at
+      ]
+    );
+    if (result.rowCount === 0) {
+      throw Object.assign(new Error('Publishing operation already exists'), { code: '23505' });
+    }
+    return true;
+  }
+
+  async clearPublishingOperationsForShares(shareIds) {
+    if (!Array.isArray(shareIds) || shareIds.length === 0) return 0;
+    // Runs in the delete transaction, after the Share rows are locked/deleted:
+    // the sensitive receipt payload is dropped and a non-content tombstone
+    // (deleted_at) remains so late replays never revive the result.
+    const sorted = [...shareIds].sort();
+    const result = await this.pool.query(
+      `
+        UPDATE publish_operations
+        SET receipt_encrypted = NULL, deleted_at = COALESCE(deleted_at, $2)
+        WHERE result_share_id = ANY($1)
+      `,
+      [sorted, Date.now()]
+    );
     return result.rowCount;
   }
 

@@ -120,10 +120,21 @@ test('public mode allows same-origin browser publishing without an admin session
     ip: '127.0.0.1'
   });
 
+  // The real browser flow always loads the homepage first; that GET is what
+  // establishes the independently signed publish session used as the replay
+  // namespace for the creation below.
+  const homepage = await request('/');
+  assert.equal(homepage.status, 200);
+  const publishSession = homepage.headers['set-cookie']?.find(value => value.startsWith('publish_session='));
+  assert.ok(publishSession, 'the homepage establishes the publish session before any submit');
+
   const response = await jsonRequest('/api/pages/create', {
     htmlContent: '<h1>Public browser publish</h1>',
     isProtected: false
-  }, { Origin: baseUrl });
+  }, {
+    Origin: baseUrl,
+    Cookie: publishSession.split(';')[0]
+  });
 
   assert.equal(response.status, 200);
   assert.equal(response.body.success, true);
@@ -310,6 +321,39 @@ test('homepage access setting updates require the dashboard CSRF token', async (
 
   assert.equal(response.status, 403);
   assert.equal(response.body.error, 'Invalid CSRF token');
+});
+
+test('public mode without a pre-established publish session cannot create (#32)', async () => {
+  await app.locals.pageRepository.setHomepagePasswordRequired({
+    passwordRequired: false,
+    ip: '127.0.0.1'
+  });
+
+  const noSession = await jsonRequest('/api/pages/create', {
+    htmlContent: '<h1>no session</h1>'
+  }, { Origin: baseUrl });
+
+  assert.equal(noSession.status, 403, 'without a pre-established session there is no safe replay identity');
+  assert.equal(noSession.body.code, 'PUBLISH_SESSION_REQUIRED');
+
+  // A publish session obtained from the homepage restores the ability.
+  const homepage = await request('/');
+  const publishSession = homepage.headers['set-cookie']?.find(value => value.startsWith('publish_session='));
+  assert.ok(publishSession);
+
+  const withSession = await jsonRequest('/api/pages/create', {
+    htmlContent: '<h1>session first</h1>'
+  }, {
+    Origin: baseUrl,
+    Cookie: publishSession.split(';')[0]
+  });
+  assert.equal(withSession.status, 200);
+
+  // Restore locked mode for subsequent tests.
+  await app.locals.pageRepository.setHomepagePasswordRequired({
+    passwordRequired: true,
+    ip: '127.0.0.1'
+  });
 });
 
 test('admin stats renders the persisted homepage access state and dashboard CSRF token', async () => {

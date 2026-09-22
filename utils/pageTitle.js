@@ -5,7 +5,22 @@ function normalizeTitle(value) {
     return '';
   }
 
-  return value.replace(/\s+/g, ' ').trim().slice(0, 160);
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= 160) {
+    return normalized;
+  }
+
+  // Keep the established 160 code-unit cap, but never split a UTF-16
+  // surrogate pair: a lone high surrogate cannot be encoded as UTF-8 and
+  // would corrupt the title on its way into PostgreSQL (and every client
+  // that round-trips the bytes). Back off one code unit so the pair
+  // stays complete; the raw content is never truncated by this rule.
+  const cut = normalized.slice(0, 160);
+  const lastUnit = cut.charCodeAt(cut.length - 1);
+  if (lastUnit >= 0xd800 && lastUnit <= 0xdbff) {
+    return cut.slice(0, -1);
+  }
+  return cut;
 }
 
 function decodeBasicHtmlEntities(value) {
@@ -82,5 +97,6 @@ function derivePageTitle(content, codeType, requestedTitle, createdAt) {
 }
 
 module.exports = {
-  derivePageTitle
+  derivePageTitle,
+  normalizeTitle
 };

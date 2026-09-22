@@ -109,16 +109,22 @@
         <span class="api-method"><%= capabilities.operations[0].method %></span>
         <code><%= capabilities.operations[0].path %></code>
       </div>
-      <p>通过 HTML、Markdown、SVG 或 Mermaid 内容创建 QuickShare 分享页。</p>
+      <p>通过 HTML、Markdown、SVG 或 Mermaid 内容创建 QuickShare 分享页。新客户端应随每次创建发送 UUID v4 幂等请求标识 <code>Idempotency-Key</code>（16–128 位字母、数字、短横线或下划线）：同标识同输入确认原提交结果（元信息来自提交时的加密回执，不含所有者后续修改），同标识不同输入返回 409；不带该头的旧行为保持不变，也不被宣称为自动去重。</p>
+      <div class="api-doc-heading">
+        <span class="api-method"><%= capabilities.operations[1].method %></span>
+        <code><%= capabilities.operations[1].path %></code>
+      </div>
+      <p><code>GET /api/v1/operations/:requestId</code> 按<strong>当前凭据命名空间</strong>查询已提交的创建操作，只返回状态与 Share/版本标识元信息；不返回正文、标题、简介或密码。该查询属于创建能力的一部分，不构成 Share 管理权。</p>
       <h3>身份与能力核验</h3>
       <p><code>GET /api/v1/me</code> 返回实例 origin 与当前凭据身份；<code>GET /api/v1/capabilities</code> 返回真实能力。两者均要求 <code>X-API-Key</code>，维护期间仍可读取。</p>
-      <p>托管密钥与旧版密钥当前均只能创建 Share，不提供读取源内容或更新既有 Share 的管理权限。轮换保持 Key ID，旧密钥立即失效；请同步更新自动化任务。</p>
+      <p>托管密钥与旧版密钥当前均只能创建 Share 并确认自身创建结果，不提供读取源内容或更新既有 Share 的管理权限。轮换保持 Key ID 与命名空间，旧密钥立即失效；请同步更新自动化任务。</p>
       <p>协议 <%= capabilities.protocolVersion %>；可用操作：<%= capabilities.operations.map(operation => operation.id).join('、') %>。</p>
       <h3>身份验证</h3>
       <p>在 <code>X-API-Key</code> 请求头中传入托管密钥。已配置的旧版 <code>SHARE_API_KEY</code> 仍然受支持。</p>
       <pre><code>curl -s -X POST "$QUICKSHARE_URL/api/v1/share" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $QUICKSHARE_API_KEY" \
+  -H "Idempotency-Key: $(uuidgen)" \
   -d '{
     "htmlContent": "&lt;h1&gt;Hello&lt;/h1&gt;",
     "codeType": "html",

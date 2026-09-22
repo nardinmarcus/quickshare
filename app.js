@@ -28,6 +28,23 @@ const {
 } = require('./utils/markdownThemeCatalog');
 const { derivePageTitle } = require('./utils/pageTitle');
 const {
+  INVALID_REQUEST_ID_MESSAGE,
+  isvalidRequestId,
+  resolveApiCredentialNamespace,
+  resolveBrowserPublishNamespace,
+  resolveDashboardSessionNamespace,
+  namespaceKind
+} = require('./utils/publishingOperation');
+const {
+  normalizeCreateInput,
+  createRequestDigest,
+  createPageWithUniqueId,
+  executeNormalizedCreate,
+  buildCreationOperationRecord,
+  classifyOperationReplay,
+  operationStatusProjection
+} = require('./models/publishingOperations');
+const {
   formatManagementDateTime,
   toManagementDateTimeLocal
 } = require('./utils/management-time');
@@ -49,6 +66,8 @@ const {
 
 const ADMIN_COOKIE = 'admin_session';
 const DASHBOARD_ADMIN_COOKIE = 'dashboard_admin_session';
+const PUBLISH_SESSION_COOKIE = 'publish_session';
+const CLONE_INTENT_DONE_COOKIE = 'clone_intent_done';
 const ADMIN_TTL_MS = 24 * 60 * 60 * 1000;
 const PAGE_ACCESS_TTL_MS = 24 * 60 * 60 * 1000;
 const VALID_CODE_TYPES = new Set(CONTENT_TYPES);
@@ -416,6 +435,32 @@ function requireBrowserPublishCsrf(req, res, next) {
   });
 }
 
+function requireBrowserPublishSession(req, res, next) {
+  if (getPublishSessionId(req)) {
+    req.publishNamespace = resolveBrowserPublishSessionNamespace(req);
+    return next();
+  }
+
+  // Auth-disabled mode has no homepage gate in front of API clients (local
+  // development and tests): mint a session lazily instead of failing the
+  // request. The browser flow always passes through GET / first, where the
+  // session is established before the first possibly-lost submit.
+  if (req.homepageAccessMode === 'auth-disabled') {
+    const sid = setPublishSessionCookie(res);
+    req.publishNamespace = resolveBrowserPublishNamespace(sid);
+    return next();
+  }
+
+  // Public and locked homepage modes require the pre-established session:
+  // without it there is no safe replay identity, so creation is refused
+  // instead of silently risking a duplicate on a lost response.
+  return res.status(403).json({
+    success: false,
+    code: 'PUBLISH_SESSION_REQUIRED',
+    error: '发布会话缺失或已过期，请刷新页面后重试'
+  });
+}
+
 function requireApiAdmin(req, res, next) {
   if (!config.authEnabled) {
     return next();
@@ -638,6 +683,52 @@ function setPageAccessCookie(res, id, accessRevision) {
   });
 }
 
+// Browser publish sessions (#24 §8, #32): an independently signed session
+// cookie gives every browser creator a stable replay namespace that exists
+// BEFORE the first submit whose response could be lost. It carries no
+// management privilege; the request id itself is never a credential.
+function setPublishSessionCookie(res) {
+  const sid = generateId(12);
+  const token = createScopedToken('publish-session', { sid }, ADMIN_TTL_MS);
+
+  res.cookie(PUBLISH_SESSION_COOKIE, token, {
+    maxAge: ADMIN_TTL_MS,
+    httpOnly: true,
+    secure: config.secureCookies,
+    sameSite: 'lax'
+  });
+
+  return sid;
+}
+
+function getPublishSessionId(req) {
+  const payload = verifyScopedToken(req.cookies?.[PUBLISH_SESSION_COOKIE], 'publish-session');
+
+  return typeof payload?.sid === 'string' && payload.sid ? payload.sid : null;
+}
+
+function resolveBrowserPublishSessionNamespace(req) {
+  return resolveBrowserPublishNamespace(getPublishSessionId(req));
+}
+
+function resolveDashboardCloneNamespace(req) {
+  const token = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE];
+  if (!token) {
+    // Auth-disabled single-user mode (local development/tests): one shared
+    // dashboard namespace; no cookie exists to fingerprint.
+    return resolveDashboardSessionNamespace('auth-disabled');
+  }
+  return resolveDashboardSessionNamespace(createHash('sha256').update(token).digest('hex').slice(0, 32));
+}
+
+function resolveApiNamespace(req) {
+  const identity = req.apiKeyIdentity || {};
+  if (identity.credentialKind === 'managed') {
+    return resolveApiCredentialNamespace(identity);
+  }
+  return resolveApiCredentialNamespace({ credentialKind: 'legacy', legacySecret: req.get('x-api-key') });
+}
+
 function pageAccessRevision(req, id) {
   const token = req.cookies?.[pageAccessCookieName(id)];
   const payload = verifyScopedToken(token, 'page-access');
@@ -670,115 +761,105 @@ function normalizeCodeType(content, requestedCodeType) {
 }
 
 async function createPageWithRetry(data, repository) {
-  let lastError = null;
+  // Collision-safe id generation lives with the publishing module so every
+  // creation entry shares one implementation; ids are generated only AFTER a
+  // request digest exists (digest-before-randomness, #24 §8).
+  return createPageWithUniqueId(repository, data);
+}
 
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const id = generateId();
+/**
+ * Shared idempotent creation flow for the web and Share API entries.
+ *
+ * Order inside the transaction (fixed, #24 §8): maintenance gate → managed
+ * key verification → operation lock → operation lookup → only then expiry
+ * checks, source reads and any randomness. The digest is computed from the
+ * normalized input BEFORE this call — before random ids, generated passwords,
+ * timestamps or time-derived fallback titles exist — so a retry of the same
+ * operation hashes identically and confirms the committed result.
+ */
+async function runIdempotentCreate({
+  input,
+  namespace,
+  requestId,
+  provenance,
+  apiKeyIdentity,
+  auditDetails,
+  clientIp,
+  buildResponse
+}) {
+  const normalized = normalizeCreateInput(input);
+  if (normalized.error) {
+    return (res) => res.status(400).json({ success: false, error: normalized.error });
+  }
 
-    try {
-      await repository.create({
-        ...data,
-        id
-      });
+  const requestDigest = createRequestDigest(normalized.fields, { presence: normalized.presence });
+  const publishingOperation = requestId
+    ? { actorNamespace: namespace, requestId, action: 'create', targetId: null, requestDigest }
+    : null;
 
-      return id;
-    } catch (error) {
-      lastError = error;
+  return publishing.run(async (repository, existingOperation) => {
+    if (existingOperation) {
+      const outcome = await classifyOperationReplay(repository, { record: existingOperation, requestDigest });
 
-      if (!String(error.message || '').includes('UNIQUE') &&
-          !String(error.code || '').includes('23505')) {
-        throw error;
+      if (outcome.kind === 'conflict') {
+        return (res) => res.status(409).json({
+          success: false,
+          code: 'REQUEST_ID_CONFLICT',
+          requestId,
+          retryable: false,
+          error: '同一请求标识对应了不同的请求内容'
+        });
       }
+
+      if (outcome.kind === 'result-unavailable') {
+        return (res) => res.status(410).json({
+          success: false,
+          code: 'RESULT_UNAVAILABLE',
+          requestId,
+          retryable: false,
+          error: '该操作已提交，但其结果已被永久删除'
+        });
+      }
+
+      // Confirmed replay: never re-executes writes. Every response metadata
+      // field is the ORIGINAL committed result from the encrypted receipt —
+      // a create replay never reads the owner's later edits. The generated
+      // password replays only while the access policy is unchanged.
+      const { result: originalResult, receiptPassword } = outcome;
+      return (res) => buildResponse(res, {
+        id: originalResult.id,
+        password: receiptPassword,
+        isProtected: originalResult.isProtected,
+        codeType: originalResult.codeType,
+        title: originalResult.title,
+        description: originalResult.description,
+        expiresAt: originalResult.expiresAt,
+        markdownTheme: originalResult.markdownTheme
+      }, true);
     }
-  }
 
-  throw lastError || new Error('Failed to create a unique page id');
-}
+    const result = await executeNormalizedCreate(repository, normalized.fields, provenance);
+    if (result.error) {
+      return (res) => res.status(400).json({ success: false, error: result.error });
+    }
 
-function parseFutureExpiry(expiresAt, now) {
-  if (expiresAt === undefined || expiresAt === null || expiresAt === '') {
-    return { value: null, error: null };
-  }
+    await repository.createAuditLog({
+      action: 'page.create',
+      pageId: result.id,
+      details: JSON.stringify(typeof auditDetails === 'function' ? auditDetails(result) : auditDetails),
+      ip: clientIp
+    });
 
-  const value = Number(expiresAt);
+    if (publishingOperation) {
+      // Same transaction as the Share, its baseline Revision and this audit
+      // entry; the unique constraint is the final dedupe guard.
+      await repository.createPublishingOperation(
+        buildCreationOperationRecord({ actorNamespace: namespace, requestId, requestDigest, result })
+      );
+    }
 
-  if (!Number.isSafeInteger(value) || value <= now) {
-    return { value: null, error: '到期时间必须晚于当前时间' };
-  }
-
-  return { value, error: null };
-}
-
-async function createPageFromInput(input, repository, provenance = {}) {
-  const {
-    htmlContent,
-    codeType,
-    title,
-    description,
-    expiresAt,
-    isProtected,
-    password: requestedPassword,
-    markdownTheme
-  } = input || {};
-
-  if (!htmlContent || typeof htmlContent !== 'string') {
-    return { error: '请提供内容' };
-  }
-
-  const customPassword = parseCustomPassword(requestedPassword);
-
-  if (customPassword.error) {
-    return { error: customPassword.error };
-  }
-
-  const createdAt = Date.now();
-  const expiry = parseFutureExpiry(expiresAt, createdAt);
-
-  if (expiry.error) {
-    return { error: expiry.error };
-  }
-
-  const normalizedCodeType = normalizeCodeType(htmlContent, codeType);
-  const pageTitle = derivePageTitle(htmlContent, normalizedCodeType, title, createdAt);
-  const pageDescription = description === undefined || description === null
-    ? null
-    : String(description).trim() || null;
-  const password = Boolean(isProtected)
-    ? (customPassword.provided ? customPassword.value : generateNumericPassword(DEFAULT_PASSWORD_LENGTH))
-    : null;
-  const passwordHash = password ? await hashSecret(password) : null;
-  const encryptedPassword = password ? encryptSecret(password) : null;
-  const resolvedTheme = normalizedCodeType === 'markdown'
-    ? resolveMarkdownThemeId(markdownTheme)
-    : null;
-  const id = await createPageWithRetry({
-    htmlContent,
-    passwordHash,
-    encryptedPassword,
-    isProtected: Boolean(password),
-    codeType: normalizedCodeType,
-    title: pageTitle,
-    description: pageDescription,
-    createdAt,
-    expiresAt: expiry.value,
-    markdownTheme: resolvedTheme,
-    // Row-level revision provenance (#24 §3): the real write path plus a
-    // trusted actor where one exists (managed key logical id); never secrets.
-    actorSource: provenance.actorSource,
-    actorIdentity: provenance.actorIdentity
-  }, repository);
-
-  return {
-    error: null,
-    id,
-    password,
-    isProtected: Boolean(password),
-    codeType: normalizedCodeType,
-    title: pageTitle,
-    description: pageDescription,
-    expiresAt: expiry.value,
-    markdownTheme: resolvedTheme
-  };
+    return (res) => buildResponse(res, result, false);
+  }, { apiKeyIdentity, publishingOperation });
 }
 
 function injectCodeTypeMeta(renderedContent, contentType) {
@@ -1047,6 +1128,22 @@ app.get('/admin/logout', (req, res) => {
 });
 
 app.get('/', privateNoStore, requireHomepageAccess, (req, res) => {
+  // Establish the signed publish session before any submit: the browser
+  // cannot rely on a Set-Cookie riding along the creation response, because
+  // exactly that response is the one a network retry may never see.
+  let sid = getPublishSessionId(req);
+  if (!sid) {
+    sid = setPublishSessionCookie(res);
+  }
+  // EVERY render carries the current session's stable NON-SECRET tag (short
+  // hash of the random sid). Pending request identities bind to it on the
+  // browser side, so a session replaced anywhere else (cookie cleared,
+  // expired, rotated in another tab) is DETECTED on this tab's next load —
+  // including when this load did not mint the session.
+  const publishSessionTag = createHash('sha256')
+    .update(`quickshare:publish-session-tag:${sid}`)
+    .digest('hex')
+    .slice(0, 16);
   const sessionToken = req.adminSession?.token || req.cookies?.[ADMIN_COOKIE] || '';
 
   return res.render('index', {
@@ -1054,7 +1151,8 @@ app.get('/', privateNoStore, requireHomepageAccess, (req, res) => {
     page: 'home-page',
     csrfToken: req.homepageAccessMode === 'locked' ? createCsrfToken(sessionToken) : '',
     markdownThemeOptions: getMarkdownThemeOptions(),
-    socialImageUrl: socialImageUrl(req)
+    socialImageUrl: socialImageUrl(req),
+    publishSessionTag
   });
 });
 
@@ -1192,6 +1290,30 @@ app.delete('/admin/apis/keys/:id', requireDashboardAdmin, requireDashboardCsrf, 
       success: false,
       error: 'Failed to delete API key'
     });
+  }
+});
+
+app.get('/admin/operations', requireDashboardAdmin, async (req, res) => {
+  const requestId = String(req.query.requestId || '');
+  if (!isvalidRequestId(requestId)) {
+    return res.status(400).json({ success: false, code: 'INVALID_REQUEST_ID', error: INVALID_REQUEST_ID_MESSAGE });
+  }
+
+  try {
+    // Owner oversight across namespaces: same request id in different
+    // namespaces is listed separately and never conflated. Metadata only —
+    // no receipt, no body, no password; the creator's own replay path is the
+    // only way generated secrets come back.
+    const records = await pageRepository.findPublishingOperationsByRequestId(requestId);
+
+    return res.json({
+      success: true,
+      requestId,
+      operations: records.map(operationStatusProjection)
+    });
+  } catch (error) {
+    console.error('Admin operation lookup failed:', error);
+    return res.status(500).json({ success: false, error: '服务器错误' });
   }
 });
 
@@ -1866,7 +1988,11 @@ app.delete('/admin/pages/batch', requireDashboardAdmin, parseSmallJson, requireD
         return (res) => res.status(400).json({ success: false, error: 'Batch delete limited to 100 items' });
       }
 
-      const deleted = await repository.deletePages(ids);
+      // Deterministic lock order: sorted Share ids, then their operation
+      // rows, all in this one transaction.
+      const sortedIds = [...ids].sort();
+      const deleted = await repository.deletePages(sortedIds);
+      await repository.clearPublishingOperationsForShares(sortedIds);
 
       await repository.createAuditLog({
         action: 'page.delete.batch',
@@ -1898,6 +2024,9 @@ app.delete('/admin/pages/:id', requireDashboardAdmin, requireDashboardCsrf, asyn
       }
 
       await repository.deletePage(req.params.id);
+      // Same transaction: drop sensitive creation receipts and leave a
+      // non-content dedupe tombstone so late replays never revive the Share.
+      await repository.clearPublishingOperationsForShares([req.params.id]);
 
       await repository.createAuditLog({
         action: 'page.delete',
@@ -1922,8 +2051,56 @@ app.delete('/admin/pages/:id', requireDashboardAdmin, requireDashboardCsrf, asyn
 });
 
 app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requireDashboardCsrf, async (req, res) => {
+  // New dashboard clones send a request id (hidden form field); a replay
+  // confirms the original clone instead of copying again.
+  const requestId = req.body?.requestId;
+  if (requestId !== undefined && requestId !== null && requestId !== '' && !isvalidRequestId(String(requestId))) {
+    return res.status(400).json({ success: false, code: 'INVALID_REQUEST_ID', error: INVALID_REQUEST_ID_MESSAGE });
+  }
+  const normalizedRequestId = requestId ? String(requestId) : null;
+  const actorNamespace = resolveDashboardCloneNamespace(req);
+  const requestDigest = createRequestDigest({}, { action: 'clone', targetId: req.params.id });
+  const publishingOperation = normalizedRequestId
+    ? { actorNamespace, requestId: normalizedRequestId, action: 'clone', targetId: req.params.id, requestDigest }
+    : null;
+
   try {
-    const respond = await publishing.run(async (repository) => {
+    const respond = await publishing.run(async (repository, existingOperation) => {
+      if (existingOperation) {
+        // Confirmed BEFORE the source re-read: a committed clone replays even
+        // after its source was deleted or changed.
+        const outcome = await classifyOperationReplay(repository, { record: existingOperation, requestDigest });
+
+        if (outcome.kind === 'conflict') {
+          return (res) => res.status(409).json({
+            success: false,
+            code: 'REQUEST_ID_CONFLICT',
+            requestId: normalizedRequestId,
+            retryable: false,
+            error: '同一请求标识对应了不同的请求内容'
+          });
+        }
+        if (outcome.kind === 'result-unavailable' || !outcome.cloneShareId) {
+          return (res) => res.status(410).json({
+            success: false,
+            code: 'RESULT_UNAVAILABLE',
+            requestId: normalizedRequestId,
+            retryable: false,
+            error: '该操作已提交，但其结果已被永久删除'
+          });
+        }
+        if (publishingOperation) {
+          // The REPLAY also completes the browser intent: without this the
+          // dashboard would keep retrying the same id forever instead of
+          // rotating to a fresh explicit clone on the next click.
+          res.cookie(CLONE_INTENT_DONE_COOKIE, normalizedRequestId, {
+            maxAge: 10 * 60 * 1000,
+            sameSite: 'lax'
+          });
+        }
+        return (res) => res.redirect('/admin/pages/' + encodeURIComponent(outcome.cloneShareId));
+      }
+
       const page = await repository.getById(req.params.id);
 
       if (!page) {
@@ -1947,36 +2124,70 @@ app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requir
         actorIdentity: 'owner-dashboard'
       }, repository);
 
+      if (publishingOperation) {
+        const created = await repository.getById(newId);
+        await repository.createPublishingOperation({
+          actor_namespace: actorNamespace,
+          request_id: normalizedRequestId,
+          action: 'clone',
+          request_digest: requestDigest,
+          target_id: req.params.id,
+          result_share_id: newId,
+          result_revision: String(created.current_revision),
+          result_access_revision: String(created.access_revision),
+          // Clone results carry no generated secret; no receipt is stored.
+          receipt_encrypted: null,
+          created_at: Date.now()
+        });
+      }
+
+      if (publishingOperation) {
+        // Completion marker for the browser-side clone intent: a readable,
+        // non-sensitive cookie naming the request id lets the dashboard
+        // reconcile the persisted intent when the user returns (the only
+        // signal a full-form navigation can leave behind).
+        res.cookie(CLONE_INTENT_DONE_COOKIE, normalizedRequestId, {
+          maxAge: 10 * 60 * 1000,
+          sameSite: 'lax'
+        });
+      }
+
       return (res) => res.redirect('/admin/pages/' + encodeURIComponent(newId));
-    });
+    }, { publishingOperation });
     return respond(res);
   } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({
+        success: false,
+        code: 'REQUEST_ID_CONFLICT',
+        requestId: normalizedRequestId,
+        retryable: false,
+        error: '同一请求标识对应了不同的请求内容'
+      });
+    }
     if (sendPublishingError(res, error)) return;
     console.error('Clone page failed:', error);
     return res.status(500).json({ success: false, error: 'Failed to clone page' });
   }
 });
 
-app.post('/api/pages/create', privateNoStore, requireBrowserPublishAccess, parseShareJson, requireBrowserPublishCsrf, async (req, res) => {
+app.post('/api/pages/create', privateNoStore, requireBrowserPublishAccess, parseShareJson, requireBrowserPublishSession, requireBrowserPublishCsrf, async (req, res) => {
+  // New web creations always carry a request id (client-generated UUID); a
+  // direct caller without one keeps the plain, unclaimed behavior.
+  const requestId = req.get('Idempotency-Key');
+  if (requestId !== undefined && !isvalidRequestId(requestId)) {
+    return res.status(400).json({ success: false, code: 'INVALID_REQUEST_ID', error: INVALID_REQUEST_ID_MESSAGE });
+  }
+
   try {
-    const respond = await publishing.run(async (repository) => {
-      const result = await createPageFromInput(req.body, repository, { actorSource: 'web', actorIdentity: null });
-
-      if (result.error) {
-        return (res) => res.status(400).json({
-          success: false,
-          error: result.error
-        });
-      }
-
-      await repository.createAuditLog({
-        action: 'page.create',
-        pageId: result.id,
-        details: JSON.stringify({ codeType: result.codeType, isProtected: result.isProtected }),
-        ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
-      });
-
-      return (res) => res.json({
+    const respond = await runIdempotentCreate({
+      input: req.body,
+      namespace: req.publishNamespace,
+      requestId: requestId || null,
+      provenance: { actorSource: 'web', actorIdentity: null },
+      auditDetails: (result) => ({ codeType: result.codeType, isProtected: result.isProtected }),
+      clientIp: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress,
+      buildResponse: (res, result, replayed) => res.json({
         success: true,
         urlId: result.id,
         password: result.password,
@@ -1985,11 +2196,22 @@ app.post('/api/pages/create', privateNoStore, requireBrowserPublishAccess, parse
         title: result.title,
         description: result.description,
         expiresAt: result.expiresAt,
-        markdownTheme: result.markdownTheme
-      });
+        markdownTheme: result.markdownTheme,
+        ...(requestId ? { requestId } : {}),
+        ...(replayed ? { replayed: true } : {})
+      })
     });
     return respond(res);
   } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({
+        success: false,
+        code: 'REQUEST_ID_CONFLICT',
+        requestId: requestId || null,
+        retryable: false,
+        error: '同一请求标识对应了不同的请求内容'
+      });
+    }
     if (sendPublishingError(res, error)) return;
     console.error('Create page failed:', error);
     return res.status(500).json({
@@ -2039,44 +2261,86 @@ app.get('/api/v1/capabilities', privateNoStore, requireApiKey, (req, res) => {
   return res.json({ success: true, ...capabilities });
 });
 
-app.post(CREATE_SHARE.path, privateNoStore, requireApiKey, parseShareJson, async (req, res) => {
+app.get('/api/v1/operations/:requestId', privateNoStore, requireApiKey, async (req, res) => {
+  const requestId = req.params.requestId;
+  if (!isvalidRequestId(requestId)) {
+    return res.status(400).json({ success: false, code: 'INVALID_REQUEST_ID', error: INVALID_REQUEST_ID_MESSAGE });
+  }
+
   try {
-    const respond = await publishing.run(async (repository) => {
-      // Trusted actor identity: managed keys carry their logical key id;
-      // legacy environment keys are recorded as such. Never the secret.
-      const identity = req.apiKeyIdentity || {};
-      const actorIdentity = identity.credentialKind === 'managed' ? `api-key:${identity.id}` : 'legacy-api-key';
-      const result = await createPageFromInput(req.body, repository, { actorSource: 'api', actorIdentity });
+    // Scoped to the caller's own credential namespace: the request id is a
+    // dedupe key, never a capability. Legacy keys may confirm their own
+    // creations — part of the create capability, not Share management.
+    const record = await pageRepository.findPublishingOperation(resolveApiNamespace(req), requestId);
 
-      if (result.error) {
-        return (res) => res.status(400).json({ success: false, error: result.error });
+    if (!record) {
+      return res.status(404).json({ success: false, code: 'OPERATION_NOT_FOUND', error: '未找到该请求标识对应的操作' });
+    }
+
+    // Metadata only: no receipt, no body, no title/description/password.
+    return res.json({
+      success: true,
+      requestId,
+      operations: [operationStatusProjection(record)]
+    });
+  } catch (error) {
+    console.error('Operation status lookup failed:', error);
+    return res.status(500).json({ success: false, error: '服务器错误' });
+  }
+});
+
+app.post(CREATE_SHARE.path, privateNoStore, requireApiKey, parseShareJson, async (req, res) => {
+  // Idempotency is opt-in by header; legacy unmarked clients keep their exact
+  // behavior and are never claimed to be deduplicated.
+  const requestId = req.get('Idempotency-Key');
+  if (requestId !== undefined && !isvalidRequestId(requestId)) {
+    return res.status(400).json({ success: false, code: 'INVALID_REQUEST_ID', error: INVALID_REQUEST_ID_MESSAGE });
+  }
+
+  try {
+    // Trusted actor identity: managed keys carry their logical key id;
+    // legacy environment keys are recorded as such. Never the secret.
+    const identity = req.apiKeyIdentity || {};
+    const actorIdentity = identity.credentialKind === 'managed' ? `api-key:${identity.id}` : 'legacy-api-key';
+
+    const respond = await runIdempotentCreate({
+      input: req.body,
+      namespace: resolveApiNamespace(req),
+      requestId: requestId || null,
+      provenance: { actorSource: 'api', actorIdentity },
+      apiKeyIdentity: req.apiKeyIdentity,
+      auditDetails: (result) => ({ codeType: result.codeType, isProtected: result.isProtected, source: 'api' }),
+      clientIp: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress,
+      buildResponse: (res, result, replayed) => {
+        const base = config.shareBaseUrl || `${req.protocol}://${req.get('host')}`;
+        const url = `${base.replace(/\/+$/, '')}/view/${result.id}`;
+        return res.json({
+          success: true,
+          url,
+          urlId: result.id,
+          password: result.password,
+          isProtected: result.isProtected,
+          codeType: result.codeType,
+          title: result.title,
+          description: result.description,
+          expiresAt: result.expiresAt,
+          markdownTheme: result.markdownTheme,
+          ...(requestId ? { requestId } : {}),
+          ...(replayed ? { replayed: true } : {})
+        });
       }
-
-      const base = config.shareBaseUrl || `${req.protocol}://${req.get('host')}`;
-      const url = `${base.replace(/\/+$/, '')}/view/${result.id}`;
-
-      await repository.createAuditLog({
-        action: 'page.create',
-        pageId: result.id,
-        details: JSON.stringify({ codeType: result.codeType, isProtected: result.isProtected, source: 'api' }),
-        ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
-      });
-
-      return (res) => res.json({
-        success: true,
-        url,
-        urlId: result.id,
-        password: result.password,
-        isProtected: result.isProtected,
-        codeType: result.codeType,
-        title: result.title,
-        description: result.description,
-        expiresAt: result.expiresAt,
-        markdownTheme: result.markdownTheme
-      });
-    }, { apiKeyIdentity: req.apiKeyIdentity });
+    });
     return respond(res);
   } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({
+        success: false,
+        code: 'REQUEST_ID_CONFLICT',
+        requestId: requestId || null,
+        retryable: false,
+        error: '同一请求标识对应了不同的请求内容'
+      });
+    }
     if (sendPublishingError(res, error)) return;
     console.error('Share API failed:', error);
     return res.status(500).json({ success: false, error: '服务器错误' });

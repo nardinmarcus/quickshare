@@ -1,0 +1,229 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const {
+  isvalidRequestId,
+  INVALID_REQUEST_ID_MESSAGE,
+  operationRequestDigest,
+  resolveApiCredentialNamespace,
+  resolveBrowserPublishNamespace,
+  namespaceKind,
+  encodeOperationReceipt,
+  decodeOperationReceipt
+} = require('../utils/publishingOperation');
+const { encryptSecret, decryptSecret } = require('../utils/security');
+
+test('request ids accept 16-128 ASCII letters, digits, hyphens and underscores', () => {
+  assert.equal(isvalidRequestId('a'.repeat(16)), true);
+  assert.equal(isvalidRequestId('Z9_-'.repeat(5)), true);
+  assert.equal(isvalidRequestId('k'.repeat(128)), true);
+  assert.equal(isvalidRequestId('0123456789abcdef'), true);
+});
+
+test('request ids reject short, long, empty and non-conforming values', () => {
+  assert.equal(isvalidRequestId(undefined), false);
+  assert.equal(isvalidRequestId(null), false);
+  assert.equal(isvalidRequestId(''), false);
+  assert.equal(isvalidRequestId('a'.repeat(15)), false);
+  assert.equal(isvalidRequestId('a'.repeat(129)), false);
+  assert.equal(isvalidRequestId('has space-0123456'), false);
+  assert.equal(isvalidRequestId('valid-but-then-✨'), false);
+  assert.equal(isvalidRequestId('0123456789abcde\n'), false);
+  assert.equal(isvalidRequestId(1234567890123456), false);
+});
+
+test(INVALID_REQUEST_ID_MESSAGE + ' is a stable user-facing string', () => {
+  assert.equal(typeof INVALID_REQUEST_ID_MESSAGE, 'string');
+  assert.ok(INVALID_REQUEST_ID_MESSAGE.length > 0);
+});
+
+test('operation digest is deterministic for identical normalized inputs', () => {
+  const base = {
+    action: 'create',
+    targetId: null,
+    fields: {
+      htmlContent: '<h1>Hello</h1>',
+      codeType: 'html',
+      title: 'Hello',
+      description: null,
+      expiresAt: null,
+      isProtected: false,
+      password: null,
+      markdownTheme: null
+    },
+    presence: {
+      htmlContent: true,
+      codeType: true,
+      title: true,
+      description: false,
+      expiresAt: false,
+      isProtected: false,
+      password: false,
+      markdownTheme: false
+    }
+  };
+  assert.equal(operationRequestDigest(base), operationRequestDigest({ ...base, fields: { ...base.fields } }));
+});
+
+// #24 L211: the HMAC covers field PRESENCE as well as normalized values.
+// Absent and explicit-null normalize to the same value but are different
+// literal requests and must produce different digests.
+test('operation digest distinguishes field presence from explicit null', () => {
+  const fields = {
+    htmlContent: '<h1>Hi</h1>', codeType: 'html', title: null, description: null,
+    expiresAt: null, isProtected: false, password: null, markdownTheme: null
+  };
+  const presenceAbsent = {
+    htmlContent: true, codeType: false, title: false, description: false,
+    expiresAt: false, isProtected: false, password: false, markdownTheme: false
+  };
+  const presenceExplicitNull = { ...presenceAbsent, description: true, title: true, codeType: true };
+
+  assert.notEqual(
+    operationRequestDigest({ action: 'create', targetId: null, fields, presence: presenceAbsent }),
+    operationRequestDigest({ action: 'create', targetId: null, fields, presence: presenceExplicitNull }),
+    'absent-vs-explicit-null business fields must not collapse in the digest'
+  );
+});
+
+test('operation digest changes when any meaningful input changes', () => {
+  const base = {
+    action: 'create',
+    targetId: null,
+    fields: {
+      htmlContent: '<h1>Hello</h1>',
+      codeType: 'html',
+      title: 'Hello',
+      description: null,
+      expiresAt: 12345,
+      isProtected: false,
+      password: null,
+      markdownTheme: null
+    }
+  };
+  const variants = [
+    { fields: { ...base.fields, htmlContent: '<h1>Changed</h1>' } },
+    { fields: { ...base.fields, title: 'Different' } },
+    { fields: { ...base.fields, title: null } },
+    { fields: { ...base.fields, description: 'now present' } },
+    { fields: { ...base.fields, expiresAt: 12346 } },
+    { fields: { ...base.fields, expiresAt: null } },
+    { fields: { ...base.fields, isProtected: true } },
+    { fields: { ...base.fields, password: 'secret1' } },
+    { fields: { ...base.fields, codeType: 'markdown' } },
+    { fields: { ...base.fields, markdownTheme: 'github' } },
+    { action: 'clone' },
+    { targetId: 'share123' }
+  ];
+
+  for (const variant of variants) {
+    assert.notEqual(
+      operationRequestDigest(base),
+      operationRequestDigest({ ...base, ...variant }),
+      `digest must differ for variant ${JSON.stringify(variant)}`
+    );
+  }
+});
+
+test('operation digest distinguishes custom password values but omits auto-generation', () => {
+  const base = {
+    action: 'create',
+    targetId: null,
+    fields: {
+      htmlContent: '<h1>Hi</h1>', codeType: 'html', title: null, description: null,
+      expiresAt: null, isProtected: true, password: null, markdownTheme: null
+    }
+  };
+  const auto = operationRequestDigest(base);
+  const customA = operationRequestDigest({ ...base, fields: { ...base.fields, password: 'abcd1234' } });
+  const customB = operationRequestDigest({ ...base, fields: { ...base.fields, password: 'wxyz9876' } });
+
+  assert.notEqual(auto, customA, 'auto-generated intent differs from a custom password intent');
+  assert.notEqual(customA, customB, 'different custom passwords are different inputs');
+});
+
+test('operation digest is an HMAC, not a plaintext-derived hash of the body', () => {
+  const digest = operationRequestDigest({
+    action: 'create',
+    targetId: null,
+    fields: {
+      htmlContent: 'SECRETBODY', codeType: 'html', title: null, description: null,
+      expiresAt: null, isProtected: false, password: null, markdownTheme: null
+    }
+  });
+  assert.match(digest, /^[0-9a-f]{64}$/);
+  assert.ok(!digest.includes('SECRETBODY'));
+  // Two app secrets must yield different digests: the digest is keyed.
+  process.env.SESSION_SECRET = 'issue32-digest-key-A-0123456789abcdef';
+  delete require.cache[require.resolve('../utils/publishingOperation')];
+  const keyedA = require('../utils/publishingOperation').operationRequestDigest({
+    action: 'create', targetId: null,
+    fields: { htmlContent: 'x', codeType: 'html', title: null, description: null, expiresAt: null, isProtected: false, password: null, markdownTheme: null }
+  });
+  process.env.SESSION_SECRET = 'issue32-digest-key-B-0123456789abcdef';
+  delete require.cache[require.resolve('../utils/publishingOperation')];
+  const keyedB = require('../utils/publishingOperation').operationRequestDigest({
+    action: 'create', targetId: null,
+    fields: { htmlContent: 'x', codeType: 'html', title: null, description: null, expiresAt: null, isProtected: false, password: null, markdownTheme: null }
+  });
+  assert.notEqual(keyedA, keyedB, 'digests are keyed by the application secret');
+  process.env.SESSION_SECRET = 'issue32-unit-secret-0123456789abcdef';
+  delete require.cache[require.resolve('../utils/publishingOperation')];
+});
+
+test('managed keys namespace by stable logical id across secret rotation', () => {
+  const identity = { credentialKind: 'managed', id: 'key123', name: 'n', credentialVersion: '1' };
+  const rotated = { credentialKind: 'managed', id: 'key123', name: 'n', credentialVersion: '2' };
+  assert.equal(resolveApiCredentialNamespace(identity), resolveApiCredentialNamespace(rotated));
+  assert.equal(resolveApiCredentialNamespace(identity), 'managed-key:key123');
+  assert.notEqual(
+    resolveApiCredentialNamespace({ credentialKind: 'managed', id: 'other', name: 'n', credentialVersion: '1' }),
+    resolveApiCredentialNamespace(identity)
+  );
+});
+
+test('legacy keys namespace by an irreversible fingerprint of the secret', () => {
+  const nsA = resolveApiCredentialNamespace({ credentialKind: 'legacy', legacySecret: 'legacy-secret-one' });
+  const nsAagain = resolveApiCredentialNamespace({ credentialKind: 'legacy', legacySecret: 'legacy-secret-one' });
+  const nsB = resolveApiCredentialNamespace({ credentialKind: 'legacy', legacySecret: 'legacy-secret-two' });
+
+  assert.equal(nsA, nsAagain, 'same legacy secret keeps the same namespace');
+  assert.notEqual(nsA, nsB, 'a rotated legacy secret lands in a fresh namespace');
+  assert.match(nsA, /^legacy-key:[0-9a-f]{64}$/);
+  assert.ok(!nsA.includes('legacy-secret-one'), 'fingerprint must be irreversible');
+});
+
+test('browser publish sessions namespace by session id', () => {
+  assert.equal(resolveBrowserPublishNamespace('sess-abc123'), 'publish-session:sess-abc123');
+  assert.notEqual(resolveBrowserPublishNamespace('sess-abc123'), resolveBrowserPublishNamespace('sess-other4'));
+});
+
+test('namespace kinds are exposed for owner review without leaking identities', () => {
+  assert.equal(namespaceKind('managed-key:k1'), 'managed-key');
+  assert.equal(namespaceKind('legacy-key:' + 'a'.repeat(64)), 'legacy-key');
+  assert.equal(namespaceKind('publish-session:s1'), 'publish-session');
+  assert.equal(namespaceKind('dashboard-session:fp'), 'dashboard-session');
+});
+
+test('operation receipts encrypt sensitive payload and decode losslessly', () => {
+  const receipt = {
+    password: '123456',
+    isProtected: true,
+    codeType: 'html',
+    title: 'T',
+    description: null,
+    expiresAt: null,
+    markdownTheme: null
+  };
+  const encoded = encodeOperationReceipt(receipt);
+
+  assert.ok(encoded, 'a receipt must be produced');
+  assert.ok(encoded.startsWith('secret-v1$'), 'receipts use the existing secret encryption');
+  assert.ok(!encoded.includes('123456'), 'the raw password never appears in the stored receipt');
+  assert.deepEqual(decodeOperationReceipt(encoded), receipt);
+});
+
+test('decoding absent or corrupt receipts returns null without throwing', () => {
+  assert.equal(decodeOperationReceipt(null), null);
+  assert.equal(decodeOperationReceipt('garbage'), null);
+  assert.equal(decodeOperationReceipt(encryptSecret('plain') + 'tampered'), null);
+});

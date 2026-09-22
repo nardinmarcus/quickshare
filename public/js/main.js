@@ -54,6 +54,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     return headers;
   }
+
+  // Reproducible draft identity for pending publish requests: derived from
+  // the EXACT payload that would be submitted, so the same input yields the
+  // same key after a page reload (an in-memory counter would not). Two
+  // different 32-bit FNV-1a seeds keep accidental collisions negligible;
+  // the server-side digest remains the authoritative conflict guard.
+  function stableDraftKey(requestBody) {
+    const serialized = JSON.stringify(requestBody);
+    const fnv = (seed) => {
+      let hash = seed;
+      for (let index = 0; index < serialized.length; index += 1) {
+        hash ^= serialized.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+      }
+      return hash.toString(16).padStart(8, '0');
+    };
+    return `${fnv(0x811c9dc5)}${fnv(0x01935217)}`;
+  }
   
   // DOM 元素
   const htmlInput = document.getElementById('html-input');
@@ -401,6 +419,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function markDraftDirty() {
     draftVersion += 1;
+    refreshPendingStatus();
 
     if (isPreviewing || (publishPreview && !publishPreview.hidden)) {
       closePublishPreview(false);
@@ -962,18 +981,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function buildPreviewRequest() {
+  // Shared, side-effect-light payload collection: identical field order and
+  // values for preview, submit and the pending-status draft key, so the
+  // status text always compares the SAME identity the submit will send.
+  function collectContentFields() {
     syncToTextarea();
 
     const htmlContent = htmlInput ? htmlInput.value.trim() : '';
-    if (!htmlContent) {
-      const error = userFacingError('请输入要分享的内容');
-      error.focusTarget = htmlInput;
-      throw error;
-    }
-
     const codeType = detectCodeType(htmlContent);
-    const requestBody = {
+    const fields = {
       htmlContent,
       codeType,
       title: shareTitleInput ? shareTitleInput.value : '',
@@ -982,14 +998,44 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (codeType === 'markdown') {
       const themeSelect = document.getElementById('markdown-theme');
-      requestBody.markdownTheme = themeSelect ? themeSelect.value : 'random';
+      fields.markdownTheme = themeSelect ? themeSelect.value : 'random';
+    }
+
+    return fields;
+  }
+
+  function buildPreviewRequest() {
+    const fields = collectContentFields();
+
+    if (!fields.htmlContent) {
+      const error = userFacingError('请输入要分享的内容');
+      error.focusTarget = htmlInput;
+      throw error;
+    }
+
+    const requestBody = {
+      htmlContent: fields.htmlContent,
+      codeType: fields.codeType,
+      title: fields.title,
+      description: fields.description
+    };
+
+    if (fields.markdownTheme !== undefined) {
+      requestBody.markdownTheme = fields.markdownTheme;
     }
 
     return requestBody;
   }
 
   function buildPublishRequest() {
-    const requestBody = buildPreviewRequest();
+    const fields = collectContentFields();
+
+    if (!fields.htmlContent) {
+      const error = userFacingError('请输入要分享的内容');
+      error.focusTarget = htmlInput;
+      throw error;
+    }
+
     const isProtected = Boolean(passwordToggle && passwordToggle.checked);
 
     if (isProtected && passwordCustomMode && !passwordCustomMode.classList.contains('hidden')) {
@@ -1011,7 +1057,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (shareExpiresInput && shareExpiresInput.value) {
       expiresAt = expiryAtEndOfLocalDay(shareExpiresInput.value);
 
-      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      if (!Number.isFinite(expiresAt)) {
         if (shareExpiresHint) {
           shareExpiresHint.textContent = '请选择今天或之后的到期日期';
           shareExpiresHint.className = 'field-hint error';
@@ -1020,13 +1066,49 @@ document.addEventListener('DOMContentLoaded', () => {
         error.focusTarget = shareExpiresInput;
         throw error;
       }
+      // A past expiry no longer throws HERE: the submit flow first checks
+      // whether this submit is the retry of an unknown pending request — the
+      // original input must then reach the server untouched so a committed
+      // result can be confirmed. Fresh creates are rejected in the submit
+      // flow instead, keeping the original message and focus target.
     }
 
+    const requestBody = {
+      htmlContent: fields.htmlContent,
+      codeType: fields.codeType,
+      title: fields.title,
+      description: fields.description
+    };
+    if (fields.markdownTheme !== undefined) {
+      requestBody.markdownTheme = fields.markdownTheme;
+    }
     requestBody.isProtected = isProtected;
     requestBody.expiresAt = expiresAt;
     if (isProtected && userCustomPassword) requestBody.password = userCustomPassword;
 
     return requestBody;
+  }
+
+  // Key computation for the pending STATUS line: same payload shape as the
+  // submit path (including a stored custom password reference), but WITHOUT
+  // validation throws — an empty/invalid form simply yields a null key so
+  // the status falls back to neutral wording.
+  function currentDraftKeyForStatus() {
+    try {
+      if (!htmlInput || !htmlInput.value.trim()) return null;
+      const body = collectContentFields();
+      const isProtected = Boolean(passwordToggle && passwordToggle.checked);
+      body.isProtected = isProtected;
+      let expiresAt = null;
+      if (shareExpiresInput && shareExpiresInput.value) {
+        expiresAt = expiryAtEndOfLocalDay(shareExpiresInput.value);
+      }
+      body.expiresAt = expiresAt;
+      if (isProtected && userCustomPassword) body.password = userCustomPassword;
+      return stableDraftKey(body);
+    } catch (error) {
+      return null;
+    }
   }
 
   function showPublishedResult(data) {
@@ -1151,6 +1233,30 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // Pending publish state is VISIBLE: a retryable pending explains that the
+  // next click retries the original request; an orphaned pending (session
+  // replaced) stays read-only until the user explicitly abandons it. Nothing
+  // is auto-deleted and no id silently rotates.
+  function refreshPendingStatus() {
+    const statusElement = document.getElementById('pending-publish-status');
+    if (!statusElement || !window.QuickSharePublishingRequest) return;
+    const pending = window.QuickSharePublishingRequest.pendingState();
+    if (!pending) {
+      statusElement.hidden = true;
+      statusElement.textContent = '';
+      return;
+    }
+    // The text FOLLOWS the draft: once the user edits away from the pending
+    // draft, the line stops claiming an original-request retry and describes
+    // the new-intent consequence instead.
+    statusElement.textContent = window.QuickSharePublishingRequest.pendingStatusMessage(
+      pending,
+      currentDraftKeyForStatus()
+    );
+    statusElement.hidden = false;
+  }
+  refreshPendingStatus();
+
   if (generateButton) {
     generateButton.addEventListener('click', async () => {
       if (isSubmitting || isPreviewing) return;
@@ -1160,10 +1266,53 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const requestBody = buildPublishRequest();
         submittedDraftVersion = draftVersion;
+        // One client-generated UUID v4 per explicit publish intent, bound to
+        // the current publish-session tag and a CONTENT-derived draft key:
+        // same input after a reload retries the ORIGINAL id; a changed draft
+        // is a new explicit intent; an orphaned pending (session replaced)
+        // can never be claimed and needs the user's explicit decision.
+        const draftKey = stableDraftKey(requestBody);
+        const requestSummary = {
+          title: requestBody.title || '',
+          codeType: requestBody.codeType || ''
+        };
+        const pendingBefore = window.QuickSharePublishingRequest
+          ? window.QuickSharePublishingRequest.pendingState()
+          : null;
+        const isOrphan = Boolean(pendingBefore && pendingBefore.orphan);
+        if (isOrphan && !window.confirm(
+          `上次发布（请求 …${pendingBefore.requestId.slice(-6)}）属于已失效的发布会话，无法在本页重试。`
+          + '放弃原请求并重新发布当前内容？\n（原请求仍可在管理后台按请求标识核对）')) {
+          reportPublishError('已保留原未确认请求：可在管理后台按请求标识核对。');
+          return;
+        }
+        if (isOrphan) {
+          window.QuickSharePublishingRequest.discardPending();
+        }
+        // The local future-expiry gate applies only to FRESH creates. A
+        // matching pending means this submit IS the retry of an unknown (or
+        // already-committed) request: the original input must reach the
+        // server untouched so it can confirm the committed result — the
+        // server classifies it (200 confirm vs 400 never-committed).
+        const isRetryOfPending = Boolean(!isOrphan && pendingBefore && pendingBefore.draftKey === draftKey);
+        if (!isRetryOfPending && requestBody.expiresAt !== null && requestBody.expiresAt <= Date.now()) {
+          if (shareExpiresHint) {
+            shareExpiresHint.textContent = '请选择今天或之后的到期日期';
+            shareExpiresHint.className = 'field-hint error';
+          }
+          throw userFacingError('到期时间必须晚于当前时间');
+        }
+        const claim = window.QuickSharePublishingRequest
+          ? window.QuickSharePublishingRequest.claimRequestDraftId(draftKey, requestSummary)
+          : { mode: 'new', requestId: null };
+        const publishRequestId = claim.requestId;
+        if (window.QuickSharePublishingRequest && window.QuickSharePublishingRequest.consumePendingReplaced()) {
+          showSuccessToast('已开始新的明确发布：先前未确认的请求不再能在本页重试，可在后台按请求标识核对');
+        }
         isSubmitting = true;
         closePublishPreview(false);
         if (prepublishPreviewButton) prepublishPreviewButton.disabled = true;
-        setPublishState('busy', '正在发布并生成链接…');
+        setPublishState('busy', claim.mode === 'retry' ? '正在重试上次未确认的发布…' : '正在发布并生成链接…');
         setButtonBusy(
           generateButton,
           true,
@@ -1173,15 +1322,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const response = await fetch('/api/pages/create', {
           method: 'POST',
-          headers: jsonHeaders(),
+          headers: {
+            ...jsonHeaders(),
+            ...(publishRequestId ? { 'Idempotency-Key': publishRequestId } : {})
+          },
           body: JSON.stringify(requestBody)
         });
         const data = await response.json().catch(() => null);
 
         if (!response.ok || !data?.success) {
+          if (response.status === 403 && data?.code === 'PUBLISH_SESSION_REQUIRED'
+            && window.QuickSharePublishingRequest) {
+            // The refusal only proves THIS request created nothing. The page
+            // never reloads itself: reloading would drop the draft, and a
+            // fresh session would invalidate the pending identity — that is
+            // the user's informed decision, not an automatic one.
+            window.QuickSharePublishingRequest.handleMissingSession();
+            throw userFacingError('发布会话缺失或已过期：本次发布未提交。请先复制当前内容，手动刷新页面后再发布；先前的未确认发布可在管理后台按请求标识核对。');
+          }
           throw userFacingError(data?.error || '发布失败，请稍后重试');
         }
 
+        if (window.QuickSharePublishingRequest) {
+          window.QuickSharePublishingRequest.confirmCompleted();
+        }
+        refreshPendingStatus();
         showPublishedResult(data);
         if (submittedDraftVersion === draftVersion) {
           setPublishState('success', '发布成功，分享链接已生成');
@@ -1205,6 +1370,7 @@ document.addEventListener('DOMContentLoaded', () => {
           '<i class="fas fa-link mr-1" aria-hidden="true"></i>发布并生成链接'
         );
         if (prepublishPreviewButton) prepublishPreviewButton.disabled = false;
+        refreshPendingStatus();
       }
     });
   }

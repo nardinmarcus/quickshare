@@ -16,7 +16,7 @@ npm run backup:check
 该命令端到端完成一次完整演练，并输出快照点与真实耗时：
 
 1. 启动两台仅绑定 `127.0.0.1` 的一次性 PostgreSQL 17 容器（`issue27-pg-src` / `issue27-pg-restore`），创建 `issue27_src_test` / `issue27_restore_test` 数据库（执行者专属环境可用 scratch harness 覆盖 `FIXTURE` 的运行地址/身份后再 `runDrill`，生产源码不携带执行者身份）；
-2. 在源库执行真实迁移并植入合成夹具（四类页面、主题、收藏、密码保护、过期、managed Key、审计、站点设置；迁移 `007` 起还包含内容 Revision 快照、超过 2^53 的精确 `current_revision` 指针与非默认 `published=FALSE` 页面）；
+2. 在源库执行真实迁移并植入合成夹具（四类页面、主题、收藏、密码保护、过期、managed Key、审计、站点设置；迁移 `007` 起还包含内容 Revision 快照、超过 2^53 的精确 `current_revision` 指针与非默认 `published=FALSE` 页面；迁移 `008` 起还包含发布操作记录：一条已提交创建（带加密回执）与一条删除墓碑）；
 3. `scripts/backup-db.js` 执行 `pg_dump -Fc`，记录快照点（时间戳 + WAL LSN）与耗时；
 4. `scripts/restore-db.js` 校验 dump SHA-256 后用 `pg_restore` 重建隔离库，记录耗时；
 5. `scripts/verify-backup.js` 用两条独立连接核对恢复结果，输出验证报告。
@@ -58,6 +58,7 @@ npm run verify:backup -- --source-url <src> --restore-url <restore> \
 - 密码**校验与回显**双重能力：恢复库上 `password_hash` 可验证夹具密码，`encrypted_password` 可用夹具会话密钥解密回显；
 - managed Key 行与 secret 校验，显式比较 `credential_version`；迁移 `006` 后夹具使用 `'9007199254740993'`，验证原生恢复的 BIGINT 十进制字符串保真及仅版本篡改时失败；
 - 审计日志（快照点两侧一致）；
+- 发布操作记录（迁移 `008` 起的 `publish_operations` 全表逐列对比：`(actor_namespace, request_id)` 主键、HMAC 请求摘要、加密回执 `receipt_encrypted`、删除墓碑 `deleted_at`；夹具含一条已提交创建（带加密回执）与一条墓碑（回执已清）；恢复库单独篡改回执或墓碑位时 `publishOperations` 检查必须按字段与 request id 具名失败）；
 - 站点设置全行（迁移 `005` 后夹具将 `publishing_writes_paused` 置为非默认 `true`，必须完整恢复；恢复库单独篡改此值时 `siteSettings` 检查必须失败）；
 - 迁移台账（恢复库、源库与本地 `db/migrations` 三方一致，checksum 不符即失败）。
 

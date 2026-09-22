@@ -70,6 +70,29 @@ const ACCESS_REVISION_DRILL_VALUE = '9007199254740993';
 // `published` are provable. On a 001–006 base the gate reports honestly.
 const REVISION_DRILL_VALUE = '9007199254740993';
 
+// Publish-operation fixture (#32 migration 008): one committed creation with
+// an encrypted receipt and one deletion tombstone (receipt cleared). Both
+// travel through dump → restore byte-identically and the verifier's full-row
+// comparison covers every column by name.
+const OPERATION_FIXTURE = {
+  namespace: 'managed-key:issue27key00001',
+  requestId: 'issue32-op-000000000001',
+  tombstoneRequestId: 'issue32-op-000000000002'
+};
+
+async function probePublishOperationsTable(pool) {
+  const result = await pool.query(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM information_schema.tables
+       WHERE table_schema = 'public'
+         AND table_name = 'publish_operations'
+     ) AS present`
+  );
+
+  return result.rows[0].present === true;
+}
+
 async function probeAccessRevisionColumn(pool) {
   const result = await pool.query(
     `SELECT EXISTS (
@@ -274,7 +297,33 @@ async function seedFixture(pool) {
     );
   }
 
-  return { accessRevisionSeeded, revisionsSeeded };
+  const operationsSeeded = await probePublishOperationsTable(pool);
+  if (operationsSeeded) {
+    const receipt = encryptSecret(JSON.stringify({ password: '654321', isProtected: true }));
+    await pool.query(
+      `INSERT INTO publish_operations (
+         actor_namespace, request_id, action, request_digest, target_id,
+         result_share_id, result_revision, result_access_revision, receipt_encrypted, created_at, deleted_at
+       )
+       VALUES ($1, $2, 'create', $3, NULL, $4, '1', $5, $6, $7, NULL),
+              ($1, $8, 'create', $9, NULL, $10, '1', $5, NULL, $7, $11)`,
+      [
+        OPERATION_FIXTURE.namespace,
+        OPERATION_FIXTURE.requestId,
+        'd'.repeat(64),
+        pages.publicHtml,
+        ACCESS_REVISION_DRILL_VALUE,
+        receipt,
+        base + 60,
+        OPERATION_FIXTURE.tombstoneRequestId,
+        'e'.repeat(64),
+        pages.expiredPage,
+        base + 70
+      ]
+    );
+  }
+
+  return { accessRevisionSeeded, revisionsSeeded, operationsSeeded };
 }
 
 async function ensureContainerRunning(name, port, image) {
@@ -445,6 +494,9 @@ async function runDrill({ keepContainers = false, skipContainerSetup = false, ou
       // Content-revision coverage (#30 migration 007): snapshots seeded, big
       // pointer exercised and non-default published preserved.
       revisions: seedResult.revisionsSeeded ? 'exercised' : 'absent-schema001-006',
+      // Publish-operation coverage (#32 migration 008): committed creation
+      // with encrypted receipt plus a deletion tombstone, full-row compared.
+      operations: seedResult.operationsSeeded ? 'exercised' : 'absent-schema001-007',
       revisionCurrentPointer: seedResult.revisionsSeeded ? REVISION_DRILL_VALUE : null,
       publishedFixture: seedResult.revisionsSeeded ? 'non-default-false-exercised' : 'absent-schema001-006',
       reconciliation: verification ? verification.reconciliation.status : 'not-available',
@@ -503,9 +555,11 @@ if (require.main === module) {
 module.exports = {
   ACCESS_REVISION_DRILL_VALUE,
   REVISION_DRILL_VALUE,
+  OPERATION_FIXTURE,
   FIXTURE,
   probeAccessRevisionColumn,
   probeShareRevisionsTable,
+  probePublishOperationsTable,
   recreateRestoreDatabase,
   resetSourceDatabase,
   restoreUrlFor,

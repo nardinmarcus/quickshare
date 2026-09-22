@@ -78,10 +78,13 @@ async function loginHomepage() {
 async function getCsrfToken(route, cookie) {
   const response = await request(route, { headers: { Cookie: cookie } });
   const token = response.text.match(/name="csrf-token" content="([^"]+)"/)?.[1];
+  // #32: the homepage GET also establishes the signed publish session that
+  // the subsequent creation submit carries as its replay namespace.
+  const publishSession = response.headers['set-cookie']?.find(value => value.startsWith('publish_session='));
 
   assert.equal(response.status, 200);
   assert.ok(token);
-  return token;
+  return { token, publishSession: publishSession ? publishSession.split(';')[0] : null };
 }
 
 test.before(async () => {
@@ -173,11 +176,11 @@ test('homepage and Share API creation always start unmarked and do not accept fa
     isFavorite: true
   });
   const homepageCookie = await loginHomepage();
-  const homepageCsrf = await getCsrfToken('/', homepageCookie);
+  const { token: homepageCsrf, publishSession: homepagePublishSession } = await getCsrfToken('/', homepageCookie);
   const homepageResponse = await request('/api/pages/create', {
     method: 'POST',
     headers: {
-      Cookie: homepageCookie,
+      Cookie: homepagePublishSession ? `${homepageCookie}; ${homepagePublishSession}` : homepageCookie,
       Origin: baseUrl,
       'Content-Type': 'application/json',
       'X-CSRF-Token': homepageCsrf
@@ -204,7 +207,7 @@ test('cloning a Favorite Share resets the clone while preserving its source', as
   });
   await app.locals.pageRepository.setFavorite(source.urlId, true);
   const dashboardCookie = await loginDashboard();
-  const csrfToken = await getCsrfToken(`/admin/pages/${source.urlId}`, dashboardCookie);
+  const { token: csrfToken } = await getCsrfToken(`/admin/pages/${source.urlId}`, dashboardCookie);
 
   const response = await request(`/admin/pages/${source.urlId}/clone`, {
     method: 'POST',
@@ -229,7 +232,7 @@ test('editing and expiring a Favorite Share preserves state and keeps admin favo
   });
   await app.locals.pageRepository.setFavorite(sharedPage.urlId, true);
   const dashboardCookie = await loginDashboard();
-  const csrfToken = await getCsrfToken(`/admin/pages/${sharedPage.urlId}`, dashboardCookie);
+  const { token: csrfToken } = await getCsrfToken(`/admin/pages/${sharedPage.urlId}`, dashboardCookie);
   const expiresAt = Date.now() - 60_000;
 
   const updateResponse = await request(`/admin/pages/${sharedPage.urlId}`, {
@@ -309,7 +312,7 @@ test('deleting a Favorite Share removes the entity and its favorite state from m
   });
   await app.locals.pageRepository.setFavorite(sharedPage.urlId, true);
   const dashboardCookie = await loginDashboard();
-  const csrfToken = await getCsrfToken(`/admin/pages/${sharedPage.urlId}`, dashboardCookie);
+  const { token: csrfToken } = await getCsrfToken(`/admin/pages/${sharedPage.urlId}`, dashboardCookie);
 
   const deleteResponse = await request(`/admin/pages/${sharedPage.urlId}`, {
     method: 'DELETE',

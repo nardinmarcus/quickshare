@@ -64,6 +64,7 @@ class MemoryPageRepository {
   constructor() {
     this.pages = new Map();
     this.revisions = new Map();
+    this.publishOperations = new Map();
     this.auditLogs = [];
     this.auditIdCounter = 0;
     this.apiKeys = new Map();
@@ -102,6 +103,9 @@ class MemoryPageRepository {
       // Revisions are cloned too: a failed transaction must not leak new
       // snapshots into the committed store through inherited references.
       transaction.revisions = structuredClone(this.revisions);
+      // Operation records and their receipts stage the same way; a failed
+      // creation must leave no dedupe record behind.
+      transaction.publishOperations = structuredClone(this.publishOperations);
       transaction.apiKeys = structuredClone(this.apiKeys);
       transaction.auditLogs = [];
       transaction.auditIdCounter = 0;
@@ -110,6 +114,7 @@ class MemoryPageRepository {
       const result = await operation(transaction);
       this.pages = transaction.pages;
       this.revisions = transaction.revisions;
+      this.publishOperations = transaction.publishOperations;
       this.apiKeys = transaction.apiKeys;
       this.homepagePasswordRequired = transaction.homepagePasswordRequired;
       // Login audit events may arrive independently of publishing transactions.
@@ -662,6 +667,51 @@ class MemoryPageRepository {
       this.revisions.delete(id);
     });
     return count;
+  }
+
+  // Publish operation records (#24 §8). The staging copy in
+  // withPublishingTransaction plus the final Map guard below mirror the
+  // PostgreSQL unique constraint: no half-committed or duplicate operation
+  // record can exist.
+  async lockPublishingOperation() {
+    // The publishing queue serializes writers; no extra lock is needed.
+    return true;
+  }
+
+  async findPublishingOperation(actorNamespace, requestId) {
+    return this.publishOperations.get(`${actorNamespace}\u0000${requestId}`) || null;
+  }
+
+  async findPublishingOperationsByRequestId(requestId) {
+    return [...this.publishOperations.values()]
+      .filter(record => record.request_id === requestId)
+      .sort((left, right) => Number(left.created_at) - Number(right.created_at));
+  }
+
+  async createPublishingOperation(record) {
+    const key = `${record.actor_namespace}\u0000${record.request_id}`;
+    if (this.publishOperations.has(key)) {
+      throw Object.assign(new Error('Publishing operation already exists'), { code: '23505' });
+    }
+    this.publishOperations.set(key, { ...record });
+    return true;
+  }
+
+  async clearPublishingOperationsForShares(shareIds) {
+    if (!Array.isArray(shareIds) || shareIds.length === 0) return 0;
+    const targets = new Set(shareIds);
+    let cleared = 0;
+    for (const [key, record] of this.publishOperations) {
+      if (record.result_share_id && targets.has(record.result_share_id)) {
+        this.publishOperations.set(key, {
+          ...record,
+          receipt_encrypted: null,
+          deleted_at: record.deleted_at === null || record.deleted_at === undefined ? Date.now() : record.deleted_at
+        });
+        cleared += 1;
+      }
+    }
+    return cleared;
   }
 
   async recordViewEvent(id, now = Date.now(), accessRevision = null) {

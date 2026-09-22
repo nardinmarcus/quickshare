@@ -31,6 +31,7 @@ for (const [label, value] of [['source', sourceUrl], ['restore', restoreUrl]]) {
 const {
   ACCESS_REVISION_DRILL_VALUE,
   REVISION_DRILL_VALUE,
+  OPERATION_FIXTURE,
   FIXTURE,
   seedFixture
 } = require('../../scripts/backup-restore-check');
@@ -50,6 +51,8 @@ let hasAccessRevision = false;
 // Content Revision fixture gate (#30): false on a 001–006 base, where the
 // share_revisions branches are explicitly skipped, never silently claimed.
 let hasRevisions = false;
+// Publish-operation fixture gate (#32): false on a 001–007 base.
+let hasOperations = false;
 
 const childEnv = sanitizeChildEnv(process.env, { SESSION_SECRET: FIXTURE.sessionSecret });
 
@@ -96,6 +99,7 @@ test.before(async () => {
     const seedResult = await seedFixture(sourcePool);
     hasAccessRevision = seedResult.accessRevisionSeeded === true;
     hasRevisions = seedResult.revisionsSeeded === true;
+    hasOperations = seedResult.operationsSeeded === true;
 
     // Recreate the restore database from scratch so the drill proves a full restore.
     const quotedDatabase = `"${restoreDatabase.replace(/"/g, '""')}"`;
@@ -232,6 +236,7 @@ test('native restore rebuilds the database and passes full verification', async 
     'expiry',
     'managed-api-keys',
     'audit-logs',
+    'publish-operations',
     'site-settings',
     'migration-ledger'
   ]);
@@ -338,6 +343,32 @@ test('native restore rebuilds the database and passes full verification', async 
   assert.deepEqual(passwordCheck.details, { protectedPages: 1, fixtureCovered: 1 });
   const keyCheck = report.checks.find(check => check.name === 'managedApiKeys');
   assert.deepEqual(keyCheck.details, { keys: 1, fixtureCovered: 1, comparedColumns: expectedKeyComparedColumns });
+
+  // #32: publish-operation coverage in the main verification report.
+  if (hasOperations) {
+    const operationsCheck = report.checks.find(check => check.name === 'publishOperations');
+    assert.ok(operationsCheck, 'the publishOperations check is always reported when the table exists');
+    assert.equal(operationsCheck.ok, true, `operation issues: ${JSON.stringify(operationsCheck.issues)}`);
+    assert.equal(operationsCheck.details.operationCount, 2, 'committed creation + tombstone restored');
+    assert.equal(operationsCheck.details.tombstoneCount, 1, 'the deletion tombstone restores as a tombstone');
+    assert.deepEqual(operationsCheck.details.comparedColumns, [
+      'actor_namespace', 'request_id', 'action', 'request_digest', 'target_id',
+      'result_share_id', 'result_revision', 'result_access_revision',
+      'receipt_encrypted', 'created_at', 'deleted_at'
+    ]);
+    const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+    try {
+      const restoredOps = await restorePool.query(
+        'SELECT request_id, receipt_encrypted, deleted_at FROM publish_operations ORDER BY request_id ASC');
+      assert.equal(restoredOps.rows[0].receipt_encrypted !== null, true, 'the encrypted receipt travels byte-identically');
+      assert.equal(restoredOps.rows[1].receipt_encrypted, null, 'the tombstone carries no receipt');
+      assert.notEqual(restoredOps.rows[1].deleted_at, null);
+    } finally {
+      await restorePool.end();
+    }
+  } else {
+    assert.equal(report.checks.some(check => check.name === 'publishOperations'), false);
+  }
 });
 
 test('post-snapshot revocations in the real audit vocabulary fail closed', async () => {
@@ -672,6 +703,40 @@ test('published tamper fails the full-row page inventory with a named field issu
     issue.field === 'published'
     && issue.pageId === FIXTURE.pages.protectedPage
     && /published/.test(issue.message)), `issues: ${JSON.stringify(pageCheck.issues)}`);
+});
+
+test('publish_operations receipt tamper fails the dedicated operations check by namespace and request id', async (t) => {
+  if (!hasOperations) {
+    return t.skip('publish_operations absent on schema 001-007 base; integrator must exercise after merging #32');
+  }
+
+  const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
+  const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+  try {
+    await restorePool.query(
+      'UPDATE publish_operations SET receipt_encrypted = $2 WHERE request_id = $1',
+      [OPERATION_FIXTURE.requestId, 'secret-v1$tampered$tampered$tampered']
+    );
+  } finally {
+    await restorePool.end();
+  }
+
+  const result = await runStep(process.execPath, [
+    'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+    '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+    '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+    '--output', path.join(tmpDir, 'verification-operations-tamper.json')
+  ]);
+  assert.equal(result.code, 1);
+
+  const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-operations-tamper.json'), 'utf8'));
+  assert.equal(report.safeToServe, false);
+  const operationsCheck = report.checks.find(check => check.name === 'publishOperations');
+  assert.equal(operationsCheck.ok, false, 'the dedicated operations check must fail, not only the overall exit');
+  assert.ok(operationsCheck.issues.some(issue =>
+    issue.field === 'publish_operations'
+    && issue.requestId === OPERATION_FIXTURE.requestId
+    && issue.message.includes('receipt_encrypted')), `issues: ${JSON.stringify(operationsCheck.issues)}`);
 });
 
 test('snapshot_hash tamper fails the share-revisions check by field and key', async (t) => {
