@@ -784,6 +784,118 @@ class PostgresPageRepository {
     return options.returnUpdated ? updated : true;
   }
 
+  async restorePageRevision(id, options) {
+    // Restore is a content-family write with its own CAS: calls from
+    // publishing transactions reuse the transaction client; direct calls
+    // wrap themselves in a dedicated one so the CAS cannot interleave.
+    if (!this.transactionClient) {
+      return this.withTransaction(transaction => transaction.restorePageRevision(id, options));
+    }
+    return this.restorePageRevisionInTransaction(id, options);
+  }
+
+  async restorePageRevisionInTransaction(id, options) {
+    const sourceRevision = String(options.sourceRevision);
+    if (!isContentRevision(sourceRevision)) {
+      throw contentError(400, 'content revision must be a positive decimal string');
+    }
+
+    // Lock the Share row first: baseline CAS, source availability, the
+    // unchanged comparison and the materialized write all observe the same
+    // committed state inside this transaction (#24 §9 delete/purge-vs-restore
+    // discipline without the purge feature).
+    const current = await this.pool.query('SELECT * FROM pages WHERE id = $1 FOR UPDATE', [id]);
+    if (current.rowCount === 0) return null;
+    const page = current.rows[0];
+
+    try {
+      assertContentRevision(options.expectedContentRevision, page.current_revision);
+    } catch (error) {
+      if (error.code === 'CONTENT_REVISION_CONFLICT') {
+        error.current = revisionConflictProjection(page);
+      }
+      throw error;
+    }
+
+    // The source snapshot must exist WITH its payload: a payload-less row is
+    // a future purge tombstone (#34) and is rejected as an invalid source,
+    // never silently treated as empty content.
+    const sourceRow = await this.getContentRevision(id, sourceRevision);
+    if (!sourceRow || typeof sourceRow.html_content !== 'string') {
+      throw Object.assign(
+        new Error('恢复来源不存在或已被清除，不能作为恢复来源'),
+        { status: 404, code: 'RESTORE_SOURCE_INVALID' }
+      );
+    }
+
+    const nextContent = {
+      html_content: sourceRow.html_content,
+      title: sourceRow.title,
+      description: sourceRow.description,
+      markdown_theme: sourceRow.markdown_theme
+    };
+    const snapshotUnchanged =
+      nextContent.html_content === page.html_content
+      && nextContent.title === page.title
+      && nextContent.description === page.description
+      && nextContent.markdown_theme === page.markdown_theme;
+
+    if (snapshotUnchanged) {
+      // Same-snapshot restore is the approved no-op: success, no new
+      // revision, no duplicate body version. The caller records the
+      // operation result; nothing else about the Share moves.
+      return { changed: false, page };
+    }
+
+    const result = await this.pool.query(
+      `
+        UPDATE pages
+        SET html_content = $2, title = $3, description = $4, markdown_theme = $5,
+            current_revision = current_revision + 1
+        WHERE id = $1
+        RETURNING *
+      `,
+      [id, nextContent.html_content, nextContent.title, nextContent.description, nextContent.markdown_theme]
+    );
+    if (result.rowCount === 0) return null;
+    const updated = result.rows[0];
+
+    // New Revision + provenance commit in the SAME transaction (007
+    // restored_from semantics; no purge tombstone is created here).
+    const snapshotPayload = {
+      htmlContent: nextContent.html_content,
+      codeType: page.code_type || 'html',
+      title: nextContent.title,
+      description: nextContent.description,
+      markdownTheme: nextContent.markdown_theme
+    };
+    await this.pool.query(
+      `
+        INSERT INTO share_revisions (
+          share_id, revision, html_content, code_type, title, description, markdown_theme, created_at,
+          snapshot_hash, source, actor, restored_from
+        )
+        VALUES ($1, $2::bigint, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::bigint)
+      `,
+      [
+        id,
+        updated.current_revision,
+        nextContent.html_content,
+        snapshotPayload.codeType,
+        nextContent.title,
+        nextContent.description,
+        nextContent.markdown_theme,
+        Date.now(),
+        contentSnapshotHash(snapshotPayload),
+        options.actorSource || 'dashboard-restore',
+        options.actorIdentity === undefined ? 'owner-dashboard' : (options.actorIdentity || null),
+        sourceRevision
+      ]
+    );
+
+    return { changed: true, page: updated };
+  }
+
   async deletePage(id) {
     const result = await this.pool.query('DELETE FROM pages WHERE id = $1', [id]);
     return result.rowCount > 0;

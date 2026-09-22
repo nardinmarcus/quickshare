@@ -34,6 +34,55 @@ test('connection URLs are redacted before they can reach manifests or logs', () 
   assert.equal(backupDb.redactUrl('postgresql://postgres@127.0.0.1:5432/x_test'), 'postgresql://postgres@127.0.0.1:5432/x_test');
 });
 
+test('backup integration runStep redacts persisted argv while executing and returning the original values', async () => {
+  const vm = require('node:vm');
+  const { EventEmitter } = require('node:events');
+  const source = fs.readFileSync(path.join(__dirname, 'integration/postgres-backup.test.js'), 'utf8');
+  const runStepSource = source.slice(source.indexOf('let stepNumber = 0;'), source.indexOf('test.before(async () => {'));
+  const marker = 'qs33-marker:/@+?';
+  const encoded = encodeURIComponent(marker);
+  const url = `postgresql://user:${encoded}@localhost:55535/issue33_src_test?sslmode=disable`;
+  const queryUrl = `postgres://user@localhost:55536/issue33_restore_test?password=${encoded}&sslpassword=${encoded}`;
+  const args = ['scripts/backup-db.js', '--url', url, '--target-url', queryUrl,
+    `--source-url=${url}`, '--password', marker, `--session-secret=${marker}`, `PGPASSWORD=${marker}`, '--output-dir', '/tmp/synthetic-evidence'];
+  const writes = new Map();
+  let executed;
+  const sandbox = {
+    tmpDir: '/tmp/synthetic-evidence', path, childEnv: {},
+    redactCommandArgs: backupDb.redactCommandArgs,
+    fs: { writeFileSync(file, text) { writes.set(file, text); } },
+    spawn(command, argv) {
+      executed = { command, argv };
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', 'unchanged stdout');
+        child.stderr.emit('data', 'unchanged stderr');
+        child.emit('close', 7);
+      });
+      return child;
+    }
+  };
+  vm.runInNewContext(runStepSource + '\nthis.runStep = runStep;', sandbox);
+  const result = await sandbox.runStep(process.execPath, args);
+  assert.equal(executed.command, process.execPath);
+  assert.equal(executed.argv, args, 'the real spawn receives the original argv, not the logging copy');
+  assert.equal(result.code, 7);
+  assert.equal(result.stdout, 'unchanged stdout');
+  assert.equal(result.stderr, 'unchanged stderr');
+  const commandArtifacts = [...writes].filter(([name]) => name.endsWith('.cmd'));
+  assert.equal(commandArtifacts.length, 1);
+  for (const [, text] of commandArtifacts) {
+    assert.equal(text.includes(marker), false, 'raw synthetic secret must not enter command artifacts');
+    assert.equal(text.includes(encoded), false, 'percent-encoded secret must not enter command artifacts');
+    const logged = JSON.parse(text);
+    assert.ok(logged.some(value => value.includes('issue33_src_test')), 'retain non-secret command context');
+    assert.ok(logged.includes('/tmp/synthetic-evidence'));
+  }
+  assert.equal(writes.get('/tmp/synthetic-evidence/step-001.raw.log'), '--- stdout ---\nunchanged stdout\n--- stderr ---\nunchanged stderr\n');
+  assert.equal(writes.get('/tmp/synthetic-evidence/step-001.exit'), '7\n');
+});
+
 test('parseCliArgs supports documented bare boolean flags regardless of position', () => {
   assert.deepEqual(backupDb.parseCliArgs(['--allow-non-test']), { allowNonTest: true });
   assert.deepEqual(backupDb.parseCliArgs(['--reconciled']), { reconciled: true });

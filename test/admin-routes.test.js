@@ -997,3 +997,313 @@ test('API management creates, documents, and deletes managed keys', async () => 
 
   assert.equal(revokedResponse.status, 401);
 });
+
+// ---- #33 dashboard content-save idempotency (owner dashboard, CSRF + cookie) ----
+
+async function dashboardSaveContext() {
+  const cookie = await loginDashboard();
+  const created = await request('/api/v1/share', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': 'admin-route-key' },
+    body: JSON.stringify({ htmlContent: '<h1>Idem save base</h1>', codeType: 'html', title: 'Idem save' })
+  });
+  assert.equal(created.status, 200);
+  const id = JSON.parse(created.text).urlId;
+  const detail = await request(`/admin/pages/${id}`, { headers: { Cookie: cookie } });
+  const csrf = detail.text.match(/name="csrf-token" content="([^"]+)"/)[1];
+  return { cookie, csrf, id };
+}
+
+function saveContentCall({ id, cookie, csrf, ifMatch, requestId, body }) {
+  return request(`/admin/pages/${id}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: cookie,
+      'X-CSRF-Token': csrf,
+      ...(ifMatch !== undefined ? { 'If-Match': ifMatch } : {}),
+      ...(requestId ? { 'Idempotency-Key': requestId } : {})
+    },
+    body: JSON.stringify(body)
+  });
+}
+
+test('a content save with an unknown outcome replays its original result despite the stale If-Match', async () => {
+  const { cookie, csrf, id } = await dashboardSaveContext();
+  const requestId = 'save-replay-012345678901';
+
+  const first = await saveContentCall({
+    id, cookie, csrf,
+    ifMatch: `"content:${id}:1"`,
+    requestId,
+    body: { htmlContent: '<h1>Idem save edited</h1>', title: 'Saved once' }
+  });
+  assert.equal(first.status, 200, first.text);
+  const firstBody = JSON.parse(first.text);
+  assert.equal(firstBody.page.currentRevision, '2');
+  assert.equal(firstBody.changed, true, 'new content reports changed before the Memory row can mutate the read baseline');
+
+  // The lost-response retry: original id, original payload, ORIGINAL tag that
+  // is stale now. It must confirm the committed save (never a 412 first-fail)
+  // and never mint a second revision.
+  const replay = await saveContentCall({
+    id, cookie, csrf,
+    ifMatch: `"content:${id}:1"`,
+    requestId,
+    body: { htmlContent: '<h1>Idem save edited</h1>', title: 'Saved once' }
+  });
+  assert.equal(replay.status, 200);
+  const replayBody = JSON.parse(replay.text);
+  assert.equal(replayBody.replayed, true, 'the retry is marked as a confirmed replay');
+  assert.equal(replayBody.changed, true, 'the receipt preserves the real committed changed flag');
+  assert.equal(replayBody.page.currentRevision, '2', 'the ORIGINAL committed result is confirmed');
+  assert.equal(replayBody.page.title, 'Saved once');
+  assert.equal(replayBody.page.htmlContent, '<h1>Idem save edited</h1>');
+
+  const live = await app.locals.pageRepository.getById(id);
+  assert.equal(String(live.current_revision), '2', 'exactly one content revision exists for both attempts');
+  assert.equal(String(live.access_revision), '1', 'the replay performs no access-policy work');
+});
+
+test('the same request id with different save input is a 409 conflict', async () => {
+  const { cookie, csrf, id } = await dashboardSaveContext();
+  const requestId = 'save-conflict-0123456789';
+
+  const first = await saveContentCall({
+    id, cookie, csrf,
+    ifMatch: `"content:${id}:1"`,
+    requestId,
+    body: { htmlContent: '<h1>Version one</h1>' }
+  });
+  assert.equal(first.status, 200);
+
+  const conflict = await saveContentCall({
+    id, cookie, csrf,
+    ifMatch: `"content:${id}:2"`,
+    requestId,
+    body: { htmlContent: '<h1>Version two</h1>' }
+  });
+  assert.equal(conflict.status, 409);
+  assert.equal(JSON.parse(conflict.text).code, 'REQUEST_ID_CONFLICT');
+
+  const live = await app.locals.pageRepository.getById(id);
+  assert.equal(String(live.current_revision), '2', 'the conflicting replay commits nothing');
+  assert.equal(live.html_content, '<h1>Version one</h1>');
+});
+
+test('a same-content no-op save with an id records success and replays changed:false', async () => {
+  const { cookie, csrf, id } = await dashboardSaveContext();
+  const requestId = 'save-noop-0123456789012';
+
+  // The exact same body bytes as the current projection: no new revision.
+  const first = await saveContentCall({
+    id, cookie, csrf,
+    ifMatch: `"content:${id}:1"`,
+    requestId,
+    body: { htmlContent: '<h1>Idem save base</h1>', title: 'Idem save' }
+  });
+  assert.equal(first.status, 200, first.text);
+  const payload = JSON.parse(first.text);
+  assert.equal(payload.page.currentRevision, '1', 'same content never mints a revision');
+  assert.equal(payload.changed, false, 'fresh no-op response reports unchanged');
+
+  const replay = await saveContentCall({
+    id, cookie, csrf,
+    ifMatch: `"content:${id}:1"`,
+    requestId,
+    body: { htmlContent: '<h1>Idem save base</h1>', title: 'Idem save' }
+  });
+  assert.equal(replay.status, 200);
+  const replayBody = JSON.parse(replay.text);
+  assert.equal(replayBody.replayed, true);
+  assert.equal(replayBody.page.currentRevision, '1');
+  assert.equal(replayBody.changed, false);
+});
+
+test('save digest includes optional immutable codeType and refuses empty idempotent writes', async () => {
+  const context = await dashboardSaveContext();
+  const options = { ...context, ifMatch: `"content:${context.id}:1"`, requestId: 'save-type-presence-33' };
+  const first = await saveContentCall({ ...options, body: { title: 'typed', codeType: 'html' } });
+  assert.equal(first.status, 200);
+  const changedType = await saveContentCall({ ...options, body: { title: 'typed', codeType: 'svg' } });
+  assert.equal(changedType.status, 409, 'changed type must not replay a successful different input');
+  const empty = await saveContentCall({ ...options, requestId: 'save-empty-request-33', body: {} });
+  assert.equal(empty.status, 400, 'a supplied id must never be silently ignored');
+});
+
+test('a replayed save does not leak the password once the access policy changed', async () => {
+  const { cookie, csrf, id } = await dashboardSaveContext();
+  const requestId = 'save-policy-012345678901';
+
+  const protect = await saveContentCall({
+    id, cookie, csrf,
+    ifMatch: `"content:${id}:1"`,
+    body: { isProtected: true, expectedAccessRevision: '1' }
+  });
+  assert.equal(protect.status, 200);
+  const protectedBody = JSON.parse(protect.text);
+  assert.ok(protectedBody.page.password, 'the original protect response shows the generated password');
+  const accessAfterProtect = protectedBody.page.accessRevision;
+
+  // A later content save under the NEW access revision, recorded with an id.
+  const contentSave = await saveContentCall({
+    id, cookie, csrf,
+    ifMatch: `"content:${id}:1"`,
+    requestId,
+    body: { htmlContent: '<h1>Protected edit</h1>' }
+  });
+  assert.equal(contentSave.status, 200);
+
+  // The owner then turns protection off: the access policy moved on.
+  const unprotect = await saveContentCall({
+    id, cookie, csrf,
+    ifMatch: `"content:${id}:2"`,
+    body: { isProtected: false, expectedAccessRevision: accessAfterProtect }
+  });
+  assert.equal(unprotect.status, 200);
+
+  const replay = await saveContentCall({
+    id, cookie, csrf,
+    ifMatch: `"content:${id}:1"`,
+    requestId,
+    body: { htmlContent: '<h1>Protected edit</h1>' }
+  });
+  assert.equal(replay.status, 200);
+  const replayBody = JSON.parse(replay.text);
+  assert.equal(replayBody.replayed, true);
+  assert.equal(replayBody.page.isProtected, true, 'isProtected reports the ORIGINAL committed result');
+  assert.ok(!replayBody.page.password, 'the generated password never replays after the policy changed');
+});
+
+test('an Idempotency-Key on policy-only or combined saves is rejected instead of silently ignored', async () => {
+  const { cookie, csrf, id } = await dashboardSaveContext();
+
+  const policyOnly = await saveContentCall({
+    id, cookie, csrf,
+    requestId: 'save-policy-only-0123456',
+    body: { isProtected: false, expiresAt: null, expectedAccessRevision: '1' }
+  });
+  assert.equal(policyOnly.status, 400, 'policy-only saves never claim content-operation dedupe');
+  assert.equal(JSON.parse(policyOnly.text).code, 'UNSUPPORTED_REQUEST_ID_SCOPE');
+
+  const combined = await saveContentCall({
+    id, cookie, csrf,
+    ifMatch: `"content:${id}:1"`,
+    requestId: 'save-combined-012345678',
+    body: { htmlContent: '<h1>Combined</h1>', expiresAt: null, expectedAccessRevision: '1' }
+  });
+  assert.equal(combined.status, 400, 'a combined save must not partially replay');
+  assert.equal(JSON.parse(combined.text).code, 'UNSUPPORTED_REQUEST_ID_SCOPE');
+
+  // Legacy combined saves without an id keep working unchanged.
+  const legacyCombined = await saveContentCall({
+    id, cookie, csrf,
+    ifMatch: `"content:${id}:1"`,
+    body: { htmlContent: '<h1>Combined legacy</h1>', expiresAt: null, expectedAccessRevision: '1' }
+  });
+  assert.equal(legacyCombined.status, 200);
+});
+
+test('malformed and unsupported save fields return 400 for both fresh IDs and committed replays', async () => {
+  const context = await dashboardSaveContext();
+  const options = { ...context, ifMatch: `"content:${context.id}:1"`, requestId: 'static-replay-validation-33' };
+  assert.equal((await saveContentCall({ ...options, body: { title: 'saved' } })).status, 200);
+  const invalidFields = [
+    { revokeAccess: 'true' }, { revokeAccess: null }, { revokeAccess: false },
+    { password: [] }, { password: 'valid-pass' }, { password: null },
+    { expectedAccessRevision: {} }, { expectedAccessRevision: '1' },
+    { isProtected: 'false' }, { isProtected: false }, { expiresAt: {} }, { expiresAt: null },
+    { htmlContent: [] }, { htmlContent: null }, { title: [] }, { description: {} },
+    { markdownTheme: [] }, { codeType: 'unsupported' }, { codeType: {} },
+    { published: false }, { favorite: true }
+  ];
+  for (const [index, fields] of invalidFields.entries()) {
+    const body = { title: 'saved', ...fields };
+    const fresh = await saveContentCall({ ...options, requestId: `static-fresh-validation-${index}`, body });
+    const replay = await saveContentCall({ ...options, body });
+    assert.equal(fresh.status, 400, `fresh ${JSON.stringify(fields)}: ${fresh.text}`);
+    assert.equal(replay.status, 400, `replay ${JSON.stringify(fields)}: ${replay.text}`);
+    assert.deepEqual(JSON.parse(replay.text), JSON.parse(fresh.text), 'validation is independent of operation existence');
+  }
+  const validReplay = await saveContentCall({ ...options, body: { title: 'saved' } });
+  assert.equal(validReplay.status, 200, validReplay.text);
+  assert.equal(JSON.parse(validReplay.text).replayed, true, 'valid stale-baseline replay still succeeds');
+  assert.equal(String((await app.locals.pageRepository.getById(context.id)).current_revision), '2');
+});
+
+test('malformed coercion payload returns controlled 400 in a real HTTP child and leaves it serving', { timeout: 15000 }, async () => {
+  const { spawn } = require('node:child_process');
+  const { once } = require('node:events');
+  const path = require('node:path');
+  const env = { ...process.env };
+  for (const key of ['DATABASE_URL', 'POSTGRES_URL', 'DATABASE_MIGRATION_URL', 'DATABASE_URL_UNPOOLED', 'POSTGRES_URL_NON_POOLING', 'VERCEL_ENV', 'NODE_OPTIONS']) delete env[key];
+  const child = spawn(process.execPath, ['--unhandled-rejections=strict', '-e', `
+    const app = require('./app');
+    const server = app.listen(0, '127.0.0.1', () => process.send({ port: server.address().port }));
+  `], { cwd: path.resolve(__dirname, '..'), env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  let stderr = '';
+  child.stdout.resume();
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const exited = once(child, 'exit');
+  try {
+    const [{ port }] = await Promise.race([
+      once(child, 'message'),
+      exited.then(([code]) => { throw new Error(`HTTP child exited before readiness: ${code}`); })
+    ]);
+    const base = `http://127.0.0.1:${port}`;
+    const call = (route, options = {}) => fetch(base + route, { ...options, signal: AbortSignal.timeout(3000) });
+    const login = await call('/admin/login', {
+      method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'password=dashboard-secret'
+    });
+    assert.equal(login.status, 302);
+    const cookie = login.headers.getSetCookie().find(value => value.startsWith('dashboard_admin_session=')).split(';')[0];
+    const created = await call('/api/v1/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Key': 'admin-route-key' },
+      body: JSON.stringify({ htmlContent: '<h1>Child base</h1>', codeType: 'html' })
+    });
+    assert.equal(created.status, 200);
+    const id = (await created.json()).urlId;
+    const detail = await call(`/admin/pages/${id}`, { headers: { Cookie: cookie } });
+    const csrf = (await detail.text()).match(/name="csrf-token" content="([^"]+)"/)[1];
+    const headers = { Cookie: cookie, 'X-CSRF-Token': csrf, 'Content-Type': 'application/json', 'If-Match': `"content:${id}:1"`, 'Idempotency-Key': 'child-static-validation-33' };
+    for (const field of ['title', 'description', 'htmlContent', 'markdownTheme', 'codeType', 'expiresAt']) {
+      let response;
+      try {
+        response = await call(`/admin/pages/${id}`, {
+          method: 'PUT', headers, body: JSON.stringify({ [field]: { toString: null } })
+        });
+      } catch (error) {
+        // A crashed Express 4 child is a regression, not an unhandled rejection
+        // intercepted and hidden by the parent's node:test harness.
+        await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 100))]);
+        assert.fail(`expected controlled HTTP 400; child exit=${child.exitCode}; ${error.message}; ${stderr}`);
+      }
+      assert.equal(response.status, 400, `${field}: ${await response.text()}`);
+      assert.equal(child.exitCode, null, 'service remains alive');
+      assert.equal((await call(`/admin/pages/${id}`, { headers: { Cookie: cookie } })).status, 200);
+    }
+    const good = await call(`/admin/pages/${id}`, { method: 'PUT', headers, body: JSON.stringify({ title: 'saved after invalid requests', htmlContent: '  raw\r\nbody  ' }) });
+    assert.equal(good.status, 200);
+    const result = await good.json();
+    assert.equal(result.page.currentRevision, '2');
+    assert.equal(result.page.htmlContent, '  raw\r\nbody  ', 'validation never normalizes source text');
+    assert.equal(child.exitCode, null);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+    await exited;
+  }
+});
+
+test('malformed request ids are rejected with 400 before any save work', async () => {
+  const { cookie, csrf, id } = await dashboardSaveContext();
+  const response = await saveContentCall({
+    id, cookie, csrf,
+    ifMatch: `"content:${id}:1"`,
+    requestId: 'short',
+    body: { htmlContent: '<h1>Never saved</h1>' }
+  });
+  assert.equal(response.status, 400);
+  assert.equal(JSON.parse(response.text).code, 'INVALID_REQUEST_ID');
+  const live = await app.locals.pageRepository.getById(id);
+  assert.equal(String(live.current_revision), '1');
+});

@@ -654,6 +654,93 @@ class MemoryPageRepository {
     return options.returnUpdated ? { ...page } : true;
   }
 
+  async restorePageRevision(id, options) {
+    const sourceRevision = String(options.sourceRevision);
+    if (!isContentRevision(sourceRevision)) {
+      throw contentError(400, 'content revision must be a positive decimal string');
+    }
+
+    const page = this.pages.get(id);
+    if (!page) return null;
+
+    try {
+      if (!isContentRevision(options.expectedContentRevision)) {
+        throw contentError(options.expectedContentRevision === undefined ? 428 : 400,
+          options.expectedContentRevision === undefined
+            ? '请刷新 Share 后重新保存内容；未保存的输入已保留。'
+            : 'content baseline must be a positive decimal string');
+      }
+      assertContentRevision(options.expectedContentRevision, page.current_revision);
+    } catch (error) {
+      if (error.code === 'CONTENT_REVISION_CONFLICT') {
+        error.current = revisionConflictProjection(page);
+      }
+      throw error;
+    }
+
+    const sourceRow = await this.getContentRevision(id, sourceRevision);
+    if (!sourceRow || typeof sourceRow.html_content !== 'string') {
+      throw Object.assign(
+        new Error('恢复来源不存在或已被清除，不能作为恢复来源'),
+        { status: 404, code: 'RESTORE_SOURCE_INVALID' }
+      );
+    }
+
+    const nextContent = {
+      html_content: sourceRow.html_content,
+      title: sourceRow.title,
+      description: sourceRow.description,
+      markdown_theme: sourceRow.markdown_theme
+    };
+    const snapshotUnchanged =
+      nextContent.html_content === page.html_content
+      && nextContent.title === page.title
+      && nextContent.description === page.description
+      && nextContent.markdown_theme === page.markdown_theme;
+
+    if (snapshotUnchanged) {
+      // Same-snapshot no-op: success without a new revision. This method
+      // only runs inside the staged transaction whose collections replace
+      // the store on commit, mirroring the PostgreSQL adapter exactly.
+      return { changed: false, page: { ...page } };
+    }
+
+    page.html_content = nextContent.html_content;
+    page.title = nextContent.title;
+    page.description = nextContent.description;
+    page.markdown_theme = nextContent.markdown_theme;
+    page.current_revision = (BigInt(page.current_revision) + 1n).toString();
+
+    let revisions = this.revisions.get(id);
+    if (!revisions) {
+      revisions = new Map();
+      this.revisions.set(id, revisions);
+    }
+    const snapshotPayload = {
+      htmlContent: nextContent.html_content,
+      codeType: page.code_type || 'html',
+      title: nextContent.title,
+      description: nextContent.description,
+      markdownTheme: nextContent.markdown_theme
+    };
+    revisions.set(page.current_revision, {
+      share_id: id,
+      revision: page.current_revision,
+      html_content: nextContent.html_content,
+      code_type: snapshotPayload.codeType,
+      title: nextContent.title,
+      description: nextContent.description,
+      markdown_theme: nextContent.markdown_theme,
+      created_at: Date.now(),
+      snapshot_hash: contentSnapshotHash(snapshotPayload),
+      source: options.actorSource || 'dashboard-restore',
+      actor: options.actorIdentity === undefined ? 'owner-dashboard' : (options.actorIdentity || null),
+      restored_from: sourceRevision
+    });
+
+    return { changed: true, page: { ...page } };
+  }
+
   async deletePage(id) {
     const deleted = this.pages.delete(id);
     this.revisions.delete(id);

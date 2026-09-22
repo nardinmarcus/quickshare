@@ -469,3 +469,235 @@ test('a late rejection from an OLD comparison target never overwrites the new ta
   await new Promise(resolve => setImmediate(resolve));
   assert.match(harness.element('conflict-diff-status').textContent, /正文行级差异/, 'flow B completes with its own result');
 });
+
+// ---- #33 dashboard content-save idempotency (client identity) ----
+
+function buildSaveDom() {
+  const elements = new Map();
+  function element(id) {
+    if (!elements.has(id)) elements.set(id, {
+      _value: '', textContent: '', hidden: false, disabled: false, checked: false, dataset: {}, events: {}, attrs: {},
+      classList: { add() {}, remove() {}, toggle() {} },
+      addEventListener(name, fn) { this.events[name] = fn; },
+      setAttribute(n, v) { this.attrs[n] = v; }, getAttribute(n) { return this.attrs[n]; },
+      removeAttribute(n) { delete this.attrs[n]; }, focus() {},
+      get value() { return this._value.replace(/\r\n?/g, '\n'); },
+      set value(v) { this._value = v; }
+    });
+    return elements.get(id);
+  }
+  return { elements, element };
+}
+
+const SAVE_ORIGINAL = {
+  id: 'save-idem', title: 'Save base', htmlContent: '<h1>base</h1>', isProtected: false,
+  accessRevision: '1', currentRevision: '1', expiresAt: null, markdownTheme: ''
+};
+
+function saveGlobals(dom, overrides = {}) {
+  const storage = new Map();
+  return {
+    document: {
+      documentElement: { dataset: overrides.sessionTag ? { dashboardSessionTag: overrides.sessionTag } : {} },
+      getElementById: dom.element,
+      querySelector: (selector) => (selector === 'meta[name="csrf-token"]' ? { getAttribute: () => 'csrf-33' } : null),
+      querySelectorAll: () => [],
+      createElement: () => ({ textContent: '', innerHTML: '' })
+    },
+    window: {
+      QuickSharePublishingRequest: overrides.publishingRequest || null,
+      AdminTime: { toDateTimeLocal: () => '', parseDateTimeLocal: () => 0, format: () => '' },
+      SourceDiff: { renderMetaChanges() {}, renderParts() {}, compare: async () => ({ status: 'ok', parts: [] }) },
+      location: { reload: overrides.reload || (() => {}) },
+      sessionStorage: {
+        getItem: key => (storage.has(key) ? storage.get(key) : null),
+        setItem: (key, value) => storage.set(key, String(value)),
+        removeItem: key => storage.delete(key)
+      }
+    },
+    fetch: overrides.fetch || (async () => ({ ok: true, status: 200, json: async () => ({ success: true, page: { ...SAVE_ORIGINAL } }) })),
+    Toast: { error() {}, success() {} },
+    console, Date, encodeURIComponent
+  };
+}
+
+function runSaveScript(globals) {
+  const fs = require('fs');
+  const vm = require('vm');
+  globals.window.document = globals.document;
+  vm.runInNewContext(fs.readFileSync('public/js/publishing-request.js', 'utf8'), globals);
+  vm.runInNewContext(fs.readFileSync('public/js/admin-detail.js', 'utf8'), globals);
+}
+
+function setupSaveClient(dom, globals) {
+  dom.element('page-data').textContent = JSON.stringify(SAVE_ORIGINAL);
+  dom.element('content-textarea')._value = SAVE_ORIGINAL.htmlContent;
+  runSaveScript(globals);
+  // Enter edit mode so the form behaves like the real page.
+  dom.element('edit-toggle-btn').events.click();
+}
+
+test('a lost content save keeps the draft and request id; the retry reuses the ORIGINAL id', async () => {
+  const dom = buildSaveDom();
+  const calls = [];
+  let fail = true;
+  const globals = saveGlobals(dom, {
+    sessionTag: 'dash-A',
+    fetch: async (url, options) => {
+      calls.push({ url, headers: options.headers, body: JSON.parse(options.body) });
+      if (fail) throw new TypeError('Failed to fetch');
+      return { ok: true, status: 200, json: async () => ({ success: true, page: { ...SAVE_ORIGINAL, currentRevision: '2' } }) };
+    }
+  });
+  setupSaveClient(dom, globals);
+  dom.element('edit-title')._value = 'Edited title';
+  await dom.element('edit-form').events.submit({ preventDefault() {} });
+
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].headers['Idempotency-Key'], /^[0-9a-f-]{36}$/);
+  const pending = JSON.parse(globals.window.sessionStorage.getItem('quickshare.dashboard.intent.content-save.save-idem'));
+  assert.equal(pending.requestId, calls[0].headers['Idempotency-Key'], 'the unknown outcome keeps the pending intent');
+  const statusLine = dom.element('content-save-status');
+  assert.equal(statusLine.hidden, false, 'the pending status line becomes visible');
+  assert.match(statusLine.textContent, /结果未知/);
+  assert.match(statusLine.textContent, /原请求重试/);
+
+  fail = false;
+  await dom.element('edit-form').events.submit({ preventDefault() {} });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].headers['Idempotency-Key'], calls[0].headers['Idempotency-Key'],
+    'the same draft retries with the ORIGINAL request id');
+  assert.equal(globals.window.sessionStorage.getItem('quickshare.dashboard.intent.content-save.save-idem'), null,
+    'the confirmed save consumes the intent');
+});
+
+test('a confirmed save clears the intent; a diverged draft rotates to a new explicit id', async () => {
+  const dom = buildSaveDom();
+  const calls = [];
+  const globals = saveGlobals(dom, {
+    sessionTag: 'dash-A',
+    fetch: async (url, options) => {
+      calls.push(options.headers['Idempotency-Key']);
+      return { ok: true, status: 200, json: async () => ({ success: true, page: { ...SAVE_ORIGINAL, currentRevision: '2' } }) };
+    }
+  });
+  setupSaveClient(dom, globals);
+  dom.element('edit-title')._value = 'First title';
+  await dom.element('edit-form').events.submit({ preventDefault() {} });
+  assert.equal(globals.window.sessionStorage.getItem('quickshare.dashboard.intent.content-save.save-idem'), null);
+
+  // A second explicit save of a NEW edit gets a fresh id — never reuses one.
+  dom.element('edit-toggle-btn').events.click();
+  dom.element('edit-title')._value = 'Second title';
+  await dom.element('edit-form').events.submit({ preventDefault() {} });
+  assert.equal(calls.length, 2);
+  assert.notEqual(calls[0], calls[1], 'each explicit save intent carries its own id');
+});
+
+test('an orphaned intent from another dashboard session blocks the save', async () => {
+  const dom = buildSaveDom();
+  const calls = [];
+  const globals = saveGlobals(dom, {
+    sessionTag: 'dash-A',
+    fetch: async (url, options) => {
+      calls.push(options);
+      return { ok: true, status: 200, json: async () => ({ success: true, page: { ...SAVE_ORIGINAL } }) };
+    }
+  });
+  setupSaveClient(dom, globals);
+  // Plant an intent minted under ANOTHER dashboard session.
+  globals.window.sessionStorage.setItem(
+    'quickshare.dashboard.intent.content-save.save-idem',
+    JSON.stringify({ requestId: 'orphan-request-id-0001', kind: 'content-save', shareId: 'save-idem', draftKey: 'other', sessionTag: 'dash-OLD' })
+  );
+  dom.element('edit-form').events.submit({ preventDefault() {} });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 0, 'an orphaned intent is never claimed nor submitted');
+  assert.equal(globals.window.sessionStorage.getItem('quickshare.dashboard.intent.content-save.save-idem') !== null, true,
+    'the orphan stays read-only until an explicit discard');
+});
+
+test('a replayed save confirms the original result and reloads instead of repainting stale state', async () => {
+  const dom = buildSaveDom();
+  const calls = [];
+  let reloaded = false;
+  const globals = saveGlobals(dom, {
+    sessionTag: 'dash-A',
+    fetch: async (url, options) => {
+      calls.push(options.headers['Idempotency-Key']);
+      return {
+        ok: true, status: 200,
+        json: async () => ({ success: true, replayed: true, requestId: options.headers['Idempotency-Key'], page: { ...SAVE_ORIGINAL, currentRevision: '2' } })
+      };
+    },
+    reload: () => { reloaded = true; }
+  });
+  setupSaveClient(dom, globals);
+  dom.element('edit-title')._value = 'Edited title';
+  await dom.element('edit-form').events.submit({ preventDefault() {} });
+  assert.equal(reloaded, true, 'the replay path reloads so the view reflects true current state');
+  assert.equal(globals.window.sessionStorage.getItem('quickshare.dashboard.intent.content-save.save-idem'), null);
+});
+
+for (const status of [401, 403, 409, 410, 412, 428, 500, 503, 200]) {
+  test(`save retains draft, baseline and original intent after ${status} refusal or unreadable success`, async () => {
+    const dom = buildSaveDom();
+    const calls = [];
+    const globals = saveGlobals(dom, {
+      sessionTag: 'dash-A',
+      fetch: async (url, options) => {
+        calls.push(options);
+        return { ok: status === 200, status, json: async () => {
+          if (status === 200) throw new SyntaxError('truncated JSON');
+          return { success: false, error: 'refused', code: status === 412 ? 'CONTENT_REVISION_CONFLICT' : 'REFUSED',
+            current: { ...SAVE_ORIGINAL, currentRevision: '9' } };
+        } };
+      }
+    });
+    setupSaveClient(dom, globals);
+    dom.element('edit-title')._value = 'Unsaved candidate';
+    await dom.element('edit-form').events.submit({ preventDefault() {} });
+    const pending = globals.window.QuickSharePublishingRequest.readDashboardIntent('content-save', 'save-idem');
+    assert.ok(pending, 'not cleared without a confirmed result');
+    assert.equal(pending.sessionTag, 'dash-A');
+    assert.equal(dom.element('edit-title').value, 'Unsaved candidate');
+    assert.equal(calls.length, 1, 'no automatic retry');
+    await dom.element('edit-form').events.submit({ preventDefault() {} });
+    assert.equal(calls[1].headers['Idempotency-Key'], calls[0].headers['Idempotency-Key']);
+    assert.equal(calls[1].headers['If-Match'], calls[0].headers['If-Match']);
+  });
+}
+
+test('a lost explicitly confirmed conflict save keeps that authorized baseline on retry', async () => {
+  const dom = buildSaveDom();
+  const calls = [];
+  const globals = saveGlobals(dom, { sessionTag: 'dash-A', fetch: async (url, options) => {
+    calls.push(options);
+    if (calls.length === 1) return { ok: false, status: 412, json: async () => ({ success: false,
+      code: 'CONTENT_REVISION_CONFLICT', current: { ...SAVE_ORIGINAL, currentRevision: '9', htmlContent: '<h1>remote</h1>' } }) };
+    throw new TypeError('Failed to fetch');
+  } });
+  setupSaveClient(dom, globals);
+  dom.element('edit-title')._value = 'My confirmed candidate';
+  await dom.element('edit-form').events.submit({ preventDefault() {} });
+  await dom.element('conflict-save-mine').events.click();
+  await new Promise(resolve => setImmediate(resolve));
+  await dom.element('edit-form').events.submit({ preventDefault() {} });
+  assert.equal(calls.length, 3);
+  assert.equal(calls[1].headers['If-Match'], '"content:save-idem:9"');
+  assert.equal(calls[2].headers['If-Match'], calls[1].headers['If-Match']);
+  assert.equal(calls[2].headers['Idempotency-Key'], calls[1].headers['Idempotency-Key']);
+  assert.equal(calls[2].body, calls[1].body);
+});
+
+test('the detail page ships the pending status line, session tag and intent helper', async () => {
+  const id = await create();
+  const html = await (await fetch(`${origin}/admin/pages/${id}`)).text();
+  assert.match(html, /id="content-save-status"/, 'the pending status line exists');
+  assert.match(html, /data-dashboard-session-tag=/, 'the page binds the dashboard session identity');
+  assert.match(html, /publishing-request\.js/, 'the identity helper is loaded before the client');
+  const source = await (await fetch(`${origin}/js/admin-detail.js`)).text();
+  assert.match(source, /Idempotency-Key/, 'content saves carry the operation id header');
+  assert.match(source, /REQUEST_ID_CONFLICT/, 'a conflicting id never auto-rotates');
+  assert.match(source, /confirmDashboardCompleted/, 'definitive outcomes consume the intent');
+});

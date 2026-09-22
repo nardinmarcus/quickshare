@@ -24,6 +24,7 @@ const {
   parseCustomPassword
 } = require('../utils/security');
 const { CONTENT_TYPES } = require('../utils/apiCapabilities');
+const { isAccessRevision } = require('../utils/shareAccess');
 
 const VALID_CODE_TYPES = new Set(CONTENT_TYPES);
 // Kept identical to the original single expiry rejection message: callers
@@ -133,6 +134,104 @@ function validatePublishingRequestId(value, { INVALID_REQUEST_ID_MESSAGE: messag
     return { provided: true, error: message || '请求标识必须为 16-128 位字母、数字、短横线或下划线' };
   }
   return { provided: true, error: null, requestId: value };
+}
+
+/**
+ * Static dashboard PUT checks only: never read a Share, coerce objects, mutate
+ * the raw body, or check a live baseline here. Run before digest/replay so a
+ * committed operation cannot turn malformed or non-content input into success.
+ */
+function validateDashboardUpdateInput(input, { idempotent = false } = {}) {
+  const invalid = error => ({ error, code: 'INVALID_UPDATE_INPUT' });
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return invalid('更新内容必须是 JSON 对象');
+  }
+  for (const field of ['title', 'description', 'markdownTheme']) {
+    if (input[field] !== undefined && input[field] !== null && typeof input[field] !== 'string') {
+      return invalid(`${field} must be a string or null`);
+    }
+  }
+  if (input.htmlContent !== undefined && typeof input.htmlContent !== 'string') {
+    return invalid('htmlContent must be a string');
+  }
+  if (input.codeType !== undefined && !VALID_CODE_TYPES.has(input.codeType)) {
+    return invalid('codeType must be a supported content type');
+  }
+  for (const field of ['isProtected', 'revokeAccess']) {
+    if (input[field] !== undefined && typeof input[field] !== 'boolean') {
+      return invalid(`${field} must be a boolean`);
+    }
+  }
+  const expiry = input.expiresAt;
+  if (expiry !== undefined && expiry !== null && expiry !== '') {
+    if (!((typeof expiry === 'number' && Number.isSafeInteger(expiry))
+      || (typeof expiry === 'string' && /^[+-]?\d+$/.test(expiry.trim()) && Number.isSafeInteger(Number(expiry))))) {
+      return invalid('expiresAt must be an integer timestamp or null');
+    }
+  }
+  if (input.expectedAccessRevision !== undefined && !isAccessRevision(input.expectedAccessRevision)) {
+    return { error: 'expectedAccessRevision must be a positive decimal string', code: 'INVALID_ACCESS_REVISION' };
+  }
+  const customPassword = parseCustomPassword(input.password);
+  if (customPassword.error) return invalid(customPassword.error);
+
+  if (idempotent) {
+    const contentFields = ['htmlContent', 'title', 'description', 'markdownTheme'];
+    const allowedFields = new Set([...contentFields, 'codeType', '_csrf']);
+    if (!contentFields.some(field => input[field] !== undefined)
+      || Object.keys(input).some(field => !allowedFields.has(field))) {
+      return {
+        error: '请求标识仅支持纯内容保存；访问设置不参与内容操作去重',
+        code: 'UNSUPPORTED_REQUEST_ID_SCOPE'
+      };
+    }
+  }
+  return { error: null, customPassword };
+}
+
+/**
+ * #33 dashboard content-save digest input. Call only after static validation. The canonical descriptor covers
+ * the EXPECTED content revision (#24 §8), the normalized metadata values and
+ * the business-field presence map — computed BEFORE the transaction so a
+ * retried save hashes identically. The Markdown theme deliberately enters as
+ * the submitted literal: the client re-sends the exact same bytes on retry,
+ * while theme resolution depends on the share's immutable code type inside
+ * the transaction and must never require a pre-transaction share read.
+ */
+function normalizeContentUpdateDigestInput(input) {
+  const { expectedRevision, htmlContent, title, description, markdownTheme, codeType } = input || {};
+  const presence = {
+    htmlContent: htmlContent !== undefined,
+    title: title !== undefined,
+    description: description !== undefined,
+    markdownTheme: markdownTheme !== undefined,
+    codeType: codeType !== undefined
+  };
+  const fields = {
+    expectedRevision: String(expectedRevision),
+    codeType: presence.codeType ? codeType : null,
+    htmlContent: presence.htmlContent ? htmlContent : null,
+    title: presence.title ? (title ? String(title).trim() || null : null) : null,
+    description: presence.description ? (description ? String(description).trim() || null : null) : null,
+    markdownTheme: presence.markdownTheme
+      ? (markdownTheme === null || markdownTheme === '' ? null : String(markdownTheme))
+      : null
+  };
+  return { fields, presence };
+}
+
+/**
+ * #33 restore digest input: action + target share + expected current
+ * revision + exact decimal source revision. Nothing else can influence the
+ * result, so nothing else enters the digest.
+ */
+function normalizeRestoreDigestInput({ expectedRevision, sourceRevision }) {
+  return {
+    fields: {
+      expectedRevision: String(expectedRevision),
+      sourceRevision: String(sourceRevision)
+    }
+  };
 }
 
 /**
@@ -290,14 +389,14 @@ async function classifyOperationReplay(repository, { record, requestDigest }) {
   // re-confirmed before replay). A missing committed revision means the
   // original result is no longer confirmable — 410, no metadata, no rebuild.
   const revisionRow = await repository.getContentRevision(record.result_share_id, String(record.result_revision));
-  if (!revisionRow) {
+  if (!revisionRow || typeof revisionRow.html_content !== 'string') {
     return { kind: 'result-unavailable' };
   }
 
   if (record.action === 'clone') {
     // Clone results carry no receipt and no creation metadata; confirming the
     // committed clone only needs the Share + its result revision.
-    return { kind: 'replay', cloneShareId: record.result_share_id, result: null, receiptPassword: null };
+    return { kind: 'replay', cloneShareId: record.result_share_id, result: null, receiptPassword: null, record, revisionRow, page, receipt: null, accessUnchanged: true };
   }
 
   const receipt = decodeOperationReceipt(record.receipt_encrypted);
@@ -325,7 +424,14 @@ async function classifyOperationReplay(repository, { record, requestDigest }) {
       expiresAt: receipt.expiresAt === undefined ? null : receipt.expiresAt,
       markdownTheme: receipt.markdownTheme
     },
-    receiptPassword
+    receiptPassword,
+    // #33 content-update / restore replays rebuild the owner-visible result
+    // from the committed snapshot row plus the operation record itself.
+    record,
+    receipt,
+    revisionRow,
+    page,
+    accessUnchanged
   };
 }
 
@@ -353,6 +459,9 @@ module.exports = {
   EXPIRY_ERROR,
   normalizeCreateInput,
   createRequestDigest,
+  normalizeContentUpdateDigestInput,
+  validateDashboardUpdateInput,
+  normalizeRestoreDigestInput,
   validatePublishingRequestId,
   createPageWithUniqueId,
   executeNormalizedCreate,

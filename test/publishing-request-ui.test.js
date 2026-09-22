@@ -49,6 +49,42 @@ function createSandbox() {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
+test('dashboard intents retain same-page identity when sessionStorage is unavailable', () => {
+  const sandbox = createSandbox();
+  sandbox.window.document.documentElement.dataset.dashboardSessionTag = 'dash-A';
+  sandbox.window.sessionStorage = {
+    getItem() { throw new Error('storage denied'); },
+    setItem() { throw new Error('storage denied'); },
+    removeItem() { throw new Error('storage denied'); }
+  };
+  vm.runInNewContext(fs.readFileSync('public/js/publishing-request.js', 'utf8'), sandbox);
+  const helper = sandbox.window.QuickSharePublishingRequest;
+  const intent = { kind: 'restore', shareId: 'one', draftKey: '[1,2]' };
+  const first = helper.claimDashboardIntentId(intent);
+  const retry = helper.claimDashboardIntentId(intent);
+  assert.equal(retry.requestId, first.requestId);
+  assert.equal(retry.mode, 'retry');
+  sandbox.window.document.documentElement.dataset.dashboardSessionTag = 'dash-B';
+  assert.equal(helper.claimDashboardIntentId(intent).mode, 'blocked');
+  helper.discardDashboardIntent('restore', 'one');
+  assert.equal(helper.claimDashboardIntentId(intent).mode, 'new');
+});
+
+test('dashboard retry uses the in-memory pair when writes fail but storage still returns the old pair', () => {
+  const sandbox = createSandbox();
+  sandbox.window.document.documentElement.dataset.dashboardSessionTag = 'dash-A';
+  vm.runInNewContext(fs.readFileSync('public/js/publishing-request.js', 'utf8'), sandbox);
+  const helper = sandbox.window.QuickSharePublishingRequest;
+  helper.claimDashboardIntentId({ kind: 'restore', shareId: 'one', draftKey: 'old' });
+  sandbox.window.sessionStorage.setItem = () => { throw new Error('quota exceeded'); };
+  sandbox.window.sessionStorage.removeItem = () => { throw new Error('storage denied'); };
+  const next = { kind: 'restore', shareId: 'one', draftKey: 'new' };
+  const claimed = helper.claimDashboardIntentId(next);
+  assert.equal(helper.claimDashboardIntentId(next).requestId, claimed.requestId);
+  helper.confirmDashboardCompleted('restore', 'one');
+  assert.equal(helper.readDashboardIntent('restore', 'one'), null);
+});
+
 // Full-file VM harness for admin.js clone-intent behaviour (same pattern as
 // test/admin-navigation.test.js): minimal DOM, captured submit listeners and
 // a forms registry keyed by action path. This is VM evidence only — the real

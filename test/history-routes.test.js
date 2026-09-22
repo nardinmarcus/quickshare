@@ -329,3 +329,366 @@ test('historical bodies are never projected through public or API surfaces', asy
   assert.match(detail, /历史版本/, 'the detail page links the history surface');
   assert.ok(detail.includes(`/admin/pages/${id}/history`));
 });
+
+// ---- #33 owner restore: new revision from a source snapshot, idempotent ----
+
+async function restoreRequest(id, { cookie, csrf, revision, ifMatch, requestId, body } = {}) {
+  return request(`/admin/pages/${id}/restore`, {
+    method: 'POST',
+    headers: jsonHeaders({
+      ...(cookie !== undefined ? { Cookie: cookie } : {}),
+      ...(csrf !== undefined ? { 'X-CSRF-Token': csrf } : {}),
+      ...(ifMatch !== undefined ? { 'If-Match': ifMatch } : {}),
+      ...(requestId !== undefined ? { 'Idempotency-Key': requestId } : {})
+    }),
+    body: JSON.stringify(body || { revision })
+  });
+}
+
+test('restore refuses anonymous, frontend, API-key and missing-CSRF identities without side effects', async () => {
+  const id = await createShare(['H33-AUTH-A', 'H33-AUTH-B']);
+  const cookie = await dashboardLogin();
+  const csrf = await dashboardCsrf(cookie, id);
+  const headers = { 'Content-Type': 'application/json', 'If-Match': `"content:${id}:2"`, 'Idempotency-Key': 'restore-auth-boundary-33' };
+  for (const identity of [{}, { Cookie: await frontendLogin() }, { 'X-API-Key': 'history-share-api-key' }]) {
+    const result = await request(`/admin/pages/${id}/restore`, { method: 'POST', headers: { ...headers, ...identity }, body: JSON.stringify({ revision: '1' }) });
+    assert.equal(result.status, 401);
+    assert.doesNotMatch(result.text, /H33-AUTH/);
+  }
+  const missingCsrf = await restoreRequest(id, { cookie, revision: '1', ifMatch: `"content:${id}:2"`, requestId: 'restore-auth-boundary-33' });
+  assert.equal(missingCsrf.status, 403);
+  assert.equal(String((await pageRepository.getById(id)).current_revision), '2');
+  assert.deepEqual(await pageRepository.findPublishingOperationsByRequestId('restore-auth-boundary-33'), []);
+  assert.ok(csrf);
+});
+
+test('restore writes a new revision with restored_from and keeps the access policy untouched', async () => {
+  const id = await createShare(['H33-R-SRC', 'H33-R-CUR']);
+  const cookie = await dashboardLogin();
+  const csrf = await dashboardCsrf(cookie, id);
+
+  // Establish a non-default access policy: protection + expiry + favorite + views.
+  const page = JSON.parse((await request(`/api/pages/${id}`)).text);
+  const detail = JSON.parse((await request(`/admin/pages/${id}/revisions/1`, { headers: { Cookie: cookie } })).text);
+  assert.equal(detail.revision.htmlContent, '<h1>H33-R-SRC</h1>');
+
+  const before = JSON.parse((await (await request(`/admin/pages/${id}/revisions`, { headers: { Cookie: cookie } })).text));
+  assert.equal(before.pagination.total, '2');
+
+  const response = await restoreRequest(id, {
+    cookie, csrf,
+    revision: '1',
+    ifMatch: `"content:${id}:2"`,
+    requestId: 'restore-basic-0123456789'
+  });
+  assert.equal(response.status, 200, response.text);
+  const payload = JSON.parse(response.text);
+  assert.equal(payload.success, true);
+  assert.equal(payload.changed, true, 'a real content change reports changed');
+  assert.equal(payload.page.currentRevision, '3', 'the restore creates the next revision');
+  assert.equal(payload.page.htmlContent, '<h1>H33-R-SRC</h1>');
+
+  const restored = JSON.parse((await request(`/admin/pages/${id}/revisions/3`, { headers: { Cookie: cookie } })).text);
+  assert.equal(restored.revision.restoredFrom, '1', 'the new snapshot records its restore origin');
+  assert.equal(restored.revision.source, 'dashboard-restore');
+  assert.equal(restored.revision.htmlContent, '<h1>H33-R-SRC</h1>');
+
+  const after = JSON.parse((await request(`/admin/pages/${id}/revisions`, { headers: { Cookie: cookie } })).text);
+  assert.equal(after.pagination.total, '3');
+  assert.deepEqual(after.revisions.map(item => item.revision), ['3', '2', '1']);
+
+  // Access policy, URL identity and counters are untouched by a restore.
+  const live = await pageRepository.getById(id);
+  assert.equal(live.is_protected, 0);
+  assert.equal(String(live.access_revision), '1', 'access revision does not move on restore');
+  assert.equal(live.expires_at, null);
+  assert.equal(live.published, true);
+  assert.equal(live.is_favorite, false);
+  assert.equal(live.view_count, 0);
+  assert.equal(live.id, id, 'URL identity (the share id) is unchanged');
+});
+
+test('restore of a snapshot identical to current reports unchanged and records success without a duplicate revision', async () => {
+  const id = await createShare(['H33-NOOP-BODY', 'H33-NOOP-EDIT']);
+  const cookie = await dashboardLogin();
+  const csrf = await dashboardCsrf(cookie, id);
+
+  // Revision 2 is current; restoring revision 2 itself (same snapshot) is the
+  // approved no-op: success, unchanged, no new version.
+  const response = await restoreRequest(id, {
+    cookie, csrf,
+    revision: '2',
+    ifMatch: `"content:${id}:2"`,
+    requestId: 'restore-noop-01234567890'
+  });
+  assert.equal(response.status, 200, response.text);
+  const payload = JSON.parse(response.text);
+  assert.equal(payload.changed, false);
+  assert.equal(payload.page.currentRevision, '2', 'no new revision is minted');
+
+  const list = JSON.parse((await request(`/admin/pages/${id}/revisions`, { headers: { Cookie: cookie } })).text);
+  assert.equal(list.pagination.total, '2', 'no duplicate body version exists');
+
+  // The no-op still records a committed operation result for replay.
+  const replay = await restoreRequest(id, {
+    cookie, csrf,
+    revision: '2',
+    ifMatch: `"content:${id}:2"`,
+    requestId: 'restore-noop-01234567890'
+  });
+  assert.equal(replay.status, 200);
+  assert.equal(JSON.parse(replay.text).replayed, true);
+  assert.equal(JSON.parse(replay.text).changed, false);
+});
+
+test('restore rejects missing, non-existent and cleared source revisions', async () => {
+  const id = await createShare(['H33-BAD-SRC', 'H33-BAD-CUR']);
+  const cookie = await dashboardLogin();
+  const csrf = await dashboardCsrf(cookie, id);
+
+  const missing = await restoreRequest(id, {
+    cookie, csrf, revision: '42', ifMatch: `"content:${id}:2"`, requestId: 'restore-miss-01234567890'
+  });
+  assert.equal(missing.status, 404);
+  assert.equal(JSON.parse(missing.text).code, 'RESTORE_SOURCE_INVALID');
+
+  const invalidParam = await restoreRequest(id, {
+    cookie, csrf, revision: '0', ifMatch: `"content:${id}:2"`, requestId: 'restore-zero-0123456789'
+  });
+  assert.equal(invalidParam.status, 400);
+  assert.equal(JSON.parse(invalidParam.text).code, 'INVALID_CONTENT_REVISION');
+
+  // A future purge tombstone (snapshot payload cleared) is an invalid source.
+  Object.assign(pageRepository.revisions.get(id).get('1'), {
+    html_content: null, title: null, description: null, markdown_theme: null
+  });
+  const cleared = await restoreRequest(id, {
+    cookie, csrf, revision: '1', ifMatch: `"content:${id}:2"`, requestId: 'restore-clear-012345678'
+  });
+  assert.equal(cleared.status, 404);
+  assert.equal(JSON.parse(cleared.text).code, 'RESTORE_SOURCE_INVALID',
+    'a payload-less (purged) revision can never serve as a restore source');
+});
+
+test('history supplies CSP-compatible session identity and a usable CSRF token for restore', async () => {
+  const id = await createShare(['H33-CSRF-A', 'H33-CSRF-B']);
+  const cookie = await dashboardLogin();
+  const html = await request(`/admin/pages/${id}/history`, { headers: { Cookie: cookie } });
+  const token = html.text.match(/<meta name="csrf-token" content="([^"]+)"/);
+  assert.ok(token, 'use the actual HISTORY page token, not the detail-page helper');
+  assert.match(html.headers['content-security-policy'], /script-src 'self'/);
+  assert.match(html.text, /data-dashboard-session-tag="[a-f0-9]+"/);
+  assert.doesNotMatch(html.text, /<script>document\.documentElement\.dataset\.dashboardSessionTag/);
+  const restored = await restoreRequest(id, {
+    cookie, csrf: token[1], revision: '1', ifMatch: `"content:${id}:2"`, requestId: 'history-csrf-roundtrip-33'
+  });
+  assert.equal(restored.status, 200, restored.text);
+});
+
+test('restore requires a concrete content baseline for the edited share', async () => {
+  const id = await createShare(['H33-BASE-A', 'H33-BASE-B']);
+  const cookie = await dashboardLogin();
+  const csrf = await dashboardCsrf(cookie, id);
+
+  const missingId = await restoreRequest(id, { cookie, csrf, revision: '1', ifMatch: `"content:${id}:2"` });
+  assert.equal(missingId.status, 400, 'a NEW management-write endpoint requires an operation id');
+  assert.equal(JSON.parse(missingId.text).code, 'INVALID_REQUEST_ID');
+  const missingTag = await restoreRequest(id, { cookie, csrf, revision: '1', requestId: 'restore-missing-tag-33' });
+  assert.equal(missingTag.status, 428, 'a missing If-Match is a missing precondition');
+
+  const wildcard = await restoreRequest(id, {
+    cookie, csrf, revision: '1', ifMatch: '*', requestId: 'restore-wild-01234567890'
+  });
+  assert.equal(wildcard.status, 400, 'wildcard preconditions never bypass the version check');
+
+  const foreign = await restoreRequest(id, {
+    cookie, csrf, revision: '1', ifMatch: '"content:other-share:1"', requestId: 'restore-frn-01234567890'
+  });
+  assert.equal(foreign.status, 400, 'a tag for another share is an invalid precondition');
+
+  const stale = await restoreRequest(id, {
+    cookie, csrf, revision: '1', ifMatch: `"content:${id}:1"`, requestId: 'restore-stale-012345678'
+  });
+  assert.equal(stale.status, 412);
+  const conflict = JSON.parse(stale.text);
+  assert.equal(conflict.code, 'CONTENT_REVISION_CONFLICT');
+  assert.equal(conflict.current.currentRevision, '2', 'the conflict payload identifies the current version');
+});
+
+test('a committed restore replays its original result even when the If-Match is now stale', async () => {
+  const id = await createShare(['H33-REPLAY-SRC', 'H33-REPLAY-CUR']);
+  const cookie = await dashboardLogin();
+  const csrf = await dashboardCsrf(cookie, id);
+  const requestId = 'restore-replay-012345678';
+
+  const first = await restoreRequest(id, {
+    cookie, csrf, revision: '1', ifMatch: `"content:${id}:2"`, requestId
+  });
+  assert.equal(first.status, 200);
+  assert.equal(JSON.parse(first.text).page.currentRevision, '3');
+
+  // Another edit moves the Share on (revision 4) — the original tag is stale.
+  const laterEdit = await request(`/admin/pages/${id}`, {
+    method: 'PUT',
+    headers: jsonHeaders({ Cookie: cookie, 'X-CSRF-Token': csrf, 'If-Match': `"content:${id}:3"` }),
+    body: JSON.stringify({ htmlContent: '<h1>H33-REPLAY-AFTER</h1>' })
+  });
+  assert.equal(laterEdit.status, 200);
+
+  // The client-unknown retry: ORIGINAL id, ORIGINAL input, ORIGINAL (stale)
+  // tag. It must confirm the committed restore, never misreport a first
+  // failure, and never mint a second restore revision.
+  const replay = await restoreRequest(id, {
+    cookie, csrf, revision: '1', ifMatch: `"content:${id}:2"`, requestId
+  });
+  assert.equal(replay.status, 200);
+  const payload = JSON.parse(replay.text);
+  assert.equal(payload.replayed, true);
+  assert.equal(payload.changed, true);
+  assert.equal(payload.page.currentRevision, '3', 'the replay confirms the ORIGINAL result revision');
+  assert.equal(payload.page.htmlContent, '<h1>H33-REPLAY-SRC</h1>', 'the replayed page is the committed result');
+
+  const list = JSON.parse((await request(`/admin/pages/${id}/revisions`, { headers: { Cookie: cookie } })).text);
+  assert.deepEqual(list.revisions.map(item => item.revision), ['4', '3', '2', '1'],
+    'the replay creates no additional revision');
+});
+
+test('the same request id with a different restore input is a 409 and commits nothing', async () => {
+  const id = await createShare(['H33-CONF-A', 'H33-CONF-B']);
+  const cookie = await dashboardLogin();
+  const csrf = await dashboardCsrf(cookie, id);
+  const requestId = 'restore-conflict-012345678';
+
+  const first = await restoreRequest(id, {
+    cookie, csrf, revision: '1', ifMatch: `"content:${id}:2"`, requestId
+  });
+  assert.equal(first.status, 200);
+
+  const conflict = await restoreRequest(id, {
+    cookie, csrf, revision: '2', ifMatch: `"content:${id}:3"`, requestId
+  });
+  assert.equal(conflict.status, 409);
+  assert.equal(JSON.parse(conflict.text).code, 'REQUEST_ID_CONFLICT');
+  const list = JSON.parse((await request(`/admin/pages/${id}/revisions`, { headers: { Cookie: cookie } })).text);
+  assert.equal(list.pagination.total, '3', 'the conflicting replay commits nothing');
+});
+
+test('a restore whose result share was deleted answers 410 and never rebuilds', async () => {
+  const id = await createShare(['H33-GONE-A', 'H33-GONE-B']);
+  const cookie = await dashboardLogin();
+  const csrf = await dashboardCsrf(cookie, id);
+  const requestId = 'restore-gone-0123456789';
+
+  const first = await restoreRequest(id, {
+    cookie, csrf, revision: '1', ifMatch: `"content:${id}:2"`, requestId
+  });
+  assert.equal(first.status, 200);
+
+  const del = await request(`/admin/pages/${id}`, { method: 'DELETE', headers: { Cookie: cookie, 'X-CSRF-Token': csrf } });
+  assert.equal(del.status, 200);
+
+  const replay = await restoreRequest(id, {
+    cookie, csrf, revision: '1', ifMatch: `"content:${id}:2"`, requestId
+  });
+  assert.equal(replay.status, 410);
+  assert.equal(JSON.parse(replay.text).code, 'RESULT_UNAVAILABLE');
+  assert.equal(await pageRepository.getById(id), null, 'nothing is rebuilt');
+});
+
+test('Memory restore rolls back projection, snapshot, audit and operation after result-insert failure', async () => {
+  const id = await createShare(['H33-ATOMIC-A', 'H33-ATOMIC-B']);
+  const cookie = await dashboardLogin();
+  const csrf = await dashboardCsrf(cookie, id);
+  const options = { cookie, csrf, revision: '1', ifMatch: `"content:${id}:2"`, requestId: 'restore-atomic-memory-33' };
+  const before = {
+    page: await pageRepository.getById(id), revisions: await pageRepository.listContentRevisions(id),
+    audits: JSON.stringify(pageRepository.auditLogs)
+  };
+  const runTransaction = pageRepository.withPublishingTransaction;
+  pageRepository.withPublishingTransaction = function (operation) {
+    return runTransaction.call(this, async tx => {
+      const insert = tx.createPublishingOperation.bind(tx);
+      tx.createPublishingOperation = async record => {
+        await insert(record);
+        throw new Error('issue33 injected failure after staged result insert');
+      };
+      return operation(tx);
+    });
+  };
+  try {
+    const failed = await restoreRequest(id, options);
+    assert.equal(failed.status, 500);
+  } finally { pageRepository.withPublishingTransaction = runTransaction; }
+  assert.deepEqual(await pageRepository.getById(id), before.page);
+  assert.deepEqual(await pageRepository.listContentRevisions(id), before.revisions);
+  assert.equal(JSON.stringify(pageRepository.auditLogs), before.audits);
+  assert.deepEqual(await pageRepository.findPublishingOperationsByRequestId(options.requestId), []);
+  const retry = await restoreRequest(id, options);
+  assert.equal(retry.status, 200);
+  assert.equal(JSON.parse(retry.text).page.currentRevision, '3');
+});
+
+test('restore honours the write-maintenance gate like every dashboard write', async () => {
+  const id = await createShare(['H33-PAUSE-A', 'H33-PAUSE-B']);
+  const cookie = await dashboardLogin();
+  const csrf = await dashboardCsrf(cookie, id);
+
+  await pageRepository.setPublishingWritesPaused(true);
+  try {
+    const blocked = await restoreRequest(id, {
+      cookie, csrf, revision: '1', ifMatch: `"content:${id}:2"`, requestId: 'restore-pause-012345678'
+    });
+    assert.equal(blocked.status, 503);
+    assert.equal(JSON.parse(blocked.text).retryable, true);
+  } finally {
+    await pageRepository.setPublishingWritesPaused(false);
+  }
+
+  const operations = await pageRepository.findPublishingOperationsByRequestId('restore-pause-012345678');
+  assert.equal(operations.length, 0, 'a maintenance-refused attempt records no operation');
+
+  // After the pause lifts, the same request id succeeds exactly once.
+  const retried = await restoreRequest(id, {
+    cookie, csrf, revision: '1', ifMatch: `"content:${id}:2"`, requestId: 'restore-pause-012345678'
+  });
+  assert.equal(retried.status, 200);
+  assert.equal(JSON.parse(retried.text).replayed, undefined);
+});
+
+test('restore works with exact decimal revisions above 2^53 and never rounds them', async () => {
+  const id = await createShare(['H33-BIG-A', 'H33-BIG-B']);
+  const cookie = await dashboardLogin();
+  const csrf = await dashboardCsrf(cookie, id);
+
+  // Synthetic sparse history ABOVE 2^53 with current strictly after source.
+  const bigSource = '9007199254740993';
+  const revisions = pageRepository.revisions.get(id);
+  revisions.set(bigSource, {
+    share_id: id, revision: bigSource, html_content: '<h1>H33-BIG-ANCIENT</h1>', code_type: 'html',
+    title: null, description: null, markdown_theme: null, created_at: Date.now(),
+    snapshot_hash: 'synthetic', source: 'web', actor: null, restored_from: null
+  });
+
+  const bigCurrent = '9007199254740994';
+  const bigResult = '9007199254740995';
+  revisions.set(bigCurrent, { ...revisions.get('2'), revision: bigCurrent });
+  revisions.delete('2');
+  pageRepository.pages.get(id).current_revision = bigCurrent;
+  const response = await restoreRequest(id, {
+    cookie, csrf, revision: bigSource, ifMatch: `"content:${id}:${bigCurrent}"`, requestId: 'restore-big-01234567890'
+  });
+  assert.equal(response.status, 200, response.text);
+  const payload = JSON.parse(response.text);
+  assert.equal(payload.page.currentRevision, bigResult);
+  assert.equal(payload.page.htmlContent, '<h1>H33-BIG-ANCIENT</h1>');
+
+  const restored = JSON.parse((await request(`/admin/pages/${id}/revisions/${bigResult}`, { headers: { Cookie: cookie } })).text);
+  assert.equal(restored.revision.restoredFrom, bigSource, 'the restored_from pointer is the exact decimal string');
+
+  // Replaying the big-source restore with the stale tag confirms, not conflicts.
+  const replay = await restoreRequest(id, {
+    cookie, csrf, revision: bigSource, ifMatch: `"content:${id}:${bigCurrent}"`, requestId: 'restore-big-01234567890'
+  });
+  assert.equal(replay.status, 200);
+  assert.equal(JSON.parse(replay.text).replayed, true);
+});

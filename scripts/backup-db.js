@@ -33,10 +33,48 @@ function redactUrl(connectionString) {
     if (url.password) {
       url.password = REDACTED_URL_MARKER;
     }
+    // PostgreSQL also accepts credentials in query parameters, including a
+    // percent-encoded password overriding the userinfo password.
+    for (const key of [...url.searchParams.keys()]) {
+      if (isSecretArgument(key)) url.searchParams.set(key, REDACTED_URL_MARKER);
+    }
     return url.toString();
   } catch (error) {
     return '<invalid-url>';
   }
+}
+
+function isSecretArgument(name) {
+  return /(?:password|secret|token|api[-_]?key)$/i.test(name);
+}
+
+// Log-only argv copy. Never pass this result to spawn: execution still needs
+// the real credentials. Supports both --flag value and --flag=value, plus
+// environment assignments used with container tools.
+function redactCommandArgs(args) {
+  let nextKind = null;
+  const isUrlArgument = name => /(?:^|[-_])url$/i.test(name);
+  return args.map(value => {
+    const text = String(value);
+    if (nextKind) {
+      const kind = nextKind;
+      nextKind = null;
+      return kind === 'url' ? redactUrl(text) : REDACTED_URL_MARKER;
+    }
+    if (/^postgres(?:ql)?:\/\//i.test(text)) return redactUrl(text);
+    const equalAt = text.indexOf('=');
+    if (equalAt !== -1) {
+      const name = text.slice(0, equalAt);
+      if (isSecretArgument(name)) return `${name}=${REDACTED_URL_MARKER}`;
+      const argument = text.slice(equalAt + 1);
+      if (isUrlArgument(name) || /^postgres(?:ql)?:\/\//i.test(argument)) return `${name}=${redactUrl(argument)}`;
+    }
+    if (text.startsWith('--')) {
+      if (isSecretArgument(text)) nextKind = 'secret';
+      else if (isUrlArgument(text)) nextKind = 'url';
+    }
+    return text;
+  });
 }
 
 function parseConnectionStringParts(connectionString) {
@@ -479,6 +517,7 @@ module.exports = {
   parsePostgresMajor,
   parsePostgresMajorFromServerVersionNum,
   redactUrl,
+  redactCommandArgs,
   resolveToolCommand,
   runCommand,
   sanitizeChildEnv

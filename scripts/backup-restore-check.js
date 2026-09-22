@@ -71,13 +71,16 @@ const ACCESS_REVISION_DRILL_VALUE = '9007199254740993';
 const REVISION_DRILL_VALUE = '9007199254740993';
 
 // Publish-operation fixture (#32 migration 008): one committed creation with
-// an encrypted receipt and one deletion tombstone (receipt cleared). Both
-// travel through dump → restore byte-identically and the verifier's full-row
-// comparison covers every column by name.
+// an encrypted receipt and one deletion tombstone (receipt cleared). #33 adds
+// a restore row and a content-update row so the dashboard save/restore
+// operation ledger also travels through dump → restore byte-identically; the
+// verifier's full-row comparison covers every column by name.
 const OPERATION_FIXTURE = {
   namespace: 'managed-key:issue27key00001',
   requestId: 'issue32-op-000000000001',
-  tombstoneRequestId: 'issue32-op-000000000002'
+  tombstoneRequestId: 'issue32-op-000000000002',
+  restoreRequestId: 'issue33-op-000000000003',
+  contentUpdateRequestId: 'issue33-op-000000000004'
 };
 
 async function probePublishOperationsTable(pool) {
@@ -300,13 +303,19 @@ async function seedFixture(pool) {
   const operationsSeeded = await probePublishOperationsTable(pool);
   if (operationsSeeded) {
     const receipt = encryptSecret(JSON.stringify({ password: '654321', isProtected: true }));
+    // #33 restore/content-update receipts mirror the committed response
+    // surface (no secrets): changed flag, source revision, policy display.
+    const restoreReceipt = encryptSecret(JSON.stringify({ changed: true, sourceRevision: '1', isProtected: false, expiresAt: null }));
+    const updateReceipt = encryptSecret(JSON.stringify({ changed: true, isProtected: true, expiresAt: null }));
     await pool.query(
       `INSERT INTO publish_operations (
          actor_namespace, request_id, action, request_digest, target_id,
          result_share_id, result_revision, result_access_revision, receipt_encrypted, created_at, deleted_at
        )
        VALUES ($1, $2, 'create', $3, NULL, $4, '1', $5, $6, $7, NULL),
-              ($1, $8, 'create', $9, NULL, $10, '1', $5, NULL, $7, $11)`,
+              ($1, $8, 'create', $9, NULL, $10, '1', $5, NULL, $7, $11),
+              ($1, $12, 'restore', $13, $14, $14, '2', $5, $15, $7, NULL),
+              ($1, $16, 'content-update', $17, $18, $18, '2', $5, $19, $7, NULL)`,
       [
         OPERATION_FIXTURE.namespace,
         OPERATION_FIXTURE.requestId,
@@ -318,7 +327,15 @@ async function seedFixture(pool) {
         OPERATION_FIXTURE.tombstoneRequestId,
         'e'.repeat(64),
         pages.expiredPage,
-        base + 70
+        base + 70,
+        OPERATION_FIXTURE.restoreRequestId,
+        'f'.repeat(64),
+        pages.markdownThemed,
+        restoreReceipt,
+        OPERATION_FIXTURE.contentUpdateRequestId,
+        '0'.repeat(64),
+        pages.protectedPage,
+        updateReceipt
       ]
     );
   }

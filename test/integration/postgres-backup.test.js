@@ -7,7 +7,7 @@ const { spawn } = require('node:child_process');
 
 const { createPostgresPool } = require('../../models/postgres-config');
 const { runMigrations } = require('../../models/postgres-migrations');
-const { sanitizeChildEnv } = require('../../scripts/backup-db');
+const { sanitizeChildEnv, redactCommandArgs } = require('../../scripts/backup-db');
 
 const sourceUrl = process.env.POSTGRES_BACKUP_TEST_SRC_URL;
 const restoreUrl = process.env.POSTGRES_BACKUP_TEST_RESTORE_URL;
@@ -58,8 +58,11 @@ const childEnv = sanitizeChildEnv(process.env, { SESSION_SECRET: FIXTURE.session
 
 let tmpDir;
 
+let stepNumber = 0;
 function runStep(command, args) {
   return new Promise((resolve, reject) => {
+    const prefix = path.join(tmpDir, `step-${String(++stepNumber).padStart(3, '0')}`);
+    fs.writeFileSync(`${prefix}.cmd`, JSON.stringify(redactCommandArgs([command, ...args])) + '\n');
     const child = spawn(command, args, { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
@@ -68,10 +71,8 @@ function runStep(command, args) {
     child.stderr.on('data', chunk => { stderr += chunk; });
     child.on('error', reject);
     child.on('close', (code) => {
-      fs.writeFileSync(
-        path.join(tmpDir, `log-${args.filter(a => a.startsWith('--')).join('') || command}.log`).replace(/--/g, ''),
-        `exit=${code}\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}\n`
-      );
+      fs.writeFileSync(`${prefix}.exit`, String(code) + '\n');
+      fs.writeFileSync(`${prefix}.raw.log`, `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}\n`);
       resolve({ code, stdout, stderr });
     });
   });
@@ -116,7 +117,31 @@ test.before(async () => {
 });
 
 test.after(() => {
-  // tmpDir under os.tmpdir() is private disposable evidence; keep it for review.
+  // Keep all raw evidence, but fail if any newly persisted command leaks a
+  // credential supplied to this run (including encoded URL-password forms).
+  const secrets = new Set([FIXTURE.sessionSecret]);
+  for (const value of [sourceUrl, restoreUrl]) {
+    const url = new URL(value);
+    if (url.password) {
+      secrets.add(url.password);
+      secrets.add(decodeURIComponent(url.password));
+    }
+    for (const [key, secret] of url.searchParams) {
+      if (/(?:password|secret|token|api[-_]?key)$/i.test(key) && secret) {
+        secrets.add(secret);
+        secrets.add(encodeURIComponent(secret));
+      }
+    }
+  }
+  const commands = fs.readdirSync(tmpDir).filter(name => name.endsWith('.cmd'));
+  assert.ok(commands.length > 0, 'command evidence must be present');
+  for (const name of commands) {
+    const recorded = fs.readFileSync(path.join(tmpDir, name), 'utf8');
+    for (const secret of secrets) {
+      assert.equal(recorded.includes(secret), false, `${name} must redact supplied credentials`);
+      assert.equal(recorded.includes(JSON.stringify(secret).slice(1, -1)), false, `${name} must redact JSON-escaped credentials`);
+    }
+  }
 });
 
 test('native backup captures a consistent snapshot with matched tooling', async () => {
@@ -344,12 +369,13 @@ test('native restore rebuilds the database and passes full verification', async 
   const keyCheck = report.checks.find(check => check.name === 'managedApiKeys');
   assert.deepEqual(keyCheck.details, { keys: 1, fixtureCovered: 1, comparedColumns: expectedKeyComparedColumns });
 
-  // #32: publish-operation coverage in the main verification report.
+  // #32/#33: publish-operation coverage in the main verification report.
   if (hasOperations) {
     const operationsCheck = report.checks.find(check => check.name === 'publishOperations');
     assert.ok(operationsCheck, 'the publishOperations check is always reported when the table exists');
     assert.equal(operationsCheck.ok, true, `operation issues: ${JSON.stringify(operationsCheck.issues)}`);
-    assert.equal(operationsCheck.details.operationCount, 2, 'committed creation + tombstone restored');
+    assert.equal(operationsCheck.details.operationCount, 4,
+      'committed creation + tombstone + #33 restore + #33 content-update restored');
     assert.equal(operationsCheck.details.tombstoneCount, 1, 'the deletion tombstone restores as a tombstone');
     assert.deepEqual(operationsCheck.details.comparedColumns, [
       'actor_namespace', 'request_id', 'action', 'request_digest', 'target_id',
@@ -363,11 +389,83 @@ test('native restore rebuilds the database and passes full verification', async 
       assert.equal(restoredOps.rows[0].receipt_encrypted !== null, true, 'the encrypted receipt travels byte-identically');
       assert.equal(restoredOps.rows[1].receipt_encrypted, null, 'the tombstone carries no receipt');
       assert.notEqual(restoredOps.rows[1].deleted_at, null);
+      // #33 rows restore with their non-secret receipts and provenance.
+      const restoreRow = restoredOps.rows.find(row => row.request_id === OPERATION_FIXTURE.restoreRequestId);
+      const updateRow = restoredOps.rows.find(row => row.request_id === OPERATION_FIXTURE.contentUpdateRequestId);
+      assert.ok(restoreRow && restoreRow.receipt_encrypted, 'the #33 restore row carries its encrypted receipt');
+      assert.ok(updateRow && updateRow.receipt_encrypted, 'the #33 content-update row carries its encrypted receipt');
     } finally {
       await restorePool.end();
     }
   } else {
     assert.equal(report.checks.some(check => check.name === 'publishOperations'), false);
+  }
+});
+
+test('a tampered #33 restore operation receipt fails verification by its own request id', async (t) => {
+  if (!hasOperations) {
+    return t.skip('publish_operations absent on schema 001-007 base; integrator must exercise after merging #32');
+  }
+
+  // Fresh drill: the main manifest/restore pair was already tampered with by
+  // an earlier test, so re-run the whole drill into a clean directory.
+  const drillDir = fs.mkdtempSync(path.join(os.tmpdir(), 'issue33-restore-drill-'));
+  fs.writeFileSync(path.join(drillDir, 'fixture.json'), JSON.stringify({
+    apiKeys: [{ id: FIXTURE.apiKey.id, secret: FIXTURE.apiKey.secret }],
+    protectedPages: [{ id: FIXTURE.pages.protectedPage, password: FIXTURE.protectedPassword }]
+  }, null, 2));
+  const backup = await runStep(process.execPath, [
+    'scripts/backup-db.js',
+    '--url', sourceUrl, '--output-dir', drillDir,
+    ...(srcDocker ? ['--docker', srcDocker] : [])
+  ]);
+  assert.equal(backup.code, 0, backup.stderr);
+  const manifestPath = path.join(drillDir, fs.readdirSync(drillDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
+  const restore = await runStep(process.execPath, [
+    'scripts/restore-db.js', '--manifest', manifestPath, '--target-url', restoreUrl,
+    ...(restoreDocker ? ['--docker', restoreDocker] : [])
+  ]);
+  assert.equal(restore.code, 0, restore.stderr);
+
+  // Named tamper: corrupt ONLY the #33 restore row's receipt on the restore
+  // side. The verifier must fail and name that request id — never a vague
+  // overall mismatch, and never a pass that waves the restore ledger through.
+  const tamperPool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+  try {
+    await tamperPool.query(
+      'UPDATE publish_operations SET receipt_encrypted = $2 WHERE request_id = $1',
+      [OPERATION_FIXTURE.restoreRequestId, 'secret-v1$tampered$tampered$tampered']
+    );
+  } finally {
+    await tamperPool.end();
+  }
+
+  const result = await runStep(process.execPath, [
+    'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+    '--manifest', manifestPath, '--fixture', path.join(drillDir, 'fixture.json'),
+    '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+    '--output', path.join(drillDir, 'verification-restore-tamper.json')
+  ]);
+  assert.equal(result.code, 1);
+
+  try {
+    const report = JSON.parse(fs.readFileSync(path.join(drillDir, 'verification-restore-tamper.json'), 'utf8'));
+    assert.equal(report.safeToServe, false);
+    const operationsCheck = report.checks.find(check => check.name === 'publishOperations');
+    assert.equal(operationsCheck.ok, false, 'the dedicated operations check must fail, not only the overall exit');
+    assert.ok(operationsCheck.issues.some(issue =>
+      issue.field === 'publish_operations'
+      && issue.requestId === OPERATION_FIXTURE.restoreRequestId
+      && issue.message.includes('receipt_encrypted')), `issues: ${JSON.stringify(operationsCheck.issues)}`);
+  } finally {
+    // Shared restore target: wipe the named tamper so later tests observe
+    // the manifest-clean state they expect.
+    const cleanup = await runStep(process.execPath, [
+      'scripts/restore-db.js', '--manifest', manifestPath, '--target-url', restoreUrl,
+      ...(restoreDocker ? ['--docker', restoreDocker] : [])
+    ]);
+    assert.equal(cleanup.code, 0, cleanup.stderr);
+    // Keep the named tamper report and fixture beside the raw attempt logs.
   }
 });
 

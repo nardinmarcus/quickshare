@@ -28,6 +28,7 @@
   var STORAGE_KEY = 'quickshare.publish.requestId';
   var CLONE_STORAGE_KEY = 'quickshare.clone.intent';
   var CLONE_DONE_COOKIE = 'clone_intent_done';
+  var DASHBOARD_INTENT_KEY_PREFIX = 'quickshare.dashboard.intent.';
 
   function randomHex(byteCount) {
     var bytes = new Uint8Array(byteCount);
@@ -267,6 +268,139 @@
         this._cloneIntentScanned = true;
       }
       return this._lastCloneIntent || { completed: false, requestId: null, targetId: null };
+    },
+
+    // ---- Dashboard content-save / restore intents (#33) ----
+    //
+    // Same identity discipline as the publish flow, scoped per (kind,
+    // share) so a pending content save and a pending restore never claim
+    // each other's id. The dashboard session tag mirrors the server-side
+    // namespace fingerprint (an irreversible digest, never a credential):
+    // an intent minted under another dashboard session is ORPHANED — kept
+    // read-only, never auto-claimed, never silently rotated.
+
+    dashboardSessionTag: function () {
+      if (window.document && window.document.documentElement
+        && window.document.documentElement.dataset) {
+        return window.document.documentElement.dataset.dashboardSessionTag || null;
+      }
+      return null;
+    },
+
+    _dashboardIntentStorageKey: function (kind, shareId) {
+      return DASHBOARD_INTENT_KEY_PREFIX + kind + '.' + shareId;
+    },
+
+    readDashboardIntent: function (kind, shareId) {
+      var key = this._dashboardIntentStorageKey(kind, shareId);
+      this._dashboardIntents = this._dashboardIntents || {};
+      // Once this document owns a pair (including a consumed null), a stale
+      // readable value left behind by failed storage writes cannot replace it.
+      if (Object.prototype.hasOwnProperty.call(this._dashboardIntents, key)) {
+        return this._dashboardIntents[key];
+      }
+      try {
+        var raw = window.sessionStorage.getItem(key);
+        var intent = raw ? JSON.parse(raw) : null;
+        if (intent && typeof intent.requestId === 'string' && typeof intent.draftKey === 'string') {
+          this._dashboardIntents[key] = intent;
+          return intent;
+        }
+        return this._dashboardIntents[key] || null;
+      } catch (error) {
+        return this._dashboardIntents[key] || null;
+      }
+    },
+
+    _storeDashboardIntent: function (kind, shareId, intent) {
+      var key = this._dashboardIntentStorageKey(kind, shareId);
+      this._dashboardIntents = this._dashboardIntents || {};
+      this._dashboardIntents[key] = intent;
+      try {
+        if (intent === null) {
+          window.sessionStorage.removeItem(key);
+        } else {
+          window.sessionStorage.setItem(key, JSON.stringify(intent));
+        }
+      } catch (error) {
+        /* Storage may be unavailable; identity still covers this page view. */
+      }
+    },
+
+    /**
+     * Claims the request id for one explicit dashboard save/restore intent.
+     * Returns:
+     *   { mode: 'retry', requestId }  — same kind+share+draft: the ORIGINAL
+     *     id of the unknown-outcome request is reused;
+     *   { mode: 'new', requestId }    — a new explicit intent (rotates over a
+     *     diverged draft; see consumeDashboardReplaced());
+     *   { mode: 'blocked', requestId }— the pending belongs to ANOTHER
+     *     dashboard session: kept read-only until an explicit discard.
+     * intent: { kind, shareId, draftKey, summary }.
+     */
+    claimDashboardIntentId: function (intent) {
+      var tag = this.dashboardSessionTag();
+      var existing = this.readDashboardIntent(intent.kind, intent.shareId);
+      if (existing && existing.sessionTag !== tag) {
+        return { mode: 'blocked', requestId: existing.requestId };
+      }
+      if (existing && existing.draftKey === intent.draftKey) {
+        return { mode: 'retry', requestId: existing.requestId };
+      }
+      var replaced = existing !== null;
+      var next = {
+        requestId: generateRequestId(),
+        kind: intent.kind,
+        shareId: intent.shareId,
+        draftKey: intent.draftKey,
+        summary: intent.summary || null,
+        sessionTag: tag
+      };
+      this._storeDashboardIntent(intent.kind, intent.shareId, next);
+      this._dashboardReplaced = this._dashboardReplaced || {};
+      if (replaced) this._dashboardReplaced[intent.kind + '.' + intent.shareId] = true;
+      return { mode: 'new', requestId: next.requestId };
+    },
+
+    /** True when the last claim replaced a DIFFERENT pending intent. */
+    consumeDashboardReplaced: function (kind, shareId) {
+      var flagKey = kind + '.' + shareId;
+      var value = Boolean(this._dashboardReplaced && this._dashboardReplaced[flagKey]);
+      if (this._dashboardReplaced) delete this._dashboardReplaced[flagKey];
+      return value;
+    },
+
+    /** Called when a dashboard attempt reached a definitive outcome. */
+    confirmDashboardCompleted: function (kind, shareId) {
+      this._storeDashboardIntent(kind, shareId, null);
+    },
+
+    /** Explicit user decision: abandon the pending dashboard intent. */
+    discardDashboardIntent: function (kind, shareId) {
+      var had = this.readDashboardIntent(kind, shareId) !== null;
+      this._storeDashboardIntent(kind, shareId, null);
+      return had;
+    },
+
+    /**
+     * Pure presentation helper: the four-state status text (#32 wording
+     * discipline) for a dashboard intent, given the CURRENT draft key.
+     * kindLabel: '保存' | '恢复' (for message phrasing).
+     */
+    dashboardIntentStatusMessage: function (intent, currentDraftKey, kindLabel) {
+      if (!intent) return null;
+      var tail = intent.requestId.slice(-6);
+      var label = kindLabel || '保存';
+      if (intent.sessionTag !== this.dashboardSessionTag()) {
+        return '存在未确认的' + label + '操作（请求 …' + tail + '，属于其他后台会话）：本页不能重试原请求；可在管理后台按请求标识核对。';
+      }
+      if (currentDraftKey === null || currentDraftKey === undefined) {
+        return '上次' + label + '（请求 …' + tail + '）结果未知：可在管理后台按请求标识核对。';
+      }
+      if (intent.draftKey === currentDraftKey) {
+        return '上次' + label + '（请求 …' + tail + '）结果未知：再次提交将以原请求重试并确认原结果，不会产生第二个版本。';
+      }
+      return '当前内容与未确认的' + label + '请求（…' + tail + '）不同：再次提交将作为新请求提交，原请求可在管理后台核对。';
     }
   };
 })();

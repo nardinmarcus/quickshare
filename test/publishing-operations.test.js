@@ -227,3 +227,109 @@ test('decoding absent or corrupt receipts returns null without throwing', () => 
   assert.equal(decodeOperationReceipt('garbage'), null);
   assert.equal(decodeOperationReceipt(encryptSecret('plain') + 'tampered'), null);
 });
+
+test('dashboard update static validation rejects coercion objects and policy fields before normalization', () => {
+  const { validateDashboardUpdateInput } = require('../models/publishingOperations');
+  assert.equal(typeof validateDashboardUpdateInput, 'function');
+  for (const field of ['title', 'description', 'htmlContent', 'markdownTheme', 'codeType', 'expiresAt', 'isProtected', 'password', 'expectedAccessRevision', 'revokeAccess']) {
+    for (const value of [{ toString: null }, [], {}]) {
+      const result = validateDashboardUpdateInput({ [field]: value });
+      assert.ok(result.error, `${field} must reject non-scalar input without coercion`);
+    }
+  }
+  for (const body of [null, [], 'body', 42]) assert.ok(validateDashboardUpdateInput(body).error);
+  for (const body of [
+    { title: null, description: '', htmlContent: '  body\r\n  ', markdownTheme: null, codeType: 'html' },
+    { isProtected: false, expiresAt: null, expectedAccessRevision: '1' },
+    { expiresAt: '1799999999000', password: 'valid-pass', expectedAccessRevision: '9007199254740993' }
+  ]) {
+    const original = JSON.stringify(body);
+    assert.equal(validateDashboardUpdateInput(body).error, null);
+    assert.equal(JSON.stringify(body), original, 'static validation must not rewrite the submitted payload');
+  }
+  for (const fields of [{ revokeAccess: false }, { password: null }, { expectedAccessRevision: '1' }, { published: false }]) {
+    assert.equal(validateDashboardUpdateInput({ title: 'saved', ...fields }, { idempotent: true }).code, 'UNSUPPORTED_REQUEST_ID_SCOPE');
+  }
+});
+
+// ---- #33 dashboard content-update / restore digests ----
+
+const CONTENT_UPDATE_BASE = {
+  action: 'content-update',
+  targetId: 'share33a',
+  fields: {
+    expectedRevision: '3',
+    htmlContent: '<h1>V-next</h1>',
+    title: 'T',
+    description: null,
+    markdownTheme: null
+  },
+  presence: { htmlContent: true, title: true, description: false, markdownTheme: false }
+};
+
+const RESTORE_BASE = {
+  action: 'restore',
+  targetId: 'share33a',
+  fields: { expectedRevision: '3', sourceRevision: '2' }
+};
+
+test('content-update digest is deterministic and covers the expected revision', () => {
+  assert.equal(operationRequestDigest(CONTENT_UPDATE_BASE), operationRequestDigest({ ...CONTENT_UPDATE_BASE }));
+
+  // #24 §8: the digest covers the EXPECTED REVISION. The same payload against
+  // a different baseline is a different literal request, never a replay.
+  assert.notEqual(
+    operationRequestDigest(CONTENT_UPDATE_BASE),
+    operationRequestDigest({ ...CONTENT_UPDATE_BASE, fields: { ...CONTENT_UPDATE_BASE.fields, expectedRevision: '4' } }),
+    'same payload with a moved expected revision must not collide'
+  );
+  assert.notEqual(
+    operationRequestDigest(CONTENT_UPDATE_BASE),
+    operationRequestDigest({ ...CONTENT_UPDATE_BASE, fields: { ...CONTENT_UPDATE_BASE.fields, htmlContent: '<h1>Other</h1>' } })
+  );
+  assert.notEqual(
+    operationRequestDigest(CONTENT_UPDATE_BASE),
+    operationRequestDigest({ ...CONTENT_UPDATE_BASE, targetId: 'share33b' }),
+    'the target share is part of the digest'
+  );
+});
+
+test('content-update digest distinguishes field presence and from the create action', () => {
+  const explicitNull = {
+    ...CONTENT_UPDATE_BASE,
+    presence: { htmlContent: true, title: true, description: true, markdownTheme: false }
+  };
+  assert.notEqual(
+    operationRequestDigest(CONTENT_UPDATE_BASE),
+    operationRequestDigest(explicitNull),
+    'absent vs explicit-null metadata fields are different literal requests'
+  );
+  assert.notEqual(
+    operationRequestDigest(CONTENT_UPDATE_BASE),
+    operationRequestDigest({ ...CONTENT_UPDATE_BASE, action: 'create' }),
+    'content-update never collides with create digests'
+  );
+  assert.notEqual(
+    operationRequestDigest(CONTENT_UPDATE_BASE),
+    operationRequestDigest({ ...CONTENT_UPDATE_BASE, action: 'restore' }),
+    'actions never share digest space'
+  );
+});
+
+test('restore digest covers the target, expected revision and exact source revision', () => {
+  assert.equal(operationRequestDigest(RESTORE_BASE), operationRequestDigest({ ...RESTORE_BASE }));
+  assert.notEqual(
+    operationRequestDigest(RESTORE_BASE),
+    operationRequestDigest({ ...RESTORE_BASE, fields: { ...RESTORE_BASE.fields, sourceRevision: '1' } }),
+    'a different source revision is a different restore request'
+  );
+  assert.notEqual(
+    operationRequestDigest(RESTORE_BASE),
+    operationRequestDigest({ ...RESTORE_BASE, fields: { ...RESTORE_BASE.fields, expectedRevision: '9' } }),
+    'the expected current revision is part of the restore digest'
+  );
+  assert.notEqual(
+    operationRequestDigest(RESTORE_BASE),
+    operationRequestDigest({ ...RESTORE_BASE, targetId: 'share33b' })
+  );
+});

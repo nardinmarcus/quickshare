@@ -33,7 +33,8 @@ const {
   resolveApiCredentialNamespace,
   resolveBrowserPublishNamespace,
   resolveDashboardSessionNamespace,
-  namespaceKind
+  namespaceKind,
+  encodeOperationReceipt
 } = require('./utils/publishingOperation');
 const {
   normalizeCreateInput,
@@ -42,6 +43,9 @@ const {
   executeNormalizedCreate,
   buildCreationOperationRecord,
   classifyOperationReplay,
+  normalizeContentUpdateDigestInput,
+  validateDashboardUpdateInput,
+  normalizeRestoreDigestInput,
   operationStatusProjection
 } = require('./models/publishingOperations');
 const {
@@ -712,13 +716,17 @@ function resolveBrowserPublishSessionNamespace(req) {
 }
 
 function resolveDashboardCloneNamespace(req) {
+  return resolveDashboardSessionNamespace(dashboardSessionFingerprint(req));
+}
+
+function dashboardSessionFingerprint(req) {
   const token = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE];
   if (!token) {
     // Auth-disabled single-user mode (local development/tests): one shared
     // dashboard namespace; no cookie exists to fingerprint.
-    return resolveDashboardSessionNamespace('auth-disabled');
+    return 'auth-disabled';
   }
-  return resolveDashboardSessionNamespace(createHash('sha256').update(token).digest('hex').slice(0, 32));
+  return createHash('sha256').update(token).digest('hex').slice(0, 32);
 }
 
 function resolveApiNamespace(req) {
@@ -1559,7 +1567,8 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       sharedPage: pageData,
       pageDataJson: serializeJsonForHtml(pageData),
       publicUrl: publicPageUrl(req, sharedPage.id),
-      markdownThemeOptions: getMarkdownThemeOptions()
+      markdownThemeOptions: getMarkdownThemeOptions(),
+      dashboardSessionTag: dashboardSessionFingerprint(req)
     });
   } catch (error) {
     console.error('Admin page detail failed:', error);
@@ -1582,6 +1591,7 @@ const HISTORY_SOURCE_LABELS = {
   api: 'Share API',
   clone: '克隆',
   'dashboard-edit': '后台编辑',
+  'dashboard-restore': '后台恢复',
   'title-backfill': '标题回填',
   'baseline-backfill': '基线回填'
 };
@@ -1644,9 +1654,12 @@ app.get('/admin/pages/:id/history', requireDashboardAdmin, async (req, res) => {
     const revisions = items.map(historyRevisionProjection);
     const view = historyPageView(pagination, revisions, total);
 
+    const historySessionToken = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE] || '';
+
     return res.render('admin-page-history', {
       title: `QuickShare | ${sharedPage.id} 历史版本`,
       page: 'admin-page-detail',
+      csrfToken: config.authEnabled ? createCsrfToken(historySessionToken) : '',
       sharedPage: {
         id: sharedPage.id,
         title: sharedPage.title,
@@ -1656,6 +1669,7 @@ app.get('/admin/pages/:id/history', requireDashboardAdmin, async (req, res) => {
       revisions,
       pagination: view,
       sourceLabels: HISTORY_SOURCE_LABELS,
+      dashboardSessionTag: dashboardSessionFingerprint(req),
       prevUrl: view.hasPrevious ? buildHistoryUrl(sharedPage.id, view.page - 1, view.limit) : null,
       nextUrl: view.hasNext ? buildHistoryUrl(sharedPage.id, view.page + 1, view.limit) : null,
       historyDataJson: serializeJsonForHtml({
@@ -1822,9 +1836,131 @@ app.put('/admin/pages/:id/favorite', requireDashboardApiAdmin, parseSmallJsonBod
   }
 });
 
+/**
+ * Owner-facing projection of a Share row for content-save and restore
+ * responses. Same shape for fresh results and confirmed replays so the
+ * dashboard can consume both identically.
+ */
+function adminPageProjection(page) {
+  return {
+    id: page.id,
+    title: page.title,
+    description: page.description,
+    htmlContent: page.html_content,
+    codeType: page.code_type,
+    isProtected: page.is_protected === 1,
+    accessRevision: String(page.access_revision),
+    currentRevision: String(page.current_revision),
+    password: visiblePagePassword(page),
+    expiresAt: page.expires_at,
+    markdownTheme: page.markdown_theme,
+    createdAt: page.created_at
+  };
+}
+
+/**
+ * Confirmed replay of a committed dashboard content-update or restore
+ * (#24 §8): every content field comes from the committed result snapshot
+ * (operation record + share_revisions), never from the owner's later
+ * edits. The live row only decides whether the access policy is unchanged
+ * — the same rule that gates generated-password replay on creates.
+ */
+function contentReplayResponse(outcome, { requestId, action }) {
+  const { record, revisionRow, page: livePage, accessUnchanged } = outcome;
+  const receipt = outcome.receipt || {};
+  const page = adminPageProjection({
+    id: record.result_share_id,
+    title: revisionRow.title,
+    description: revisionRow.description,
+    html_content: revisionRow.html_content,
+    code_type: revisionRow.code_type,
+    markdown_theme: revisionRow.markdown_theme,
+    is_protected: receipt.isProtected === true ? 1 : 0,
+    encrypted_password: livePage.is_protected === 1 ? livePage.encrypted_password : null,
+    access_revision: record.result_access_revision,
+    current_revision: record.result_revision,
+    expires_at: receipt.expiresAt === undefined ? null : receipt.expiresAt,
+    created_at: livePage.created_at
+  });
+  if (!accessUnchanged) page.password = null;
+  return (res) => res.json({
+    success: true,
+    replayed: true,
+    action,
+    ...(requestId ? { requestId } : {}),
+    changed: receipt.changed === undefined ? true : Boolean(receipt.changed),
+    page
+  });
+}
+
 app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashboardCsrf, async (req, res) => {
   try {
-    const respond = await publishing.run(async (repository) => {
+    // Static validation precedes both coercive digest normalization and replay.
+    // Keep all preprocessing inside the Express 4 async error boundary; live
+    // CAS/source checks still happen only after a successful-result lookup.
+    const requestIdHeader = req.get('Idempotency-Key');
+    if (requestIdHeader !== undefined && !isvalidRequestId(requestIdHeader)) {
+      return res.status(400).json({ success: false, code: 'INVALID_REQUEST_ID', error: INVALID_REQUEST_ID_MESSAGE });
+    }
+    const validation = validateDashboardUpdateInput(req.body, { idempotent: requestIdHeader !== undefined });
+    if (validation.error) {
+      return res.status(400).json({ success: false, code: validation.code, error: validation.error });
+    }
+    const { title, description, htmlContent, expiresAt, isProtected, markdownTheme, codeType } = req.body;
+    const { customPassword } = validation;
+    const contentSubmitted = htmlContent !== undefined || title !== undefined
+      || description !== undefined || markdownTheme !== undefined;
+    const policySubmitted = isProtected !== undefined || expiresAt !== undefined || req.body.revokeAccess === true;
+
+    let publishingOperation = null;
+    let parsedContentBaseline = null;
+    if (requestIdHeader !== undefined) {
+      parsedContentBaseline = requireContentBaselineFor(req.params.id, req.get('If-Match'));
+      const digestInput = normalizeContentUpdateDigestInput({
+        expectedRevision: parsedContentBaseline.revision,
+        htmlContent, title, description, markdownTheme, codeType
+      });
+      publishingOperation = {
+        actorNamespace: resolveDashboardCloneNamespace(req),
+        requestId: requestIdHeader,
+        action: 'content-update',
+        targetId: req.params.id,
+        requestDigest: createRequestDigest(digestInput.fields, {
+          action: 'content-update', targetId: req.params.id, presence: digestInput.presence
+        })
+      };
+    }
+
+    const respond = await publishing.run(async (repository, existingOperation) => {
+      // Replay confirmation BEFORE any share read or CAS (#24 §8): a
+      // committed save confirms its original result even when the retried
+      // If-Match is long stale.
+      if (existingOperation) {
+        const outcome = await classifyOperationReplay(repository, {
+          record: existingOperation,
+          requestDigest: publishingOperation.requestDigest
+        });
+        if (outcome.kind === 'conflict') {
+          return (res) => res.status(409).json({
+            success: false,
+            code: 'REQUEST_ID_CONFLICT',
+            requestId: requestIdHeader,
+            retryable: false,
+            error: '同一请求标识对应了不同的请求内容'
+          });
+        }
+        if (outcome.kind === 'result-unavailable') {
+          return (res) => res.status(410).json({
+            success: false,
+            code: 'RESULT_UNAVAILABLE',
+            requestId: requestIdHeader,
+            retryable: false,
+            error: '该操作已提交，但其结果已被永久删除'
+          });
+        }
+        return contentReplayResponse(outcome, { requestId: requestIdHeader, action: 'content-update' });
+      }
+
       const page = await repository.getById(req.params.id);
 
       if (!page) {
@@ -1834,21 +1970,7 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
         });
       }
 
-      const { title, description, htmlContent, expiresAt, isProtected, password, markdownTheme, codeType } = req.body;
-      const customPassword = parseCustomPassword(password);
-
-      if (customPassword.error) {
-        return (res) => res.status(400).json({
-          success: false,
-          error: CUSTOM_PASSWORD_ERROR
-        });
-      }
-
       const updateOptions = { returnUpdated: true };
-      if (req.body.revokeAccess !== undefined && typeof req.body.revokeAccess !== 'boolean') {
-        return (res) => res.status(400).json({ success: false, error: 'revokeAccess must be a boolean' });
-      }
-      const policySubmitted = isProtected !== undefined || expiresAt !== undefined || req.body.revokeAccess === true;
       if (policySubmitted) {
         updateOptions.expectedAccessRevision = requireAccessRevision(req.body.expectedAccessRevision);
         updateOptions.revokeAccess = req.body.revokeAccess === true;
@@ -1861,14 +1983,13 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
 
       // Content edits (body, title, description, Markdown theme) require a
       // concrete strong content baseline; a combined save must pass both
-      // baselines atomically inside the repository update.
-      const contentSubmitted = htmlContent !== undefined || title !== undefined
-        || description !== undefined || markdownTheme !== undefined;
+      // baselines atomically inside the repository update. Idempotent saves
+      // reuse the baseline parsed before the transaction.
       if (contentSubmitted) {
         if (codeType !== undefined && codeType !== page.code_type) {
           return (res) => res.status(400).json({ success: false, code: 'INVALID_CONTENT_REVISION', error: '内容类型在创建后固定，不能修改' });
         }
-        const baseline = requireContentBaselineFor(req.params.id, req.get('If-Match'));
+        const baseline = parsedContentBaseline || requireContentBaselineFor(req.params.id, req.get('If-Match'));
         updateOptions.expectedContentRevision = baseline.revision;
       }
 
@@ -1914,6 +2035,9 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
         }
       }
 
+      // Memory returns a live row reference; freeze the revision BEFORE its
+      // staged update mutates that row, matching the PostgreSQL read value.
+      const previousContentRevision = String(page.current_revision);
       const saved = await repository.updatePage(req.params.id, updateOptions);
       if (!saved) return (res) => res.status(404).json({ success: false, error: 'Share not found' });
 
@@ -1929,24 +2053,38 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
         ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
       });
 
+      if (publishingOperation) {
+        // The operation result commits in the SAME transaction as the Share,
+        // its Revision and this audit entry (#24 §8). The receipt carries the
+        // committed outcome (changed or same-content no-op plus the policy
+        // display values) so a replay reproduces the original response.
+        await repository.createPublishingOperation({
+          actor_namespace: publishingOperation.actorNamespace,
+          request_id: requestIdHeader,
+          action: 'content-update',
+          request_digest: publishingOperation.requestDigest,
+          target_id: req.params.id,
+          result_share_id: req.params.id,
+          result_revision: contentRevision,
+          result_access_revision: String(updatedPage.access_revision),
+          receipt_encrypted: encodeOperationReceipt({
+            changed: contentRevision !== previousContentRevision,
+            isProtected: updatedPage.is_protected === 1,
+            expiresAt: updatedPage.expires_at === null || updatedPage.expires_at === undefined
+              ? null
+              : Number(updatedPage.expires_at)
+          }),
+          created_at: Date.now()
+        });
+      }
+
       return (res) => res.json({
         success: true,
-        page: {
-          id: updatedPage.id,
-          title: updatedPage.title,
-          description: updatedPage.description,
-          htmlContent: updatedPage.html_content,
-          codeType: updatedPage.code_type,
-          isProtected: updatedPage.is_protected === 1,
-          accessRevision: updatedPage.access_revision,
-          currentRevision: contentRevision,
-          password: visiblePagePassword(updatedPage),
-          expiresAt: updatedPage.expires_at,
-          markdownTheme: updatedPage.markdown_theme,
-          createdAt: updatedPage.created_at
-        }
+        ...(publishingOperation ? { requestId: requestIdHeader } : {}),
+        changed: contentRevision !== previousContentRevision,
+        page: adminPageProjection(updatedPage)
       });
-    });
+    }, { publishingOperation });
     return respond(res);
   } catch (error) {
     if (sendPublishingError(res, error)) return;
@@ -1972,6 +2110,159 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
       success: false,
       error: 'Failed to update page'
     });
+  }
+});
+
+app.post('/admin/pages/:id/restore', requireDashboardApiAdmin, parseShareJson, requireDashboardCsrf, async (req, res) => {
+  // #33 owner restore (#24 §7/§8/§9): a source revision becomes the new
+  // current Revision with restored_from provenance; a same-snapshot restore
+  // is the approved unchanged no-op. An operation id makes the whole action
+  // idempotent: the retried request confirms the committed result instead of
+  // re-running a CAS that its stale If-Match would now fail.
+  const requestIdHeader = req.get('Idempotency-Key');
+  if (!isvalidRequestId(requestIdHeader)) {
+    return res.status(400).json({ success: false, code: 'INVALID_REQUEST_ID', error: INVALID_REQUEST_ID_MESSAGE });
+  }
+
+  const revisionInput = req.body?.revision;
+  if (!isContentRevision(revisionInput)) {
+    return res.status(400).json({ success: false, code: 'INVALID_CONTENT_REVISION', error: '恢复来源版本必须是正整数十进制字符串' });
+  }
+  const sourceRevision = String(revisionInput);
+
+  // Format-level precondition validation first (#24 §8 order); the CAS
+  // itself runs inside the transaction against the locked row.
+  let baseline;
+  try {
+    baseline = requireContentBaselineFor(req.params.id, req.get('If-Match'));
+  } catch (error) {
+    if (error.code === 'CONTENT_PRECONDITION_REQUIRED' || error.code === 'INVALID_CONTENT_REVISION'
+      || error.code === 'CONTENT_REVISION_CONFLICT') {
+      return res.status(error.status).json({ success: false, code: error.code, error: error.message });
+    }
+    throw error;
+  }
+
+  const digestInput = normalizeRestoreDigestInput({ expectedRevision: baseline.revision, sourceRevision });
+  const requestDigest = createRequestDigest(digestInput.fields, { action: 'restore', targetId: req.params.id });
+  const publishingOperation = requestIdHeader === undefined ? null : {
+    actorNamespace: resolveDashboardCloneNamespace(req),
+    requestId: requestIdHeader,
+    action: 'restore',
+    targetId: req.params.id,
+    requestDigest
+  };
+
+  try {
+    const respond = await publishing.run(async (repository, existingOperation) => {
+      // Replay confirmation BEFORE the source re-read and the CAS: a
+      // committed restore replays even after its source was purged or the
+      // Share moved on (same discipline as the #32 clone replay).
+      if (existingOperation) {
+        const outcome = await classifyOperationReplay(repository, { record: existingOperation, requestDigest });
+        if (outcome.kind === 'conflict') {
+          return (res) => res.status(409).json({
+            success: false,
+            code: 'REQUEST_ID_CONFLICT',
+            requestId: requestIdHeader,
+            retryable: false,
+            error: '同一请求标识对应了不同的请求内容'
+          });
+        }
+        if (outcome.kind === 'result-unavailable') {
+          return (res) => res.status(410).json({
+            success: false,
+            code: 'RESULT_UNAVAILABLE',
+            requestId: requestIdHeader,
+            retryable: false,
+            error: '该操作已提交，但其结果已被永久删除'
+          });
+        }
+        return contentReplayResponse(outcome, { requestId: requestIdHeader, action: 'restore' });
+      }
+
+      const page = await repository.getById(req.params.id);
+      if (!page) {
+        return (res) => res.status(404).json({ success: false, error: 'Page not found' });
+      }
+
+      const result = await repository.restorePageRevision(req.params.id, {
+        sourceRevision,
+        expectedContentRevision: baseline.revision,
+        actorSource: 'dashboard-restore',
+        actorIdentity: 'owner-dashboard',
+        returnUpdated: true
+      });
+      if (!result || !result.page) {
+        return (res) => res.status(404).json({ success: false, error: 'Share not found' });
+      }
+      const updatedPage = result.page;
+      const contentRevision = String(updatedPage.current_revision);
+
+      await repository.createAuditLog({
+        action: 'page.restore',
+        pageId: req.params.id,
+        details: JSON.stringify({
+          sourceRevision,
+          revision: contentRevision,
+          changed: result.changed
+        }),
+        ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+      });
+
+      if (publishingOperation) {
+        // Same transaction as the new Revision, its provenance and this
+        // audit entry; the unique constraint is the final dedupe guard.
+        await repository.createPublishingOperation({
+          actor_namespace: publishingOperation.actorNamespace,
+          request_id: requestIdHeader,
+          action: 'restore',
+          request_digest: requestDigest,
+          target_id: req.params.id,
+          result_share_id: req.params.id,
+          result_revision: contentRevision,
+          result_access_revision: String(updatedPage.access_revision),
+          receipt_encrypted: encodeOperationReceipt({
+            changed: result.changed,
+            sourceRevision,
+            isProtected: updatedPage.is_protected === 1,
+            expiresAt: updatedPage.expires_at === null || updatedPage.expires_at === undefined
+              ? null
+              : Number(updatedPage.expires_at)
+          }),
+          created_at: Date.now()
+        });
+      }
+
+      return (res) => res.json({
+        success: true,
+        changed: result.changed,
+        ...(publishingOperation ? { requestId: requestIdHeader } : {}),
+        page: adminPageProjection(updatedPage)
+      });
+    }, { publishingOperation });
+    return respond(res);
+  } catch (error) {
+    if (sendPublishingError(res, error)) return;
+    if (error.code === 'RESTORE_SOURCE_INVALID') {
+      return res.status(error.status).json({ success: false, code: error.code, error: error.message });
+    }
+    if (error.code?.startsWith('ACCESS_') || error.code === 'INVALID_ACCESS_REVISION') {
+      return res.status(error.status).json({ success: false, code: error.code, error: error.message });
+    }
+    if (error.code === 'CONTENT_PRECONDITION_REQUIRED' || error.code === 'INVALID_CONTENT_REVISION') {
+      return res.status(error.status).json({ success: false, code: error.code, error: error.message });
+    }
+    if (error.code === 'CONTENT_REVISION_CONFLICT') {
+      return res.status(error.status).json({
+        success: false,
+        code: error.code,
+        error: error.message,
+        current: error.current || null
+      });
+    }
+    console.error('Restore page revision failed:', error);
+    return res.status(500).json({ success: false, error: 'Failed to restore revision' });
   }
 });
 

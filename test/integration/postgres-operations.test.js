@@ -497,3 +497,382 @@ test('a severed database connection mid-transaction leaves no half state and no 
   assert.equal(retry.status, 200);
   assert.equal(retry.body.replayed, undefined);
 });
+
+// ---- #33 owner restore on real PostgreSQL: races, atomicity, replay ----
+
+async function pgCreateShare(body, headers = {}) {
+  const response = await postJson('/api/pages/create', body, headers);
+  assert.equal(response.status, 200);
+  return response.body.urlId;
+}
+
+async function pgSaveBody(id, revision, newBody) {
+  const response = await fetch(`${origin}/admin/pages/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Origin: origin, 'If-Match': `"content:${id}:${revision}"` },
+    body: JSON.stringify({ htmlContent: newBody })
+  });
+  assert.equal(response.status, 200, await response.text());
+}
+
+async function pgRestore(id, sourceRevision, expectedRevision, requestId) {
+  const response = await fetch(`${origin}/admin/pages/${id}/restore`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json', Origin: origin,
+      'If-Match': `"content:${id}:${expectedRevision}"`,
+      ...(requestId ? { 'Idempotency-Key': requestId } : {})
+    },
+    body: JSON.stringify({ revision: String(sourceRevision) })
+  });
+  const text = await response.text();
+  return { status: response.status, body: JSON.parse(text), text };
+}
+
+test('restore and content update racing from the same baseline let exactly one writer win', async () => {
+  const id = await pgCreateShare({ htmlContent: '<h1>PG33 RACE BASE</h1>', codeType: 'html', title: 'Pg race' });
+  await pgSaveBody(id, '1', '<h1>PG33 RACE V2</h1>');
+
+  // Rendezvous INSIDE two live transactions, before either Share lock.
+  // Backend PID evidence prevents a serial pool from masquerading as a race.
+  const runTransaction = repository.withPublishingTransaction;
+  const backendPids = new Set();
+  let release;
+  const barrier = new Promise(resolve => { release = resolve; });
+  repository.withPublishingTransaction = function (operation) {
+    return runTransaction.call(this, async tx => {
+      backendPids.add((await tx.pool.query('SELECT pg_backend_pid() AS pid')).rows[0].pid);
+      if (backendPids.size === 2) release();
+      await barrier;
+      return operation(tx);
+    });
+  };
+  const [restored, updated] = await Promise.all([
+    pgRestore(id, '1', '2', 'pg33-race-restore-012'),
+    fetch(`${origin}/admin/pages/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Origin: origin, 'If-Match': '"content:' + id + ':2"' },
+      body: JSON.stringify({ htmlContent: '<h1>PG33 RACE UPDATE</h1>' })
+    }).then(async response => ({ status: response.status, body: await response.json() }))
+  ]).finally(() => { repository.withPublishingTransaction = runTransaction; });
+  assert.equal(backendPids.size, 2, 'two distinct PostgreSQL connections reached the barrier');
+  console.log('issue33 restore/update backend PIDs:', [...backendPids]);
+
+  const statuses = [restored.status, updated.status].sort();
+  assert.deepEqual(statuses, [200, 412], `exactly one writer wins: restore=${restored.status} update=${updated.status}`);
+  const loser = restored.status === 412 ? restored : updated;
+  assert.equal(loser.body.code, 'CONTENT_REVISION_CONFLICT');
+  assert.ok(loser.body.current, 'the loser sees the committed current projection');
+
+  const live = await repository.pool.query('SELECT current_revision, html_content FROM pages WHERE id = $1', [id]);
+  assert.equal(String(live.rows[0].current_revision), '3', 'exactly ONE revision increment happened');
+  const count = await repository.pool.query('SELECT count(*)::int AS n FROM share_revisions WHERE share_id = $1', [id]);
+  assert.equal(count.rows[0].n, 3, 'the losing transaction left no revision behind');
+
+  if (restored.status === 200) {
+    assert.equal(live.rows[0].html_content, '<h1>PG33 RACE BASE</h1>', 'the restore result content is the source snapshot');
+  } else {
+    assert.equal(live.rows[0].html_content, '<h1>PG33 RACE UPDATE</h1>');
+  }
+});
+
+test('an injected COMMIT-time failure rolls back restore, revision, audit and operation as one unit', async () => {
+  const id = await pgCreateShare({ htmlContent: '<h1>PG33 ATOMIC BASE</h1>', codeType: 'html', title: 'Pg atomic' });
+  await pgSaveBody(id, '1', '<h1>PG33 ATOMIC V2</h1>');
+  const requestId = 'pg33-atomic-restore-012';
+
+  const observer = await repository.pool.connect();
+  try {
+    await observer.query(`
+      CREATE FUNCTION issue33_restore_barrier() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'issue33 injected restore failure'; END $$;
+      CREATE CONSTRAINT TRIGGER issue33_restore_barrier AFTER INSERT ON publish_operations
+      DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION issue33_restore_barrier();
+    `);
+
+    const before = {
+      revisions: (await observer.query('SELECT count(*)::int AS n FROM share_revisions WHERE share_id = $1', [id])).rows[0].n,
+      current: String((await observer.query('SELECT current_revision FROM pages WHERE id = $1', [id])).rows[0].current_revision),
+      audits: (await observer.query('SELECT count(*)::int AS n FROM audit_logs')).rows[0].n
+    };
+
+    const response = await pgRestore(id, '1', '2', requestId);
+    assert.equal(response.status, 500, 'the injected failure surfaces as an error, never success');
+
+    const after = {
+      revisions: (await repository.pool.query('SELECT count(*)::int AS n FROM share_revisions WHERE share_id = $1', [id])).rows[0].n,
+      current: String((await repository.pool.query('SELECT current_revision FROM pages WHERE id = $1', [id])).rows[0].current_revision),
+      audits: (await repository.pool.query('SELECT count(*)::int AS n FROM audit_logs')).rows[0].n
+    };
+    assert.equal(after.revisions, before.revisions, 'no half-committed revision survives');
+    assert.equal(after.current, before.current, 'the current pointer never moved');
+    assert.equal(after.audits, before.audits, 'no half-committed audit entry survives');
+    const operations = await repository.pool.query(
+      'SELECT count(*)::int AS n FROM publish_operations WHERE request_id = $1', [requestId]);
+    assert.equal(operations.rows[0].n, 0, 'no half-committed operation record survives');
+  } finally {
+    await observer.query('DROP TRIGGER IF EXISTS issue33_restore_barrier ON publish_operations; DROP FUNCTION IF EXISTS issue33_restore_barrier()')
+      .catch(() => {});
+    observer.release();
+  }
+
+  // The request id was never committed: the same retry succeeds exactly once.
+  const retry = await pgRestore(id, '1', '2', requestId);
+  assert.equal(retry.status, 200);
+  assert.equal(retry.body.replayed, undefined);
+  assert.equal(retry.body.changed, true);
+});
+
+test('a severed database connection mid-restore leaves no half state', async () => {
+  const id = await pgCreateShare({ htmlContent: '<h1>PG33 CONN BASE</h1>', codeType: 'html', title: 'Pg conn' });
+  await pgSaveBody(id, '1', '<h1>PG33 CONN V2</h1>');
+  const requestId = 'pg33-conn-restore-0123';
+
+  const faultRepo = new PostgresPageRepository(url.href, {
+    POSTGRES_SSL: 'false', POSTGRES_POOL_MAX: '2',
+    POSTGRES_STATEMENT_TIMEOUT_MS: '8000', POSTGRES_QUERY_TIMEOUT_MS: '9000',
+    POSTGRES_IDLE_TRANSACTION_TIMEOUT_MS: '15000'
+  });
+  faultRepo.pool.on('connect', (client) => client.on('error', () => {}));
+  const auditsBefore = (await repository.pool.query('SELECT count(*)::int AS n FROM audit_logs WHERE page_id = $1', [id])).rows[0].n;
+  let severed = false;
+  try {
+    await assert.rejects(faultRepo.withPublishingTransaction(async (tx) => {
+      const result = await tx.restorePageRevision(id, {
+        sourceRevision: '1', expectedContentRevision: '2',
+        actorSource: 'dashboard-restore', actorIdentity: 'owner-dashboard'
+      });
+      assert.equal(result.changed, true);
+      await tx.createAuditLog({ action: 'page.restore', pageId: id, details: '{}', ip: '127.0.0.1' });
+      await tx.createPublishingOperation({
+        actor_namespace: 'dashboard-session:conn-loss-fixture',
+        request_id: requestId,
+        action: 'restore',
+        request_digest: 'a'.repeat(64),
+        target_id: id,
+        result_share_id: id,
+        result_revision: String(result.page.current_revision),
+        result_access_revision: String(result.page.access_revision),
+        receipt_encrypted: null,
+        created_at: Date.now()
+      });
+      const pid = await tx.pool.query('SELECT pg_backend_pid() AS pid');
+      severed = true;
+      await tx.pool.query('SELECT pg_terminate_backend($1)', [pid.rows[0].pid]);
+    }), error => error.code === '57P01' || /connection|terminat/i.test(error.message));
+  } finally {
+    await faultRepo.pool.end();
+  }
+  assert.equal(severed, true, 'failure occurred at the named connection-cut injection');
+  assert.equal((await repository.pool.query('SELECT count(*)::int AS n FROM audit_logs WHERE page_id = $1', [id])).rows[0].n, auditsBefore);
+
+  const current = String((await repository.pool.query('SELECT current_revision FROM pages WHERE id = $1', [id])).rows[0].current_revision);
+  assert.equal(current, '2', 'the current pointer never moved');
+  const revisions = (await repository.pool.query('SELECT count(*)::int AS n FROM share_revisions WHERE share_id = $1', [id])).rows[0].n;
+  assert.equal(revisions, 2, 'no half-committed revision survives');
+  const operations = await repository.pool.query(
+    'SELECT count(*)::int AS n FROM publish_operations WHERE request_id = $1', [requestId]);
+  assert.equal(operations.rows[0].n, 0, 'no half-committed operation record exists');
+
+  // The never-committed request id can still be used once, for real.
+  const retry = await pgRestore(id, '1', '2', requestId);
+  assert.equal(retry.status, 200);
+  assert.equal(retry.body.replayed, undefined);
+});
+
+test('an already-committed restore replays its original result against a long-stale If-Match', async () => {
+  const id = await pgCreateShare({ htmlContent: '<h1>PG33 REPLAY BASE</h1>', codeType: 'html', title: 'Pg replay' });
+  await pgSaveBody(id, '1', '<h1>PG33 REPLAY V2</h1>');
+  const requestId = 'pg33-replay-restore-012';
+
+  const first = await pgRestore(id, '1', '2', requestId);
+  assert.equal(first.status, 200);
+  assert.equal(first.body.page.currentRevision, '3');
+
+  // Two later edits move the Share to revision 5 — the original tag is long
+  // stale and would 412 a FIRST attempt.
+  await pgSaveBody(id, '3', '<h1>PG33 REPLAY V4</h1>');
+  await pgSaveBody(id, '4', '<h1>PG33 REPLAY V5</h1>');
+
+  const replay = await pgRestore(id, '1', '2', requestId);
+  assert.equal(replay.status, 200, 'the stale tag must NOT turn the retry into a first failure');
+  assert.equal(replay.body.replayed, true);
+  assert.equal(replay.body.changed, true);
+  assert.equal(replay.body.page.currentRevision, '3', 'the ORIGINAL committed result is confirmed');
+  assert.equal(replay.body.page.htmlContent, '<h1>PG33 REPLAY BASE</h1>');
+
+  const live = String((await repository.pool.query('SELECT current_revision FROM pages WHERE id = $1', [id])).rows[0].current_revision);
+  assert.equal(live, '5', 'the replay creates no additional revision and never rolls current back');
+  const operations = await repository.pool.query(
+    'SELECT result_revision FROM publish_operations WHERE request_id = $1', [requestId]);
+  assert.equal(operations.rows.length, 1, 'still exactly one operation record');
+  assert.equal(String(operations.rows[0].result_revision), '3');
+});
+
+test('a same-content restore records a successful operation without minting a revision', async () => {
+  const id = await pgCreateShare({ htmlContent: '<h1>PG33 NOOP BASE</h1>', codeType: 'html', title: 'Pg noop' });
+  await pgSaveBody(id, '1', '<h1>PG33 NOOP V2</h1>');
+
+  const before = (await repository.pool.query('SELECT count(*)::int AS n FROM share_revisions WHERE share_id = $1', [id])).rows[0].n;
+  const response = await pgRestore(id, '2', '2', 'pg33-noop-restore-0123');
+  assert.equal(response.status, 200);
+  assert.equal(response.body.changed, false);
+  assert.equal(response.body.page.currentRevision, '2');
+
+  const after = (await repository.pool.query('SELECT count(*)::int AS n FROM share_revisions WHERE share_id = $1', [id])).rows[0].n;
+  assert.equal(after, before, 'no duplicate body version');
+
+  const operations = await repository.pool.query(
+    'SELECT action, result_revision FROM publish_operations WHERE request_id = $1', ['pg33-noop-restore-0123']);
+  assert.equal(operations.rows.length, 1, 'the no-op still records a successful operation');
+  assert.equal(operations.rows[0].action, 'restore');
+  assert.equal(String(operations.rows[0].result_revision), '2');
+
+  // The no-op result replays faithfully too.
+  const replay = await pgRestore(id, '2', '2', 'pg33-noop-restore-0123');
+  assert.equal(replay.status, 200);
+  assert.equal(replay.body.replayed, true);
+  assert.equal(replay.body.changed, false);
+});
+
+test('restore preserves the whole access surface on PostgreSQL: protection, expiry, favorite, views, publication', async () => {
+  const id = await pgCreateShare({ htmlContent: '<h1>PG33 POLICY BASE</h1>', codeType: 'html', title: 'Pg policy' });
+  await pgSaveBody(id, '1', '<h1>PG33 POLICY V2</h1>');
+
+  const protect = await fetch(`${origin}/admin/pages/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Origin: origin, 'If-Match': '"content:' + id + ':2"' },
+    body: JSON.stringify({ isProtected: true, expectedAccessRevision: '1' })
+  });
+  assert.equal(protect.status, 200);
+  await repository.pool.query('UPDATE pages SET expires_at = $2, view_count = 7, is_favorite = TRUE WHERE id = $1', [id, Date.now() + 86400000]);
+
+  const before = (await repository.pool.query(
+    'SELECT * FROM pages WHERE id = $1', [id])).rows[0];
+
+  const response = await pgRestore(id, '1', '2', 'pg33-policy-restore-012');
+  assert.equal(response.status, 200);
+
+  const after = (await repository.pool.query(
+    'SELECT * FROM pages WHERE id = $1', [id])).rows[0];
+  const nonContent = row => Object.fromEntries(Object.entries(row).filter(([key]) =>
+    !['html_content', 'title', 'description', 'markdown_theme', 'current_revision'].includes(key)));
+  assert.deepEqual(nonContent(after), nonContent(before), 'every non-content column including password hash/ciphertext stays identical');
+  assert.equal(String(after.access_revision), String(before.access_revision), 'access revision does not move');
+  assert.equal(after.is_protected, before.is_protected);
+  assert.equal(String(after.expires_at), String(before.expires_at), 'expiry is untouched');
+  assert.equal(after.is_favorite, true, 'Favorite Share is untouched');
+  assert.equal(Number(after.view_count), 7, 'view counts are untouched');
+  assert.equal(after.published, true, 'publication state is untouched');
+  assert.equal(after.id, id, 'the share URL identity is untouched');
+
+  const restoredRow = await repository.pool.query(
+    'SELECT source, actor, restored_from FROM share_revisions WHERE share_id = $1 ORDER BY revision DESC LIMIT 1', [id]);
+  assert.equal(restoredRow.rows[0].source, 'dashboard-restore');
+  assert.equal(restoredRow.rows[0].actor, 'owner-dashboard');
+  assert.equal(String(restoredRow.rows[0].restored_from), '1');
+});
+
+test('restore of a revision beyond 2^53 writes exact decimal pointers on PostgreSQL', async () => {
+  const id = await pgCreateShare({ htmlContent: '<h1>PG33 BIG BASE</h1>', codeType: 'html', title: 'Pg big' });
+  await pgSaveBody(id, '1', '<h1>PG33 BIG V2</h1>');
+
+  const bigSource = 9007199254740993n;
+  await repository.pool.query(
+    `INSERT INTO share_revisions (share_id, revision, html_content, code_type, title, description, markdown_theme, created_at, snapshot_hash, source, actor, restored_from)
+     VALUES ($1, $2, '<h1>PG33 BIG ANCIENT</h1>', 'html', NULL, NULL, NULL, $3, 'synthetic', 'web', NULL, NULL)`,
+    [id, bigSource, Date.now()]
+  );
+
+  const bigCurrent = (bigSource + 1n).toString();
+  const bigResult = (bigSource + 2n).toString();
+  await repository.pool.query('UPDATE share_revisions SET revision = $2 WHERE share_id = $1 AND revision = 2', [id, bigCurrent]);
+  await repository.pool.query('UPDATE pages SET current_revision = $2 WHERE id = $1', [id, bigCurrent]);
+  const response = await pgRestore(id, bigSource.toString(), bigCurrent, 'pg33-big-restore-0123');
+  assert.equal(response.status, 200, response.text);
+  assert.equal(response.body.page.currentRevision, bigResult);
+  assert.equal(response.body.page.htmlContent, '<h1>PG33 BIG ANCIENT</h1>');
+
+  const row = await repository.pool.query(
+    'SELECT restored_from::text AS restored_from, revision::text AS revision FROM share_revisions WHERE share_id = $1 AND revision = $2', [id, bigResult]);
+  assert.equal(row.rows[0].restored_from, '9007199254740993', 'restored_from is the exact BIGINT source');
+  assert.equal(row.rows[0].revision, bigResult);
+
+  const replay = await pgRestore(id, bigSource.toString(), bigCurrent, 'pg33-big-restore-0123');
+  assert.equal(replay.status, 200);
+  assert.equal(replay.body.replayed, true, 'the big-source restore replays its committed result');
+});
+
+test('restore honours the maintenance gate and audit ordering on PostgreSQL', async () => {
+  const id = await pgCreateShare({ htmlContent: '<h1>PG33 PAUSE BASE</h1>', codeType: 'html', title: 'Pg pause' });
+  await pgSaveBody(id, '1', '<h1>PG33 PAUSE V2</h1>');
+  await repository.setPublishingWritesPaused(true);
+  try {
+    const blocked = await pgRestore(id, '1', '2', 'pg33-pause-restore-012');
+    assert.equal(blocked.status, 503);
+    assert.equal(blocked.body.retryable, true);
+  } finally {
+    await repository.setPublishingWritesPaused(false);
+  }
+  const operations = await repository.pool.query(
+    'SELECT count(*)::int AS n FROM publish_operations WHERE request_id = $1', ['pg33-pause-restore-012']);
+  assert.equal(operations.rows[0].n, 0, 'a maintenance-refused attempt records no operation');
+
+  const retried = await pgRestore(id, '1', '2', 'pg33-pause-restore-012');
+  assert.equal(retried.status, 200);
+  const audit = await repository.pool.query(
+    "SELECT details FROM audit_logs WHERE action = 'page.restore' AND page_id = $1 ORDER BY created_at DESC LIMIT 1", [id]);
+  assert.ok(audit.rows.length >= 1, 'the committed restore writes its audit entry');
+  const details = JSON.parse(audit.rows[0].details);
+  assert.equal(details.sourceRevision, '1');
+  assert.equal(details.changed, true);
+});
+
+for (const action of ['content-update', 'restore']) {
+  test(`${action}: injected failure AFTER a successful COMMIT confirms original result on retry`, async () => {
+    const id = await pgCreateShare({ htmlContent: '<h1>COMMIT source</h1>', codeType: 'html' });
+    await pgSaveBody(id, '1', '<h1>COMMIT current</h1>');
+    const requestId = `pg33-after-commit-${action}`;
+    const send = () => action === 'restore'
+      ? pgRestore(id, '1', '2', requestId)
+      : fetch(`${origin}/admin/pages/${id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: origin,
+          'Idempotency-Key': requestId, 'If-Match': `"content:${id}:2"` },
+        body: JSON.stringify({ htmlContent: '<h1>COMMIT update</h1>' })
+      }).then(async response => ({ status: response.status, body: await response.json() }));
+    const runTransaction = repository.withPublishingTransaction;
+    let committed = false;
+    repository.withPublishingTransaction = async function (...args) {
+      const result = await runTransaction.apply(this, args);
+      // Injection boundary: real PostgreSQL COMMIT completed; the app has
+      // not invoked its response callback yet. Do not call this rollback.
+      committed = true;
+      throw new Error('issue33 injected response failure AFTER COMMIT');
+    };
+    try {
+      const lost = await send();
+      assert.equal(lost.status, 500);
+      assert.equal(committed, true);
+    } finally { repository.withPublishingTransaction = runTransaction; }
+    const beforeRetry = (await repository.pool.query('SELECT * FROM pages WHERE id = $1', [id])).rows[0];
+    assert.equal(String(beforeRetry.current_revision), '3', 'observer sees successful COMMIT despite failed response');
+    const counts = async () => ({
+      revisions: (await repository.pool.query('SELECT count(*)::int AS n FROM share_revisions WHERE share_id = $1', [id])).rows[0].n,
+      audits: (await repository.pool.query('SELECT count(*)::int AS n FROM audit_logs WHERE page_id = $1', [id])).rows[0].n,
+      operations: (await repository.pool.query('SELECT count(*)::int AS n FROM publish_operations WHERE request_id = $1', [requestId])).rows[0].n
+    });
+    const before = await counts();
+    assert.equal(before.operations, 1);
+    const replay = await send();
+    assert.equal(replay.status, 200);
+    assert.equal(replay.body.replayed, true);
+    assert.equal(replay.body.page.currentRevision, '3');
+    assert.deepEqual(await counts(), before, 'no duplicate snapshot, audit, or result on retry');
+    // Later current must not replace the operation's original result.
+    await pgSaveBody(id, '3', '<h1>later fourth version</h1>');
+    const late = await send();
+    assert.equal(late.body.page.currentRevision, '3');
+    assert.equal(late.body.page.htmlContent, beforeRetry.html_content);
+    assert.equal(String((await repository.getById(id)).current_revision), '4');
+  });
+}

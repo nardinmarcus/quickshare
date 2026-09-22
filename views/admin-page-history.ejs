@@ -1,4 +1,4 @@
-<%- include('partials/header', { title, page }) %>
+<%- include('partials/header', { title, page, csrfToken }) %>
 
 <div class="admin-container">
   <header class="admin-header">
@@ -43,6 +43,7 @@
             <td class="history-row-actions">
               <button type="button" class="cyber-btn cyber-btn-secondary" data-history-action="raw" data-revision="<%= revision.revision %>">原稿</button>
               <button type="button" class="cyber-btn cyber-btn-secondary" data-history-action="preview" data-revision="<%= revision.revision %>">预览</button>
+              <button type="button" class="cyber-btn cyber-btn-secondary" data-history-action="restore" data-revision="<%= revision.revision %>">恢复</button>
             </td>
           </tr>
           <% }); %>
@@ -114,6 +115,18 @@
     </div>
   </section>
 
+  <section class="card admin-card" id="restore-dialog" role="dialog" aria-labelledby="restore-dialog-title" hidden>
+    <h2 class="admin-section-title" id="restore-dialog-title">恢复历史版本</h2>
+    <p id="restore-summary" class="field-hint"></p>
+    <p class="field-hint" id="restore-policy-note">恢复只把所选版本的正文、标题、描述与主题写为新版本并记录来源；不改变分享链接、密码、有效期、访问版本、发布状态、收藏或浏览量。</p>
+    <p id="restore-status" class="field-hint" role="status" aria-live="polite" hidden></p>
+    <button type="button" class="cyber-btn cyber-btn-secondary" id="restore-discard" hidden>放弃待确认请求</button>
+    <div class="admin-edit-actions">
+      <button type="button" class="cyber-btn cyber-btn-secondary" id="restore-cancel">取消</button>
+      <button type="button" class="cyber-btn" id="restore-confirm" aria-busy="false">确认恢复</button>
+    </div>
+  </section>
+
   <section class="card admin-card" id="history-preview-section">
     <h2 class="admin-section-title">单版预览</h2>
     <p class="field-hint">预览在沙盒中渲染，与管理端同源隔离；不记录浏览量，也不注入公开统计。</p>
@@ -134,6 +147,7 @@
 
 <script type="application/json" id="history-data"><%- historyDataJson %></script>
 <script src="/js/admin.js"></script>
+<script src="/js/publishing-request.js"></script>
 <script src="/js/source-diff.js"></script>
 <script src="/js/admin-history.js"></script>
 <%- include('partials/footer', { page }) %>

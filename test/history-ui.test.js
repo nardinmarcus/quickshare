@@ -537,3 +537,268 @@ test('a rejected comparison reports a distinct unfinished failure with raw sourc
   assert.equal(dom.element('history-raw-panel').hidden, false, 'raw sources stay reachable');
   assert.equal(dom.element('history-raw-view')._value, 'AAA', 'version A raw is auto-loaded for the failed comparison');
 });
+
+// ---- #33 owner restore UI: dialog identity, idempotent intent ----
+
+function buildDom2() {
+  const elements = new Map();
+  function element(id) {
+    if (!elements.has(id)) {
+      const node = {
+        id, _value: '', _ownText: undefined, hidden: false, disabled: false, dataset: {}, events: {}, attrs: {},
+        children: [],
+        classList: { add() {}, remove() {}, toggle() {} },
+        addEventListener(name, fn) { this.events[name] = fn; },
+        setAttribute(name, value) { this.attrs[name] = value; },
+        getAttribute(name) { return this.attrs[name]; },
+        removeAttribute(name) { delete this.attrs[name]; },
+        appendChild(child) { this.children.push(child); },
+        focus() { this.focused = true; },
+        closest() { return null; }
+      };
+      Object.defineProperty(node, 'value', {
+        get() { return this._value; },
+        set(input) { this._value = input; }
+      });
+      Object.defineProperty(node, 'textContent', {
+        get() { return this._ownText !== undefined ? this._ownText : ''; },
+        set(input) { this._ownText = input; }
+      });
+      elements.set(id, node);
+    }
+    return elements.get(id);
+  }
+  return { elements, element };
+}
+
+function restoreGlobals(dom, overrides = {}) {
+  const storage = new Map();
+  return {
+    document: {
+      documentElement: { dataset: overrides.sessionTag ? { dashboardSessionTag: overrides.sessionTag } : {} },
+      getElementById: dom.element,
+      querySelector: (selector) => {
+        if (selector === 'meta[name="csrf-token"]') return { getAttribute: () => 'csrf-token-33' };
+        return null;
+      },
+      querySelectorAll: () => [],
+      createElement: () => dom.element('created-' + Math.random())
+    },
+    window: {
+      QuickSharePublishingRequest: overrides.publishingRequest || null,
+      AdminTime: { format: v => 'f' + v, toDateTimeLocal: () => '', parseDateTimeLocal: () => 0 },
+      SourceDiff: { compare: async () => ({ status: 'ok', parts: [] }), renderParts() {}, renderMetaChanges() {}, cancelRender() {} },
+      location: { reload: overrides.reload || (() => {}) },
+      sessionStorage: {
+        getItem: key => (storage.has(key) ? storage.get(key) : null),
+        setItem: (key, value) => storage.set(key, String(value)),
+        removeItem: key => storage.delete(key)
+      }
+    },
+    fetch: overrides.fetch || (async () => ({ ok: true, status: 200, json: async () => ({}) })),
+    Toast: { error() {}, success() {} },
+    setTimeout, clearTimeout, console, Date, encodeURIComponent
+  };
+}
+
+function runHistoryScript(globals) {
+  const fs = require('fs');
+  const vm = require('vm');
+  globals.window.document = globals.document;
+  vm.runInNewContext(fs.readFileSync('public/js/publishing-request.js', 'utf8'), globals);
+  vm.runInNewContext(fs.readFileSync('public/js/admin-history.js', 'utf8'), globals);
+}
+
+const HISTORY_DATA_33 = {
+  id: 'hist-restore',
+  codeType: 'html',
+  currentRevision: '3',
+  revisions: [
+    { revision: '3', createdAt: 3, source: 'dashboard-edit', restoredFrom: null },
+    { revision: '2', createdAt: 2, source: 'dashboard-edit', restoredFrom: null },
+    { revision: '1', createdAt: 1, source: 'web', restoredFrom: null }
+  ],
+  pagination: { page: 1, limit: 20, total: '3', totalPages: 1, hasNext: false, hasPrevious: false }
+};
+
+test('the restore dialog identifies the source and current revisions and states the policy is unchanged', async () => {
+  const id = await create();
+  const html = await historyPage(id);
+  assert.match(html, /data-history-action="restore"/, 'each revision row offers a restore action');
+  assert.match(html, /id="restore-dialog"/, 'the confirm dialog exists');
+  assert.match(html, /id="restore-policy-note"/, 'the policy note exists');
+  assert.match(html, /不改变分享链接、密码、有效期、访问版本、发布状态、收藏或浏览量/, 'the note enumerates the untouched policy surface');
+  assert.match(html, /data-dashboard-session-tag=/, 'the page binds the dashboard session tag');
+  assert.match(html, /publishing-request\.js/, 'the dashboard intent helper is loaded');
+
+  // VM: opening the dialog names BOTH the source and the current version.
+  const dom = buildDom2();
+  dom.element('history-data').textContent = JSON.stringify(HISTORY_DATA_33);
+  runHistoryScript(restoreGlobals(dom));
+  const restoreButton = { getAttribute: (name) => (name === 'data-history-action' ? 'restore' : name === 'data-revision' ? '1' : null), closest: () => null };
+  const rowButton = dom.element('history-table');
+  // Simulate the delegated click path through the row button element.
+  rowButton.events.click({
+    target: {
+      closest(selector) {
+        if (selector === '[data-history-action]') {
+          return {
+            getAttribute: (name) => (name === 'data-history-action' ? 'restore' : '1')
+          };
+        }
+        return null;
+      }
+    }
+  });
+  assert.equal(dom.element('restore-dialog').hidden, false, 'the dialog opens');
+  assert.match(dom.element('restore-summary').textContent, /版本 1/, 'the summary names the SOURCE revision');
+  assert.match(dom.element('restore-summary').textContent, /当前版本为 3/, 'the summary names the CURRENT revision');
+  assert.match(dom.element('restore-summary').textContent, /访问策略不变/);
+});
+
+test('restore confirm sends the source revision, current If-Match and one request id; success confirms and reloads', async () => {
+  const dom = buildDom2();
+  dom.element('history-data').textContent = JSON.stringify(HISTORY_DATA_33);
+  const calls = [];
+  let reloaded = false;
+  const globals = restoreGlobals(dom, {
+    sessionTag: 'session-A',
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      return {
+        ok: true, status: 200,
+        json: async () => ({ success: true, changed: true, requestId: options.headers['Idempotency-Key'], page: { currentRevision: '4' } })
+      };
+    },
+    reload: () => { reloaded = true; }
+  });
+  runHistoryScript(globals);
+  dom.element('history-table').events.click({
+    target: { closest: (selector) => (selector === '[data-history-action]' ? { getAttribute: (name) => (name === 'data-history-action' ? 'restore' : '1') } : null) }
+  });
+  await dom.element('restore-confirm').events.click();
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/admin/pages/hist-restore/restore');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.equal(calls[0].options.headers['If-Match'], '"content:hist-restore:3"', 'the tag identifies the CURRENT content');
+  assert.match(calls[0].options.headers['Idempotency-Key'], /^[0-9a-f-]{36}$/, 'one client-generated UUID per intent');
+  assert.deepEqual(JSON.parse(calls[0].options.body), { revision: '1' });
+  assert.equal(globals.window.sessionStorage.getItem('quickshare.dashboard.intent.restore.hist-restore'), null,
+    'a confirmed restore consumes the pending intent');
+  assert.equal(reloaded, true, 'the page reloads so the list and current revision are honest');
+  assert.match(dom.element('restore-summary').textContent, /访问策略不变/);
+});
+
+test('a lost restore response keeps the pending intent and the retry reuses the ORIGINAL id', async () => {
+  const dom = buildDom2();
+  dom.element('history-data').textContent = JSON.stringify(HISTORY_DATA_33);
+  const calls = [];
+  let fail = true;
+  const globals = restoreGlobals(dom, {
+    sessionTag: 'session-A',
+    fetch: async (url, options) => {
+      calls.push(options.headers['Idempotency-Key']);
+      if (fail) throw new TypeError('network down');
+      return { ok: true, status: 200, json: async () => ({ success: true, changed: true, page: { currentRevision: '4' } }) };
+    },
+    reload: () => {}
+  });
+  runHistoryScript(globals);
+  dom.element('history-table').events.click({
+    target: { closest: (selector) => (selector === '[data-history-action]' ? { getAttribute: (name) => (name === 'data-history-action' ? 'restore' : '1') } : null) }
+  });
+  await dom.element('restore-confirm').events.click();
+  assert.equal(calls.length, 1);
+  assert.match(dom.element('restore-status').textContent, /结果未知/);
+  assert.match(dom.element('restore-status').textContent, /原请求重试/);
+
+  // The pending intent survived with the ORIGINAL id and the draft key.
+  const pending = JSON.parse(globals.window.sessionStorage.getItem('quickshare.dashboard.intent.restore.hist-restore'));
+  assert.equal(pending.requestId, calls[0]);
+
+  fail = false;
+  await dom.element('restore-confirm').events.click();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1], calls[0], 'the retry reuses the ORIGINAL request id and confirms the original result');
+  assert.equal(globals.window.sessionStorage.getItem('quickshare.dashboard.intent.restore.hist-restore'), null);
+});
+
+test('a 412 during restore retains the original baseline and id until explicit conflict resolution', async () => {
+  const dom = buildDom2();
+  dom.element('history-data').textContent = JSON.stringify(HISTORY_DATA_33);
+  const calls = [];
+  const globals = restoreGlobals(dom, {
+    sessionTag: 'session-A',
+    fetch: async (url, options) => {
+      calls.push({ id: options.headers['Idempotency-Key'], ifMatch: options.headers['If-Match'] });
+      if (calls.length === 1) {
+        return {
+          ok: false, status: 412,
+          json: async () => ({ success: false, code: 'CONTENT_REVISION_CONFLICT', error: 'conflict', current: { currentRevision: '9' } })
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true, changed: true, page: { currentRevision: '10' } }) };
+    },
+    reload: () => {}
+  });
+  runHistoryScript(globals);
+  dom.element('history-table').events.click({
+    target: { closest: (selector) => (selector === '[data-history-action]' ? { getAttribute: (name) => (name === 'data-history-action' ? 'restore' : '2') } : null) }
+  });
+  await dom.element('restore-confirm').events.click();
+  assert.equal(calls.length, 1);
+  assert.match(dom.element('restore-status').textContent, /第 9 版/, 'the dialog names the new current version');
+  assert.match(dom.element('restore-status').textContent, /未执行也未产生新版本/);
+  const pending = JSON.parse(globals.window.sessionStorage.getItem('quickshare.dashboard.intent.restore.hist-restore'));
+  assert.equal(pending.requestId, calls[0].id, 'a refusal does not abandon an unknown earlier attempt');
+  assert.match(dom.element('restore-summary').textContent, /当前版本为 3/, 'the authorized baseline is unchanged');
+
+  await dom.element('restore-confirm').events.click();
+  assert.equal(calls[1].ifMatch, '"content:hist-restore:3"', 'no hidden baseline upgrade');
+  assert.equal(calls[1].id, calls[0].id, 'the original intent is retained');
+});
+
+test('unchanged restore stays visible as confirmed without reloading or retaining pending', async () => {
+  const dom = buildDom2();
+  dom.element('history-data').textContent = JSON.stringify(HISTORY_DATA_33);
+  let reloads = 0;
+  const globals = restoreGlobals(dom, {
+    sessionTag: 'session-A', reload: () => { reloads += 1; },
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({ success: true, changed: false, page: { currentRevision: '3' } }) })
+  });
+  runHistoryScript(globals);
+  dom.element('history-table').events.click({ target: { closest: () => ({ getAttribute: n => n === 'data-history-action' ? 'restore' : '3' }) } });
+  await dom.element('restore-confirm').events.click();
+  assert.equal(reloads, 0);
+  assert.match(dom.element('restore-status').textContent, /未产生新版本.*已确认完成/);
+  assert.equal(globals.window.QuickSharePublishingRequest.readDashboardIntent('restore', 'hist-restore'), null);
+});
+
+for (const status of [401, 403, 409, 410, 428, 500, 503, 200]) {
+  test(`restore retains original intent after ${status} refusal or unreadable success`, async () => {
+    const dom = buildDom2();
+    dom.element('history-data').textContent = JSON.stringify(HISTORY_DATA_33);
+    const calls = [];
+    const globals = restoreGlobals(dom, {
+      sessionTag: 'session-A',
+      fetch: async (url, options) => {
+        calls.push(options);
+        return { ok: status === 200, status, json: async () => {
+          if (status === 200) throw new SyntaxError('truncated JSON');
+          return { success: false, error: 'refused' };
+        } };
+      }
+    });
+    runHistoryScript(globals);
+    dom.element('history-table').events.click({ target: { closest: () => ({ getAttribute: n => n === 'data-history-action' ? 'restore' : '1' }) } });
+    await dom.element('restore-confirm').events.click();
+    const pending = globals.window.QuickSharePublishingRequest.readDashboardIntent('restore', 'hist-restore');
+    assert.ok(pending, 'not cleared without a confirmed result');
+    assert.equal(pending.sessionTag, 'session-A', 'real window.document binding is exercised');
+    assert.equal(calls.length, 1, 'no automatic retry');
+    await dom.element('restore-confirm').events.click();
+    assert.equal(calls[1].headers['Idempotency-Key'], calls[0].headers['Idempotency-Key']);
+    assert.equal(calls[1].headers['If-Match'], calls[0].headers['If-Match']);
+  });
+}

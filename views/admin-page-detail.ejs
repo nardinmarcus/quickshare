@@ -185,6 +185,8 @@
         <button type="submit" class="cyber-btn cyber-btn-secondary" id="edit-save-access">保存访问设置</button>
         <button type="submit" class="cyber-btn" id="edit-save-content">保存内容</button>
         <p class="admin-edit-hint">内容与访问设置分开保存：正文、标题、描述和主题写入内容版本并需要内容基线；密码保护与过期时间使用访问版本确认。</p>
+        <p id="content-save-status" class="field-hint" role="status" aria-live="polite" hidden></p>
+        <button type="button" class="cyber-btn cyber-btn-secondary" id="content-save-discard" hidden>放弃待确认请求（保留稿件）</button>
       </div>
     </form>
   </section>
@@ -246,6 +248,7 @@
 <script src="/js/admin-favorite.js"></script>
 <script src="/js/admin-time.js"></script>
 <script src="/js/theme-sampler.js"></script>
+<script src="/js/publishing-request.js"></script>
 <script src="/js/source-diff.js"></script>
 <script src="/js/admin-detail.js"></script>
 <%- include('partials/footer', { page }) %>

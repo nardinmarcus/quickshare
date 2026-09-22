@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="<%= config.uiTheme %>"<% if (typeof page !== 'undefined') { %> data-page="<%= page %>"<% } %>>
+<html lang="zh-CN" data-theme="<%= config.uiTheme %>"<% if (typeof page !== 'undefined') { %> data-page="<%= page %>"<% } %><% if (typeof dashboardSessionTag !== 'undefined' && dashboardSessionTag) { %> data-dashboard-session-tag="<%= dashboardSessionTag %>"<% } %>>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">

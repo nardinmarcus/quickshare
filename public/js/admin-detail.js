@@ -50,7 +50,10 @@
   let baselineTextareaValue = null;
   // The remote state behind the currently displayed conflict, if any.
   let conflictRemote = null;
+  let confirmedContentBaseline = null;
   let saveKind = 'content';
+  const PublishingRequest = window.QuickSharePublishingRequest;
+  const CONTENT_SAVE_KIND = 'content-save';
 
   function csrfToken() {
     const meta = document.querySelector('meta[name="csrf-token"]');
@@ -130,6 +133,7 @@
   }
 
   function resetForm() {
+    confirmedContentBaseline = null;
     document.getElementById('edit-title').value = originalData.title || '';
     document.getElementById('edit-description').value = originalData.description || '';
     expiresInput.value = originalData.expiresAt
@@ -160,6 +164,7 @@
     contentTextarea.removeAttribute('readonly');
     contentTextarea.classList.add('admin-content-editable');
     updatePasswordInputVisibility();
+    refreshContentSaveStatus();
     document.getElementById('edit-title').focus();
   }
 
@@ -226,6 +231,47 @@
     };
     updateViewMode(originalData);
     resetRenderedPreview();
+  }
+
+  // The exact draft key a content save would submit under: the candidate
+  // bytes, the metadata values and the EXPECTED baseline. Identical draft +
+  // baseline → retry the ORIGINAL request id; any divergence is a new
+  // explicit intent (#32 identity discipline, #33 application).
+  function contentSaveDraftKey(payload, ifMatch) {
+    return JSON.stringify([
+      CONTENT_SAVE_KIND,
+      originalData.id,
+      ifMatch,
+      payload.htmlContent,
+      payload.title,
+      payload.description,
+      themeSelect ? themeSelect.value : null
+    ]);
+  }
+
+  function contentSaveIntent() {
+    return PublishingRequest ? PublishingRequest.readDashboardIntent(CONTENT_SAVE_KIND, originalData.id) : null;
+  }
+
+  function refreshContentSaveStatus() {
+    const statusElement = document.getElementById('content-save-status');
+    if (!statusElement) return;
+    const intent = contentSaveIntent();
+    const discard = document.getElementById('content-save-discard');
+    if (discard) discard.hidden = !intent;
+    if (!intent) {
+      statusElement.hidden = true;
+      statusElement.textContent = '';
+      return;
+    }
+    const ifMatch = confirmedContentBaseline || contentIfMatch(originalData);
+    const draftKey = contentSaveDraftKey({
+      htmlContent: candidateBody(),
+      title: document.getElementById('edit-title').value.trim() || null,
+      description: document.getElementById('edit-description').value.trim() || null
+    }, ifMatch);
+    statusElement.textContent = PublishingRequest.dashboardIntentStatusMessage(intent, draftKey, '保存');
+    statusElement.hidden = false;
   }
 
   if (revokeBtn) revokeBtn.addEventListener('click', async function () {
@@ -306,8 +352,13 @@
   }
 
   async function saveContent(forceBaseline) {
-    const ifMatch = forceBaseline || contentIfMatch(originalData);
+    // Only the explicit conflict-resolution action can authorize this tag.
+    // Keep it after transport failure so either save control retries the
+    // very same intent, instead of silently reverting to the old baseline.
+    if (forceBaseline) confirmedContentBaseline = forceBaseline;
+    const ifMatch = confirmedContentBaseline || contentIfMatch(originalData);
     setSaving(true);
+    let claimedRequestId = null;
     try {
       const payload = {
         title: document.getElementById('edit-title').value.trim() || null,
@@ -323,24 +374,70 @@
       // a silent merge that would keep a remote body under a new baseline.
       payload.htmlContent = candidateBody();
 
+      // One explicit save intent carries one client-generated UUID bound to
+      // the dashboard session: an unconfirmed (lost-response) save retries
+      // with its ORIGINAL id and confirms the committed result instead of
+      // minting a second version; an orphaned intent from another dashboard
+      // session can never be claimed here.
+      if (PublishingRequest) {
+        const claim = PublishingRequest.claimDashboardIntentId({
+          kind: CONTENT_SAVE_KIND,
+          shareId: originalData.id,
+          draftKey: contentSaveDraftKey(payload, ifMatch),
+          summary: { title: payload.title || originalData.title || '' }
+        });
+        if (claim.mode === 'blocked') {
+          Toast.error('存在属于其他后台会话的未确认保存，本次提交已被阻止；可在管理后台按请求标识核对。');
+          return;
+        }
+        if (PublishingRequest.consumeDashboardReplaced(CONTENT_SAVE_KIND, originalData.id)) {
+          Toast.success('当前内容与上次未确认请求不同：将以新请求提交');
+        }
+        claimedRequestId = claim.requestId;
+      }
+      refreshContentSaveStatus();
+
       const response = await fetch('/admin/pages/' + encodeURIComponent(originalData.id), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
           'X-CSRF-Token': csrfToken(),
-          'If-Match': ifMatch
+          'If-Match': ifMatch,
+          ...(claimedRequestId ? { 'Idempotency-Key': claimedRequestId } : {})
         },
         body: JSON.stringify(payload)
       });
-      const data = await response.json();
+      const data = await response.json().catch(() => null);
 
-      if (response.status === 412 && data.code === 'CONTENT_REVISION_CONFLICT') {
+      if (response.status === 412 && data && data.code === 'CONTENT_REVISION_CONFLICT') {
+        // Keep both draft and request identity. The conflict UI alone owns
+        // the explicit decision to save against a different baseline.
         showConflict(data.current);
         return;
       }
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || '保存内容失败');
+      if (!response.ok || !data || !data.success || !data.page) {
+        if (response.status === 409 && data && data.code === 'REQUEST_ID_CONFLICT') {
+          // The original id is bound to a different committed operation.
+          // Keep the intent (never rotate automatically); the user decides.
+          Toast.error('该请求标识已绑定不同内容：请刷新页面或放弃原请求后再保存。');
+          return;
+        }
+        // Never infer non-commit from a failed/truncated response; retain
+        // the original id for manual retry, including after 401/403/5xx.
+        throw new Error((data && data.error) || '保存结果未确认，稿件与原请求标识已保留');
+      }
+
+      if (PublishingRequest) PublishingRequest.confirmDashboardCompleted(CONTENT_SAVE_KIND, originalData.id);
+
+      if (data.replayed) {
+        // The retried request confirmed the ORIGINAL commit: reload so the
+        // view reflects the share's true current state instead of dressing
+        // the (possibly superseded) result revision up as current.
+        exitEditMode();
+        Toast.success('已确认上次保存的结果（第 ' + data.page.currentRevision + ' 版），页面即将刷新');
+        window.location.reload();
+        return;
       }
 
       applySavedPage(data.page);
@@ -348,9 +445,19 @@
       exitEditMode();
       Toast.success('内容已保存');
     } catch (error) {
-      Toast.error(error.message || '保存内容失败');
+      // No response at all: the outcome is genuinely unknown. The draft and
+      // the ORIGINAL request id are preserved; a retry confirms or re-runs
+      // the same operation without a second version.
+      if (!claimedRequestId) {
+        Toast.error(error.message || '保存内容失败');
+      } else if (error instanceof TypeError || error.message === 'Failed to fetch') {
+        Toast.error('网络失败，保存结果未知：稿件与原请求标识已保留，再次点击「保存内容」将以原请求重试');
+      } else {
+        Toast.error(error.message || '保存内容失败');
+      }
     } finally {
       setSaving(false);
+      refreshContentSaveStatus();
     }
   }
 
@@ -485,14 +592,30 @@
   });
 
   conflictSaveMineBtn.addEventListener('click', function () {
-    if (!conflictRemote) return;
+    if (!conflictRemote || saveContentBtn.disabled) return;
     // Explicit overwrite after the owner reviewed the difference: the fresh
     // baseline comes from the conflict payload, never fetched silently.
     saveContent('"content:' + originalData.id + ':' + conflictRemote.currentRevision + '"');
   });
 
+  const discardSaveBtn = document.getElementById('content-save-discard');
+  if (discardSaveBtn) discardSaveBtn.addEventListener('click', function () {
+    if (saveContentBtn.disabled || !PublishingRequest) return;
+    if (!window.confirm('放弃待确认请求不会撤销服务器上可能已完成的保存。请先按请求标识核对；继续将保留稿件，但下次保存会使用新请求标识。')) return;
+    PublishingRequest.discardDashboardIntent(CONTENT_SAVE_KIND, originalData.id);
+    refreshContentSaveStatus();
+  });
+
   saveContentBtn.addEventListener('click', function () { saveKind = 'content'; });
   saveAccessBtn.addEventListener('click', function () { saveKind = 'access'; });
+
+  // The pending-status line follows the draft (#32 wording discipline): as
+  // soon as the candidate diverges from the unconfirmed request, the copy
+  // stops claiming an original-request retry and describes the new intent.
+  [document.getElementById('edit-title'), document.getElementById('edit-description'), contentTextarea, themeSelect]
+    .forEach(function (field) {
+      if (field) field.addEventListener('input', refreshContentSaveStatus);
+    });
 
   editForm.addEventListener('submit', async function (event) {
     event.preventDefault();
