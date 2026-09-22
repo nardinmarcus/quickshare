@@ -16,7 +16,7 @@ npm run backup:check
 该命令端到端完成一次完整演练，并输出快照点与真实耗时：
 
 1. 启动两台仅绑定 `127.0.0.1` 的一次性 PostgreSQL 17 容器（`issue27-pg-src` / `issue27-pg-restore`），创建 `issue27_src_test` / `issue27_restore_test` 数据库（执行者专属环境可用 scratch harness 覆盖 `FIXTURE` 的运行地址/身份后再 `runDrill`，生产源码不携带执行者身份）；
-2. 在源库执行真实迁移并植入合成夹具（四类页面、主题、收藏、密码保护、过期、managed Key、审计、站点设置；迁移 `007` 起还包含内容 Revision 快照、超过 2^53 的精确 `current_revision` 指针与非默认 `published=FALSE` 页面；迁移 `008` 起还包含发布操作记录：一条已提交创建（带加密回执）与一条删除墓碑）；
+2. 在源库执行真实迁移并植入合成夹具（四类页面、主题、收藏、密码保护、过期、managed Key、审计、站点设置；迁移 `007` 起还包含内容 Revision 快照、超过 2^53 的精确 `current_revision` 指针与非默认 `published=FALSE` 页面；迁移 `008` 起还包含发布操作记录：一条已提交创建（带加密回执）与一条删除墓碑；迁移 `009` 起还包含 #34 清除夹具：一条真实清除墓碑——载荷与快照哈希为 NULL、`purged_at` 已记录——以及一条结果版本即该墓碑的发布操作，其回执已按 Share+Revision 清除并带 `purged_at`）；
 3. `scripts/backup-db.js` 执行 `pg_dump -Fc`，记录快照点（时间戳 + WAL LSN）与耗时；
 4. `scripts/restore-db.js` 校验 dump SHA-256 后用 `pg_restore` 重建隔离库，记录耗时；
 5. `scripts/verify-backup.js` 用两条独立连接核对恢复结果，输出验证报告。
@@ -58,7 +58,8 @@ npm run verify:backup -- --source-url <src> --restore-url <restore> \
 - 密码**校验与回显**双重能力：恢复库上 `password_hash` 可验证夹具密码，`encrypted_password` 可用夹具会话密钥解密回显；
 - managed Key 行与 secret 校验，显式比较 `credential_version`；迁移 `006` 后夹具使用 `'9007199254740993'`，验证原生恢复的 BIGINT 十进制字符串保真及仅版本篡改时失败；
 - 审计日志（快照点两侧一致）；
-- 发布操作记录（迁移 `008` 起的 `publish_operations` 全表逐列对比：`(actor_namespace, request_id)` 主键、HMAC 请求摘要、加密回执 `receipt_encrypted`、删除墓碑 `deleted_at`；夹具含一条已提交创建（带加密回执）与一条墓碑（回执已清）；恢复库单独篡改回执或墓碑位时 `publishOperations` 检查必须按字段与 request id 具名失败）；
+- 发布操作记录（迁移 `008` 起的 `publish_operations` 全表逐列对比：`(actor_namespace, request_id)` 主键、HMAC 请求摘要、加密回执 `receipt_encrypted`、删除墓碑 `deleted_at`；迁移 `009` 起加入回执清除时刻 `purged_at`。夹具含一条已提交创建（带加密回执）、一条删除墓碑（回执已清）与一条 #34 回执被清除的操作（`receipt_encrypted=NULL`、`purged_at` 已记录）；恢复库单独篡改回执、墓碑位或 `purged_at` 时 `publishOperations` 检查必须按字段与 request id 具名失败）；
+- 内容快照墓碑（迁移 `009` 起的 `share_revisions.purged_at`）：墓碑行按身份/来源/时间/`purged_at` 列对比；任何载荷或快照哈希字节在墓碑上「复活」都按字段具名失败（`revision-purge-tombstones` 覆盖项），无载荷快照绝不与存活正文重算哈希比对；`shareRevisions` 检查报告 `tombstoneCount`/`liveCount`；
 - 站点设置全行（迁移 `005` 后夹具将 `publishing_writes_paused` 置为非默认 `true`，必须完整恢复；恢复库单独篡改此值时 `siteSettings` 检查必须失败）；
 - 迁移台账（恢复库、源库与本地 `db/migrations` 三方一致，checksum 不符即失败）。
 
@@ -70,7 +71,7 @@ npm run verify:backup -- --source-url <src> --restore-url <restore> \
 
 - 恢复脚本只写数据库，绝不连接应用；验证报告永远输出 `safeToServe: false`、`isolation: offline-by-default`。恢复出的数据库默认不对外服务。
 - **报告不存在“not-required”结果。**验证对快照点之后的撤销/清除给出两种结论，均需所有者处理后显式传入 `--reconciled`（布尔 flag，不接值）才退出 0：
-  - `unreconciled`：检测到快照点之后的撤销/清除事件——`page.delete`、`page.delete.batch`、`api_key.delete`、`api_key.rotate`，以及携带 `fields` 含 `isProtected`/`passwordHash`/`encryptedPassword`/`expiresAt`/`revokeAccess` 的 `page.update`（即应用真实发出的审计词表，`fields` 来自 `JSON.stringify({ fields: Object.keys(updateOptions) })`）；
+  - `unreconciled`：检测到快照点之后的撤销/清除事件——`page.delete`、`page.delete.batch`、`page.revision.purge`（#34 版本清除）、`api_key.delete`、`api_key.rotate`，以及携带 `fields` 含 `isProtected`/`passwordHash`/`encryptedPassword`/`expiresAt`/`revokeAccess` 的 `page.update`（即应用真实发出的审计词表，`fields` 来自 `JSON.stringify({ fields: Object.keys(updateOptions) })`）；
   - `owner-review-required`：未检测到事件也**不构成“无事发生”的证明**——部分策略路由（如旧版 `POST /api/pages/:id/protect`）不写审计行，审计历史无法证明 absence，因此任何恢复默认都需要所有者复核后显式确认。
 - 两种状态下恢复库都保持离线；`--reconciled` 只表示“所有者已完成人工复核”这一显式动作，不改变 `safeToServe: false` 的报告值。演练脚本（`npm run backup:check`）因夹具完全合成且历史已知，由编排器自身传入该 flag 并在摘要中如实记录 reconciliation 状态。
 - 当前 schema 尚无 published/disabled 字段；「恢复即重新上线」永远不是本工具的结论，需要单独的所有者决策与后续票的机制。

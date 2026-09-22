@@ -57,7 +57,7 @@ env -u DATABASE_URL -u POSTGRES_URL -u DATABASE_MIGRATION_URL \
 
 在 #30 快照与冲突差异之上，#31 交付所有者的历史浏览/比较/单版预览，全部只读，不新增任何 schema、迁移或持久化字段。
 
-- **仓储层**：两 Adapter 新增 `listContentRevisionPage(shareId, { limit, offset })`（默认 20、上限 100、按精确 BIGINT 版本号倒序，列表投影仅含 `share_id/revision/created_at/source/restored_from`，SQL 与内存路径都不读正文）与 `getContentRevision(shareId, revision)`（先以 `isContentRevision` 校验再读单行完整快照）。旧 `listContentRevisions`（升序、含正文，供 backfill/测试）保持不变。
+- **仓储层**：两 Adapter 新增 `listContentRevisionPage(shareId, { limit, offset })`（默认 20、上限 100、按精确 BIGINT 版本号倒序，列表投影仅含 `share_id/revision/created_at/source/restored_from`（迁移 `009` 起另加只读墓碑标记 `purged_at`），SQL 与内存路径都不读正文）与 `getContentRevision(shareId, revision)`（先以 `isContentRevision` 校验再读单行完整快照）。旧 `listContentRevisions`（升序、含正文，供 backfill/测试）保持不变。
 - **路由**（全部在 `/admin` 的 `private, no-store` 之下，认证先于任何敏感读取）：
   - `GET /admin/pages/:id/history`：`requireDashboardAdmin`，服务端渲染历史页（首页元信息表格 + 上一页/下一页链接）。
   - `GET /admin/pages/:id/revisions`：`requireDashboardApiAdmin` 401 JSON，仅元信息分页；`page/limit` 非法回退默认，`limit>100` 截到 100。
@@ -77,3 +77,15 @@ env -u DATABASE_URL -u POSTGRES_URL -u DATABASE_MIGRATION_URL \
 - **保存/恢复幂等**：两个动作复用 #32 操作台账，`action='content-update'|'restore'`、`target=Share ID`，命名空间仍为 `dashboard-session:<fingerprint>`。摘要覆盖预期版本、字段存在性与规范化输入（content-update 含精确候选字节；Markdown 主题以提交字面量入摘要，避免事务前读 Share）。重放先于任何 Share 读与 CAS：已提交请求以旧 If-Match 重放确认原结果（`replayed:true`，响应内容来自提交时的快照行 + 台账记录），不误报首次失败；同标识不同输入 `409`；结果已删除 `410`。content-update 的加密回执存 `changed` 与提交时的策略展示值；生成密码的回显规则与 #32 创建相同（访问策略未变才回显）。
 - **前端身份**：`publishing-request.js` 新增按（kind, share）分桶的后台意图：相同草稿+基线重试复用原请求标识；草稿变化轮换新标识并提示；属于其他后台会话（session tag 不符）的意图被阻止认领，保持只读。保存/恢复的未确认（丢响应）状态保留原稿与原 ID，`401/403/409/410/412/428` 不自动重试、不换基线；详情页编辑表单显示四态待定状态行。组合保存（内容+访问字段）与纯访问保存不接受请求标识（`400 UNSUPPORTED_REQUEST_ID_SCOPE`），避免部分重放。
 - **验证入口**：Memory HTTP（history-routes/admin-routes）、前端 VM（content-revision-ui/history-ui/publishing-request-ui）、真实 PostgreSQL（postgres-operations：两条不同 backend PID 的竞争、COMMIT 时失败与成功 COMMIT 后响应失败的分别注入、连接切断、旧标签重放、no-op、大数版本、维护闸）。备份 drill fixture 包含 `restore`/`content-update` 操作行与具名回执篡改。浏览器验收需另外提供绑定源码与新 listener 的编辑/恢复、丢响应重试、no-op、冲突保稿和移动端截图；本手册不是这些检查已通过的证明。
+
+## #34 增量：Owner 清除非当前版本（T10）
+
+在 #30/#31/#33 之上，#34 交付所有者在后台永久清除一个非当前版本：同事务移除该版本在线载荷与指向它的敏感操作回执，只保留不含内容的墓碑。无 API Key 或 CLI 入口。
+
+- **迁移 `009_share_revision_purge.sql`**：`share_revisions` 增加 `purged_at BIGINT` 并将 `html_content`、`snapshot_hash` 放宽为可空（仅清除路径写 NULL；存活行永远带真实字节，空正文是空字符串，绝不与墓碑混淆）；`publish_operations` 增加 `purged_at BIGINT`。`deleted_at` 仍专属于整份 Share 删除墓碑（#32），两种破坏性生命周期在备份与审计中可区分。迁移保持 additive，无 down migration。
+- **清除语义**：`POST /admin/pages/:id/revisions/:revision/purge`（`requireDashboardApiAdmin` + CSRF + JSON `{ confirm: "<Share ID>:<Revision>" }`，确认串必须逐字命名目标）。发布事务内先锁 Share 行，再在同一锁内复检当前指针：当前版本 409（`CURRENT_REVISION_PURGE_FORBIDDEN`），绝不依预先读取放行。清除将载荷四字段与 `snapshot_hash` 置 NULL 并写 `purged_at`；同事务把所有 `result_share_id`+`result_revision` 精确指向该版本的 `publish_operations` 回执置 NULL 并记 `purged_at`（跨 actor 命名空间；其他版本与其他 Share 的回执不动，绝不改写 `result_revision`）。同事务写审计 `page.revision.purge`（仅非内容身份字段）。重复清除同一墓碑是 `200 changed:false alreadyPurged:true` 的确认成功：无重复副作用、不新增审计，也绝不表现为失败。
+- **墓碑读面**：单版读取与预览对墓碑返回 410（`REVISION_PURGED`，`private, no-store`），只确认非内容身份；历史列表每行携带 `purged` 布尔（服务端渲染「已清除」状态行，原稿/预览/恢复/清除动作全部移除）。恢复来源校验要求字符串载荷，墓碑一律 `404 RESTORE_SOURCE_INVALID`；清除与恢复/保存的竞争在同一 Share 行锁内串行，不能绕过当前版本或来源检查。版本号永不复用。
+- **重放闭环**：提交结果的版本随后被清除时，create/content-update/restore 的重放一律 `410 RESULT_UNAVAILABLE`（确认操作发生过，但不回传任何载荷或回执字节、不重建）。
+- **前端**：`admin-history.js` 新增清除对话框——逐字确认输入门控确认按钮，Enter（确认匹配时）与 Escape（空闲时）键盘可达，busy 期间两个键与取消均失效；成功文案只承诺「在线保存的该版本内容已清除、仅保留墓碑」，并明示其他 Revision 中相同片段、离线备份与接收者下载不受影响；已清除行的信息动作与比较 410 目标给出精确状态，绝不冒充「无差异」。
+- **备份**：verify 清单新增 `revision-purge-tombstones` 与 `operation-receipt-purges`；`shareRevisions` 对比列含 `purged_at`，墓碑上任何载荷字节复活按字段具名失败；`page.revision.purge` 进入快照点后硬撤销审计词表。drill 夹具含一条真实墓碑与一条回执被清除的操作，具名篡改（墓碑复活/回执复活）必须失败、revert 后验 VERIFY 通过。
+- **验证入口**：Memory HTTP（revision-purge）、前端 VM（revision-purge-ui：确认门控、Enter/Escape、busy 保护、拒绝与网络未知、重复清除文案、410 状态）、真实 PostgreSQL（postgres-purge：迁移 009 列、事务原子性注入回滚、双连接行锁竞争、BIGINT 精确版本、跨命名空间回执隔离、重复幂等）、备份集成（postgres-backup 墓碑/回执具名篡改）。浏览器验收需另外提供绑定源码的逐字确认、当前版本禁用与 390/明暗截图；本手册不是这些检查已通过的证明。

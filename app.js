@@ -829,6 +829,19 @@ async function runIdempotentCreate({
         });
       }
 
+      // #34: the creation's committed result revision was later purged. The
+      // operation is confirmed but its result payload (and receipt) is gone;
+      // answer result-unavailable without leaking receipt metadata.
+      if (outcome.replayPurged) {
+        return (res) => res.status(410).json({
+          success: false,
+          code: 'RESULT_UNAVAILABLE',
+          requestId,
+          retryable: false,
+          error: '该操作已提交，但其结果版本已被清除，无法再次确认'
+        });
+      }
+
       // Confirmed replay: never re-executes writes. Every response metadata
       // field is the ORIGINAL committed result from the encrypted receipt —
       // a create replay never reads the owner's later edits. The generated
@@ -1629,11 +1642,14 @@ function buildHistoryUrl(id, page, limit) {
 }
 
 function historyRevisionProjection(row) {
+  const purged = row.purged_at !== null && row.purged_at !== undefined;
   return {
     revision: String(row.revision),
     createdAt: Number(row.created_at),
     source: row.source || null,
-    restoredFrom: row.restored_from === null || row.restored_from === undefined ? null : String(row.restored_from)
+    restoredFrom: row.restored_from === null || row.restored_from === undefined ? null : String(row.restored_from),
+    purged,
+    ...(purged ? { purgedAt: Number(row.purged_at) } : {})
   };
 }
 
@@ -1714,7 +1730,7 @@ app.get('/admin/pages/:id/revisions', requireDashboardApiAdmin, async (req, res)
   }
 });
 
-app.get('/admin/pages/:id/revisions/:revision', requireDashboardApiAdmin, async (req, res) => {
+app.get('/admin/pages/:id/revisions/:revision', requireDashboardApiAdmin, privateNoStore, async (req, res) => {
   try {
     if (!isContentRevision(req.params.revision)) {
       return res.status(400).json({ success: false, code: 'INVALID_CONTENT_REVISION', error: 'content revision must be a positive decimal string' });
@@ -1723,6 +1739,26 @@ app.get('/admin/pages/:id/revisions/:revision', requireDashboardApiAdmin, async 
     const row = await pageRepository.getContentRevision(req.params.id, req.params.revision);
     if (!row) {
       return res.status(404).json({ success: false, error: 'Revision not found' });
+    }
+
+    // #34: a purged tombstone is GONE, never empty content. The response
+    // confirms only the non-content identity of the tombstone; no payload
+    // byte and no snapshot hash returns, and the response stays unshared.
+    if (row.purged_at !== null && row.purged_at !== undefined) {
+      return res.status(410).json({
+        success: false,
+        code: 'REVISION_PURGED',
+        error: '该版本内容已被永久清除，仅保留墓碑',
+        revision: {
+          shareId: row.share_id,
+          revision: String(row.revision),
+          createdAt: Number(row.created_at),
+          source: row.source || null,
+          restoredFrom: row.restored_from === null || row.restored_from === undefined ? null : String(row.restored_from),
+          purged: true,
+          purgedAt: Number(row.purged_at)
+        }
+      });
     }
 
     return res.json({
@@ -1751,7 +1787,7 @@ app.get('/admin/pages/:id/revisions/:revision', requireDashboardApiAdmin, async 
   }
 });
 
-app.get('/admin/pages/:id/revisions/:revision/preview', requireDashboardAdmin, async (req, res) => {
+app.get('/admin/pages/:id/revisions/:revision/preview', requireDashboardAdmin, privateNoStore, async (req, res) => {
   try {
     if (!isContentRevision(req.params.revision)) {
       return res.status(400).render('error', {
@@ -1767,6 +1803,16 @@ app.get('/admin/pages/:id/revisions/:revision/preview', requireDashboardAdmin, a
         title: 'Revision Not Found',
         page: 'error-page',
         message: 'The requested content revision does not exist'
+      });
+    }
+
+    // #34: a purged tombstone has no renderable payload. The preview is a
+    // 410 gone page carrying no payload-derived bytes.
+    if (row.purged_at !== null && row.purged_at !== undefined) {
+      return res.status(410).render('error', {
+        title: 'Revision Purged',
+        page: 'error-page',
+        message: '该版本内容已被永久清除，仅保留墓碑，无法预览'
       });
     }
 
@@ -1868,6 +1914,15 @@ function adminPageProjection(page) {
 function contentReplayResponse(outcome, { requestId, action }) {
   const { record, revisionRow, page: livePage, accessUnchanged } = outcome;
   const receipt = outcome.receipt || {};
+  // #34: a committed result whose revision was LATER purged can never serve
+  // the purged snapshot. The result payload must exist with real string
+  // bytes; a tombstone (or any payload-less row) makes the committed result
+  // unavailable — replay answers 410 without leaking receipt metadata and
+  // without rebuilding anything.
+  if (revisionRow.purged_at !== null && revisionRow.purged_at !== undefined
+    || typeof revisionRow.html_content !== 'string') {
+    return { replayPurged: true, record };
+  }
   const page = adminPageProjection({
     id: record.result_share_id,
     title: revisionRow.title,
@@ -1956,6 +2011,17 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
             requestId: requestIdHeader,
             retryable: false,
             error: '该操作已提交，但其结果已被永久删除'
+          });
+        }
+        // #34: the committed result revision was later purged — the replay
+        // confirms the operation happened but the result payload is gone.
+        if (outcome.replayPurged) {
+          return (res) => res.status(410).json({
+            success: false,
+            code: 'RESULT_UNAVAILABLE',
+            requestId: requestIdHeader,
+            retryable: false,
+            error: '该操作已提交，但其结果版本已被清除，无法再次确认'
           });
         }
         return contentReplayResponse(outcome, { requestId: requestIdHeader, action: 'content-update' });
@@ -2178,6 +2244,17 @@ app.post('/admin/pages/:id/restore', requireDashboardApiAdmin, parseShareJson, r
             error: '该操作已提交，但其结果已被永久删除'
           });
         }
+        // #34: the committed result revision was later purged — the replay
+        // confirms the operation happened but the result payload is gone.
+        if (outcome.replayPurged) {
+          return (res) => res.status(410).json({
+            success: false,
+            code: 'RESULT_UNAVAILABLE',
+            requestId: requestIdHeader,
+            retryable: false,
+            error: '该操作已提交，但其结果版本已被清除，无法再次确认'
+          });
+        }
         return contentReplayResponse(outcome, { requestId: requestIdHeader, action: 'restore' });
       }
 
@@ -2263,6 +2340,104 @@ app.post('/admin/pages/:id/restore', requireDashboardApiAdmin, parseShareJson, r
     }
     console.error('Restore page revision failed:', error);
     return res.status(500).json({ success: false, error: 'Failed to restore revision' });
+  }
+});
+
+// ---- Owner revision purge (#34): dashboard session + CSRF only. ----
+//
+// One atomic publishing transaction: the Share row is locked, the target is
+// re-checked against the CURRENT pointer (never a pre-read), the snapshot
+// payload and the sensitive receipt bytes of every operation whose committed
+// result is this exact Share+Revision are scrubbed, and the audit entry
+// commits together with them. A repeat purge of the same tombstone confirms
+// success (unchanged, no duplicate destructive effects); the purge of a
+// now-purged target must never read back as a failure.
+const PURGE_AUDIT_ACTION = 'page.revision.purge';
+
+function purgeTombstoneProjection(id, revision, purgedAt) {
+  return {
+    shareId: id,
+    revision: String(revision),
+    purgedAt: Number(purgedAt)
+  };
+}
+
+app.post('/admin/pages/:id/revisions/:revision/purge', requireDashboardApiAdmin, parseSmallJsonBody, requireDashboardCsrf, async (req, res) => {
+  try {
+    // Identity of intent: the confirmation string must name the exact Share
+    // and revision the dialog showed. Format errors precede the transaction.
+    if (!isContentRevision(req.params.revision)) {
+      return res.status(400).json({ success: false, code: 'INVALID_CONTENT_REVISION', error: 'content revision must be a positive decimal string' });
+    }
+    const revision = String(req.params.revision);
+    const confirm = req.body?.confirm;
+    const expectedConfirm = `${req.params.id}:${revision}`;
+    if (confirm !== expectedConfirm) {
+      return res.status(400).json({
+        success: false,
+        code: 'PURGE_CONFIRMATION_MISMATCH',
+        error: '确认信息与目标不符：必须包含准确的 Share ID 与版本号'
+      });
+    }
+
+    const respond = await publishing.run(async (repository) => {
+      const result = await repository.purgeContentRevision(req.params.id, revision);
+
+      if (!result.found) {
+        return (res) => res.status(404).json({ success: false, code: 'SHARE_NOT_FOUND', error: 'Share not found' });
+      }
+      if (result.current) {
+        return (res) => res.status(409).json({
+          success: false,
+          code: 'CURRENT_REVISION_PURGE_FORBIDDEN',
+          error: '当前版本不能清除：只能清除非当前的历史版本'
+        });
+      }
+      if (result.revision === false) {
+        return (res) => res.status(404).json({ success: false, code: 'REVISION_NOT_FOUND', error: 'Revision not found' });
+      }
+
+      // Tombstone projection: only non-content identity fields, exactly what
+      // the dialog confirmed — never any surviving payload.
+      const tombstone = purgeTombstoneProjection(req.params.id, revision, result.purgedAt);
+
+      if (result.alreadyPurged) {
+        // Idempotent repeat: the tombstone is confirmed, nothing happens
+        // again. No duplicate audit entry, no second destructive effect, and
+        // — importantly — no failure signal: the earlier purge succeeded.
+        return (res) => res.status(200).json({
+          success: true,
+          changed: false,
+          alreadyPurged: true,
+          purged: tombstone,
+          message: '该版本此前已清除；本次确认未产生新的清除副作用。在线保存的该版本内容已不可读取。'
+        });
+      }
+
+      await repository.createAuditLog({
+        action: PURGE_AUDIT_ACTION,
+        pageId: req.params.id,
+        // Audit carries ONLY non-content identity; never the payload.
+        details: JSON.stringify({ revision, purgedAt: result.purgedAt }),
+        ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+      });
+
+      return (res) => res.status(200).json({
+        success: true,
+        changed: true,
+        alreadyPurged: false,
+        purged: tombstone,
+        message: '已清除在线保存的该版本内容，只保留不含正文的墓碑；其他版本、离线备份与接收者下载不受影响。'
+      });
+    });
+    return respond(res);
+  } catch (error) {
+    if (sendPublishingError(res, error)) return;
+    if (error.code === 'INVALID_CONTENT_REVISION') {
+      return res.status(error.status).json({ success: false, code: error.code, error: error.message });
+    }
+    console.error('Revision purge failed:', error);
+    return res.status(500).json({ success: false, error: 'Failed to purge revision' });
   }
 });
 

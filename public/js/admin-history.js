@@ -199,6 +199,149 @@
     });
   }
 
+  // ---- Owner revision purge (#34): explicit two-step confirmation ----
+  const purgeDialog = document.getElementById('purge-dialog');
+  const purgeSummary = document.getElementById('purge-summary');
+  const purgeConfirmExpected = document.getElementById('purge-confirm-expected');
+  const purgeConfirmInput = document.getElementById('purge-confirm-input');
+  const purgeConfirmBtn = document.getElementById('purge-confirm');
+  const purgeCancelBtn = document.getElementById('purge-cancel');
+  const purgeStatus = document.getElementById('purge-status');
+  let purgeTargetRevision = null;
+  let purgeBusy = false;
+
+  function purgeConfirmString() {
+    return share.id + ':' + purgeTargetRevision;
+  }
+
+  function refreshPurgeConfirmState() {
+    if (!purgeConfirmBtn || !purgeConfirmInput) return;
+    const matches = purgeTargetRevision !== null && purgeConfirmInput.value.trim() === purgeConfirmString();
+    purgeConfirmBtn.disabled = !matches || purgeBusy;
+    purgeConfirmBtn.setAttribute('aria-disabled', String(!matches || purgeBusy));
+  }
+
+  function setPurgeStatus(text) {
+    if (purgeStatus) {
+      purgeStatus.textContent = text || '';
+      purgeStatus.hidden = !text;
+    }
+  }
+
+  function openPurgeDialog(revision) {
+    if (purgeBusy) return;
+    purgeTargetRevision = revision;
+    if (purgeSummary) {
+      purgeSummary.textContent = '将永久清除 Share ' + share.id + ' 的版本 ' + revision
+        + '。仅清除在线保存的这一版本；其他版本、离线备份与接收者下载不受影响。';
+    }
+    if (purgeConfirmExpected) purgeConfirmExpected.textContent = purgeConfirmString();
+    if (purgeConfirmInput) purgeConfirmInput.value = '';
+    setPurgeStatus('');
+    refreshPurgeConfirmState();
+    if (purgeDialog) {
+      purgeDialog.hidden = false;
+      if (purgeConfirmInput) purgeConfirmInput.focus();
+    }
+  }
+
+  function closePurgeDialog() {
+    purgeTargetRevision = null;
+    purgeBusy = false;
+    if (purgeConfirmBtn) {
+      purgeConfirmBtn.disabled = true;
+      purgeConfirmBtn.setAttribute('aria-disabled', 'true');
+      purgeConfirmBtn.textContent = '确认清除';
+      purgeConfirmBtn.removeAttribute('aria-busy');
+    }
+    if (purgeConfirmInput) purgeConfirmInput.value = '';
+    setPurgeStatus('');
+    if (purgeDialog) purgeDialog.hidden = true;
+  }
+
+  async function confirmPurge() {
+    if (purgeBusy || !purgeTargetRevision) return;
+    if (!purgeConfirmInput || purgeConfirmInput.value.trim() !== purgeConfirmString()) return;
+    const revision = purgeTargetRevision;
+    purgeBusy = true;
+    purgeConfirmBtn.disabled = true;
+    purgeConfirmBtn.setAttribute('aria-busy', 'true');
+    purgeConfirmBtn.textContent = '正在清除…';
+    if (purgeCancelBtn) purgeCancelBtn.disabled = true;
+    try {
+      const response = await fetch('/admin/pages/' + encodeURIComponent(share.id) + '/revisions/' + encodeURIComponent(revision) + '/purge', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-CSRF-Token': csrfToken()
+        },
+        body: JSON.stringify({ confirm: purgeConfirmString() })
+      });
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok || !data || data.success !== true) {
+        // A refusal (409 current-version, 400 confirmation mismatch, 404…)
+        // keeps the dialog open with the real reason; nothing was purged.
+        setPurgeBusy(false);
+        setPurgeStatus((data && data.error) || '清除失败，请稍后重试');
+        return;
+      }
+
+      const already = Boolean(data.alreadyPurged);
+      Toast.success(already
+        ? '版本 ' + revision + ' 此前已清除；本次确认未产生新的副作用'
+        : '已清除版本 ' + revision + ' 在线保存的内容（仅保留墓碑）');
+      closePurgeDialog();
+      // The server-rendered list is stale the moment a purge commits; reload
+      // for an honest tombstone view.
+      window.location.reload();
+    } catch (error) {
+      setPurgeBusy(false);
+      setPurgeStatus('网络失败，清除结果未知：请刷新页面核对该版本的当前状态后再操作。');
+    }
+  }
+
+  function setPurgeBusy(busy) {
+    purgeBusy = busy;
+    if (purgeConfirmBtn) {
+      purgeConfirmBtn.textContent = busy ? '正在清除…' : '确认清除';
+      purgeConfirmBtn.setAttribute('aria-busy', String(busy));
+    }
+    if (purgeCancelBtn) purgeCancelBtn.disabled = busy;
+    refreshPurgeConfirmState();
+  }
+
+  if (purgeConfirmInput) {
+    purgeConfirmInput.addEventListener('input', refreshPurgeConfirmState);
+    purgeConfirmInput.addEventListener('keydown', function (event) {
+      if (purgeBusy || !purgeTargetRevision) return;
+      if (event.key === 'Enter') {
+        // Explicit confirmation stays pointer+keyboard operable: Enter in the
+        // input submits ONLY when the typed confirmation matches exactly.
+        if (purgeConfirmInput.value.trim() === purgeConfirmString()) {
+          event.preventDefault();
+          confirmPurge();
+        }
+      } else if (event.key === 'Escape') {
+        // Escape cancels an idle intent; the top guard keeps a busy dialog
+        // (unknown purge outcome) open until its request resolves.
+        event.preventDefault();
+        closePurgeDialog();
+      }
+    });
+  }
+  if (purgeConfirmBtn) {
+    purgeConfirmBtn.addEventListener('click', function () {
+      return confirmPurge();
+    });
+  }
+  if (purgeCancelBtn) {
+    purgeCancelBtn.addEventListener('click', function () {
+      if (!purgeBusy) closePurgeDialog();
+    });
+  }
+
   const table = document.getElementById('history-table');
   const selectA = document.getElementById('compare-select-a');
   const selectB = document.getElementById('compare-select-b');
@@ -418,7 +561,11 @@
       }
     } catch (error) {
       if (token !== compareToken) return;
-      if (error.status === 404) {
+      if (error.status === 410) {
+        // #34: the target was purged (possibly while this comparison was in
+        // flight). The stale async output is cancelled above; say so exactly.
+        compareStatus.textContent = '版本 ' + error.revision + ' 的内容已被永久清除，无法比较；可用其他版本重新比较。';
+      } else if (error.status === 404) {
         compareStatus.textContent = '版本 ' + error.revision + ' 不存在或已不在历史中，请核对版本号。';
       } else if (error.status === 400) {
         compareStatus.textContent = '版本 ' + error.revision + ' 不是有效的版本号：仅接受正整数十进制。';
@@ -434,12 +581,21 @@
       if (!control) return;
       const revision = control.getAttribute('data-revision');
       if (!revision) return;
-      if (control.getAttribute('data-history-action') === 'preview') {
+      const action = control.getAttribute('data-history-action');
+      if (action === 'preview') {
         openPreview(revision);
-      } else if (control.getAttribute('data-history-action') === 'raw') {
+      } else if (action === 'raw') {
         await loadRaw(revision);
-      } else if (control.getAttribute('data-history-action') === 'restore') {
+      } else if (action === 'restore') {
         openRestoreDialog(revision);
+      } else if (action === 'purge') {
+        openPurgeDialog(revision);
+      } else if (action === 'purge-info') {
+        // A purged row: no payload action is possible. Point the owner at the
+        // truth without implying anything about other copies.
+        if (compareStatus) {
+          compareStatus.textContent = '版本 ' + revision + ' 的在线内容已清除（仅保留墓碑）；无法查看原稿、预览或恢复。其他版本与离线备份不受影响。';
+        }
       }
     });
   }

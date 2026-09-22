@@ -168,10 +168,11 @@ test('history list pages in descending order, metadata-only, with default 20 and
   assert.deepEqual(defaultsBody.revisions.map(item => item.revision)[0], '23', 'newest revision first');
   assert.deepEqual(defaultsBody.revisions.map(item => item.revision)[19], '4');
   for (const item of defaultsBody.revisions) {
-    assert.deepEqual(Object.keys(item).sort(), ['createdAt', 'restoredFrom', 'revision', 'source'],
+    assert.deepEqual(Object.keys(item).sort(), ['createdAt', 'purged', 'restoredFrom', 'revision', 'source'],
       'list items expose exactly the required metadata');
     assert.equal(typeof item.createdAt, 'number');
     assert.equal(item.restoredFrom, null);
+    assert.equal(item.purged, false, '#34: live rows report purged=false (a boolean, never a payload field)');
   }
   assert.ok(!defaults.text.includes('H31-P'), 'the list response never carries any body text');
 

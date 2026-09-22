@@ -42,6 +42,7 @@ const API_KEY_COMPARED_COLUMNS = Object.freeze([
 const HARD_REVOCATION_AUDIT_ACTIONS = new Set([
   'page.delete',
   'page.delete.batch',
+  'page.revision.purge',
   'api_key.delete',
   'api_key.rotate'
 ]);
@@ -65,19 +66,21 @@ const COVERED_OBJECTS = [
   'markdown-themes',
   'favorite-share',
   'share-revisions',
+  'revision-purge-tombstones',
   'revision-current-pointer',
   'password-verify-and-decrypt',
   'expiry',
   'managed-api-keys',
   'audit-logs',
   'publish-operations',
+  'operation-receipt-purges',
   'site-settings',
   'migration-ledger'
 ];
 
 const REVISION_COMPARED_COLUMNS = Object.freeze([
   'share_id', 'revision', 'html_content', 'code_type', 'title', 'description', 'markdown_theme', 'created_at',
-  'snapshot_hash', 'source', 'actor', 'restored_from'
+  'snapshot_hash', 'source', 'actor', 'restored_from', 'purged_at'
 ]);
 
 const POINTER_CONTENT_COLUMNS = Object.freeze([
@@ -86,11 +89,13 @@ const POINTER_CONTENT_COLUMNS = Object.freeze([
 
 // Publish operation records (#32): every column including the encrypted
 // receipt travels byte-identically; deleted-at tombstones restore as
-// tombstones. Rows are keyed by (actor_namespace, request_id).
+// tombstones. #34 adds purged_at: the receipt-scrub moment for operations
+// whose committed result was purged. Rows are keyed by
+// (actor_namespace, request_id).
 const OPERATION_COMPARED_COLUMNS = Object.freeze([
   'actor_namespace', 'request_id', 'action', 'request_digest', 'target_id',
   'result_share_id', 'result_revision', 'result_access_revision',
-  'receipt_encrypted', 'created_at', 'deleted_at'
+  'receipt_encrypted', 'created_at', 'deleted_at', 'purged_at'
 ]);
 
 function sha256Hex(value) {
@@ -174,12 +179,46 @@ function comparePageInventory(sourceRows, restoreRows) {
  * Field-specific comparison of the immutable snapshot inventory, keyed by
  * (share_id, revision). A tampered snapshot is reported with its field and
  * exact share/revision — never folded into a generic mismatch.
+ *
+ * #34 tombstone semantics: a row with a non-NULL purged_at is a purge
+ * tombstone. Its payload columns AND snapshot_hash must be NULL — a
+ * "restored" backup that resurrects any payload byte on a tombstone fails
+ * here. Conversely a live row (purged_at NULL) must still carry string
+ * payload bytes. Tombstone rows are compared on identity/provenance only,
+ * never treated as missing or recomputed from live content.
  */
 function compareRevisionInventory(sourceRows, restoreRows) {
   const keyOf = row => `${row.share_id}:${row.revision}`;
   const sourceByKey = new Map(sourceRows.map(row => [keyOf(row), row]));
   const restoreByKey = new Map(restoreRows.map(row => [keyOf(row), row]));
   const issues = [];
+
+  const isTombstone = row => row.purged_at !== null && row.purged_at !== undefined;
+  const PURGEABLE_COLUMNS = ['html_content', 'title', 'description', 'markdown_theme', 'snapshot_hash'];
+
+  for (const side of [[sourceRows, 'source'], [restoreRows, 'restore']]) {
+    for (const row of side[0]) {
+      if (isTombstone(row)) {
+        for (const column of PURGEABLE_COLUMNS) {
+          if (row[column] !== null) {
+            issues.push({
+              field: column,
+              shareId: row.share_id,
+              revision: String(row.revision),
+              message: `tombstone ${keyOf(row)} on ${side[1]} side still carries ${column}; a purge tombstone must not retain payload bytes`
+            });
+          }
+        }
+      } else if (typeof row.html_content !== 'string') {
+        issues.push({
+          field: 'html_content',
+          shareId: row.share_id,
+          revision: String(row.revision),
+          message: `live snapshot ${keyOf(row)} on ${side[1]} side has no payload bytes; NULL payload without purged_at is invalid`
+        });
+      }
+    }
+  }
 
   for (const [key, sourceRow] of sourceByKey) {
     const restoreRow = restoreByKey.get(key);
@@ -203,7 +242,15 @@ function compareRevisionInventory(sourceRows, restoreRows) {
     }
   }
 
-  return { ok: issues.length === 0, issues, comparedColumns: REVISION_COMPARED_COLUMNS };
+  return {
+    ok: issues.length === 0,
+    issues,
+    comparedColumns: REVISION_COMPARED_COLUMNS,
+    details: {
+      tombstoneCount: restoreRows.filter(isTombstone).length,
+      liveCount: restoreRows.length - restoreRows.filter(isTombstone).length
+    }
+  };
 }
 
 /**
@@ -559,6 +606,9 @@ async function runVerification({
 
     // Immutable content snapshots restore exactly, and every page's current
     // pointer still names a snapshot identical to the materialized projection.
+    // #34: purge tombstones are compared on identity/provenance columns, a
+    // resurrected payload byte on a tombstone FAILS, and absent payloads are
+    // never recomputed against live content hashes.
     const revisionsInventory = compareRevisionInventory(sourceRevisions.rows, restoreRevisions.rows);
     checks.push({
       name: 'shareRevisions',
@@ -566,6 +616,8 @@ async function runVerification({
       issues: revisionsInventory.issues,
       details: {
         snapshotCount: restoreRevisions.rows.length,
+        tombstoneCount: revisionsInventory.details.tombstoneCount,
+        liveCount: revisionsInventory.details.liveCount,
         comparedColumns: revisionsInventory.comparedColumns
       }
     });
@@ -662,6 +714,8 @@ async function runVerification({
       details: {
         operationCount: restoreOperations.rows.length,
         tombstoneCount: restoreOperations.rows.filter(row => row.deleted_at !== null && row.deleted_at !== undefined).length,
+        // #34: operations whose receipt was scrubbed by a revision purge.
+        receiptPurgedCount: restoreOperations.rows.filter(row => row.purged_at !== null && row.purged_at !== undefined).length,
         comparedColumns: OPERATION_COMPARED_COLUMNS
       }
     });

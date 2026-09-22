@@ -483,12 +483,14 @@ test('verification reports never claim reconciliation is not required', () => {
     'markdown-themes',
     'favorite-share',
     'share-revisions',
+    'revision-purge-tombstones',
     'revision-current-pointer',
     'password-verify-and-decrypt',
     'expiry',
     'managed-api-keys',
     'audit-logs',
     'publish-operations',
+    'operation-receipt-purges',
     'site-settings',
     'migration-ledger'
   ]);

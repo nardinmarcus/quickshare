@@ -56,7 +56,8 @@ test('migrations contain every runtime table, column, index, and site setting', 
     '005_publishing_writes_paused.sql',
     '006_api_key_credential_version.sql',
     '007_share_revisions.sql',
-    '008_publish_operations.sql'
+    '008_publish_operations.sql',
+    '009_share_revision_purge.sql'
   ]);
   assert.match(migrations[0].sql, /CREATE TABLE IF NOT EXISTS public\.pages/i);
   assert.match(migrations[0].sql, /ADD COLUMN IF NOT EXISTS password_hash/i);
@@ -103,6 +104,15 @@ test('migrations contain every runtime table, column, index, and site setting', 
   assert.match(migrations[7].sql, /CREATE INDEX IF NOT EXISTS publish_operations_result_share_idx/i);
   assert.doesNotMatch(migrations[7].sql, /REFERENCES public\.pages/i,
     { message: 'operation records must be independent of the pages lifecycle' });
+  // #34: purge tombstones. The snapshot payload and its hash go NULL together
+  // with the recorded purge moment; publish_operations gains the companion
+  // receipt-purge timestamp. deleted_at stays the whole-Share marker.
+  assert.match(migrations[8].sql, /ALTER TABLE public\.share_revisions/i);
+  assert.match(migrations[8].sql, /ADD COLUMN purged_at BIGINT/i);
+  assert.match(migrations[8].sql, /ALTER TABLE public\.publish_operations/i);
+  assert.match(migrations[8].sql, /ADD COLUMN purged_at BIGINT/i);
+  assert.doesNotMatch(migrations[8].sql, /DROP COLUMN|DROP TABLE|ADD CONSTRAINT|SET NOT NULL/i,
+    'purge migration stays additive: no payload drop at migration time, no backfill lock');
 });
 
 // #32 boundary: migrations 001-007 are accepted history; this ticket may
@@ -145,8 +155,8 @@ test('migration runner applies pending files once and releases its client', asyn
   const second = await runMigrations(fake.pool, { logger: { info() {} } });
   const migrationSql = loadMigrations().map(migration => migration.sql.trim());
 
-  assert.deepEqual(first, { applied: ['001', '002', '003', '004', '005', '006', '007', '008'], skipped: [] });
-  assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007', '008'] });
+  assert.deepEqual(first, { applied: ['001', '002', '003', '004', '005', '006', '007', '008', '009'], skipped: [] });
+  assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007', '008', '009'] });
   for (const sql of migrationSql) {
     assert.equal(fake.queries.filter(query => query.sql === sql).length, 1);
   }

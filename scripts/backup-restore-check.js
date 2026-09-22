@@ -34,10 +34,13 @@ const FIXTURE = {
   sessionSecret: 'qs27-issue27-drill-session-secret-0123456789abcdef',
   image: 'postgres:17-alpine',
   password: 'issue27local',
-  srcContainer: 'issue27-pg-src',
-  restoreContainer: 'issue27-pg-restore',
-  srcPort: 5541,
-  restorePort: 5542,
+  // Container names/ports are overridable per environment (Q27_DRILL_* env)
+  // so an isolated run can use its OWN namespace without touching another
+  // ticket's containers; the defaults stay the original #27 values.
+  srcContainer: process.env.Q27_DRILL_SRC_CONTAINER || 'issue27-pg-src',
+  restoreContainer: process.env.Q27_DRILL_RESTORE_CONTAINER || 'issue27-pg-restore',
+  srcPort: Number(process.env.Q27_DRILL_SRC_PORT) || 5541,
+  restorePort: Number(process.env.Q27_DRILL_RESTORE_PORT) || 5542,
   sourceDatabase: 'issue27_src_test',
   restoreDatabase: 'issue27_restore_test',
   pages: {
@@ -80,7 +83,8 @@ const OPERATION_FIXTURE = {
   requestId: 'issue32-op-000000000001',
   tombstoneRequestId: 'issue32-op-000000000002',
   restoreRequestId: 'issue33-op-000000000003',
-  contentUpdateRequestId: 'issue33-op-000000000004'
+  contentUpdateRequestId: 'issue33-op-000000000004',
+  purgedReceiptRequestId: 'issue34-op-000000000005'
 };
 
 async function probePublishOperationsTable(pool) {
@@ -121,6 +125,21 @@ async function probeShareRevisionsTable(pool) {
   );
 
   return result.rows[0].present === true;
+}
+
+// #34 purge-tombstone fixture gate: true only when migration 009 has added
+// the purged_at columns. On a 001–008 base the tombstone branch is skipped
+// and reported honestly, never claimed.
+async function probePurgeColumns(pool) {
+  const result = await pool.query(
+    `SELECT COUNT(*)::int AS present
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND column_name = 'purged_at'
+       AND table_name IN ('share_revisions', 'publish_operations')`
+  );
+
+  return result.rows[0].present === 2;
 }
 
 function sourceUrlFor() {
@@ -340,7 +359,55 @@ async function seedFixture(pool) {
     );
   }
 
-  return { accessRevisionSeeded, revisionsSeeded, operationsSeeded };
+  // #34 purge fixture: one REAL tombstone revision (payload + hash NULL,
+  // purged_at set) and one receipt-scrubbed operation whose committed result
+  // was that revision. The verifier compares tombstones on identity and
+  // provenance only and fails if any payload byte resurrects.
+  const purgeSeeded = await probePurgeColumns(pool);
+  if (purgeSeeded && revisionsSeeded && operationsSeeded) {
+    const tombstoned = {
+      share_id: pages.publicHtml,
+      revision: 2,
+      html_content: null,
+      code_type: 'html',
+      title: null,
+      description: null,
+      markdown_theme: null,
+      created_at: base + 800,
+      snapshot_hash: null,
+      source: 'dashboard-edit',
+      actor: 'owner-dashboard',
+      restored_from: null,
+      purged_at: base + 900
+    };
+    await pool.query(
+      `INSERT INTO share_revisions (
+         share_id, revision, html_content, code_type, title, description, markdown_theme, created_at,
+         snapshot_hash, source, actor, restored_from, purged_at
+       )
+       VALUES ($1, 2, NULL, $2, NULL, NULL, NULL, $3, NULL, $4, $5, NULL, $6)`,
+      [tombstoned.share_id, tombstoned.code_type, tombstoned.created_at,
+       tombstoned.source, tombstoned.actor, tombstoned.purged_at]
+    );
+    await pool.query(
+      `INSERT INTO publish_operations (
+         actor_namespace, request_id, action, request_digest, target_id,
+         result_share_id, result_revision, result_access_revision, receipt_encrypted, created_at, deleted_at, purged_at
+       )
+       VALUES ($1, $2, 'restore', $3, $4, $4, '2', $5, NULL, $6, NULL, $7)`,
+      [
+        OPERATION_FIXTURE.namespace,
+        OPERATION_FIXTURE.purgedReceiptRequestId,
+        '9'.repeat(64),
+        pages.publicHtml,
+        ACCESS_REVISION_DRILL_VALUE,
+        base + 850,
+        base + 900
+      ]
+    );
+  }
+
+  return { accessRevisionSeeded, revisionsSeeded, operationsSeeded, purgeSeeded };
 }
 
 async function ensureContainerRunning(name, port, image) {
@@ -514,6 +581,10 @@ async function runDrill({ keepContainers = false, skipContainerSetup = false, ou
       // Publish-operation coverage (#32 migration 008): committed creation
       // with encrypted receipt plus a deletion tombstone, full-row compared.
       operations: seedResult.operationsSeeded ? 'exercised' : 'absent-schema001-007',
+      // #34 purge coverage (migration 009): a real payload-NULL tombstone
+      // with provenance, plus a receipt-scrubbed operation; the verifier
+      // must compare tombstones on identity only and detect resurrection.
+      revisionPurgeTombstones: seedResult.purgeSeeded ? 'exercised' : 'absent-schema001-008',
       revisionCurrentPointer: seedResult.revisionsSeeded ? REVISION_DRILL_VALUE : null,
       publishedFixture: seedResult.revisionsSeeded ? 'non-default-false-exercised' : 'absent-schema001-006',
       reconciliation: verification ? verification.reconciliation.status : 'not-available',
@@ -577,6 +648,7 @@ module.exports = {
   probeAccessRevisionColumn,
   probeShareRevisionsTable,
   probePublishOperationsTable,
+  probePurgeColumns,
   recreateRestoreDatabase,
   resetSourceDatabase,
   restoreUrlFor,

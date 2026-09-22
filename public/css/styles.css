@@ -5462,3 +5462,76 @@ body:hover::-webkit-scrollbar,
     overflow-x: auto;
   }
 }
+
+/* ===== #34 Revision purge (owner dashboard) ===== */
+.cyber-btn-danger {
+  color: #ffffff;
+  background: var(--error-text, #dc2626);
+  border-color: var(--error-text, #dc2626);
+}
+
+.cyber-btn-danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.cyber-btn-danger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.history-purged-pill {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--error-text, #dc2626);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.history-row-purged .history-revision-pill {
+  opacity: 0.7;
+}
+
+.purge-confirm-field {
+  margin: 0.9rem 0;
+}
+
+.purge-confirm-field label {
+  display: block;
+  margin-bottom: 0.4rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.purge-confirm-field code {
+  padding: 0.1rem 0.4rem;
+  border-radius: 6px;
+  background: var(--result-bg);
+  border: 1px solid var(--border-color);
+  font-size: 0.85rem;
+}
+
+.purge-confirm-field input {
+  width: 100%;
+  max-width: 24rem;
+  padding: 0.55rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.95rem;
+}
+
+.purge-confirm-field input:focus {
+  outline: none;
+  border-color: var(--error-text, #dc2626);
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15);
+}
+
+.purge-warning {
+  color: var(--error-text, #dc2626);
+}
+
+@media (prefers-color-scheme: dark) {
+  .purge-confirm-field input:focus {
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.2);
+  }
+}

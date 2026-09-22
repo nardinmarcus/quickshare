@@ -250,7 +250,8 @@ class MemoryPageRepository {
       revision: String(row.revision),
       created_at: row.created_at,
       source: row.source,
-      restored_from: row.restored_from === undefined ? null : row.restored_from
+      restored_from: row.restored_from === undefined ? null : row.restored_from,
+      purged_at: row.purged_at === undefined ? null : row.purged_at
     }));
     return { items, total: String(all.length) };
   }
@@ -685,7 +686,6 @@ class MemoryPageRepository {
         { status: 404, code: 'RESTORE_SOURCE_INVALID' }
       );
     }
-
     const nextContent = {
       html_content: sourceRow.html_content,
       title: sourceRow.title,
@@ -745,6 +745,65 @@ class MemoryPageRepository {
     const deleted = this.pages.delete(id);
     this.revisions.delete(id);
     return deleted;
+  }
+
+  // Revision purge (#34): atomically clears the payload of ONE noncurrent
+  // snapshot, keeps the non-content tombstone and scrubs the sensitive
+  // receipt bytes of every publish operation whose committed RESULT is this
+  // exact Share+Revision (across actor namespaces). Runs inside the staged
+  // publishing transaction; the current-revision recheck happens on the
+  // SAME staged state, so a concurrent restore/save cannot interleave.
+  async purgeContentRevision(id, revision) {
+    if (!isContentRevision(revision)) {
+      throw contentError(400, 'content revision must be a positive decimal string');
+    }
+    const normalized = String(revision);
+    const page = this.pages.get(id);
+    if (!page) return { found: false };
+
+    // Current-version recheck AFTER the Share row is staged (the memory
+    // publishing transaction serializes writers): the pointer at this
+    // moment is authoritative, never a pre-read.
+    if (String(page.current_revision) === normalized) {
+      return { found: true, current: true };
+    }
+
+    const revisions = this.revisions.get(id);
+    const row = revisions ? revisions.get(normalized) : null;
+    if (!row) return { found: true, revision: false };
+
+    const alreadyPurged = row.purged_at !== null && row.purged_at !== undefined;
+    if (!alreadyPurged) {
+      // Payload bytes go; identity, time, action, provenance, restore origin
+      // and the purge moment stay. Snapshot hash is dropped: the canonical
+      // digest would otherwise keep a verifiable (brute-forceable) trace of
+      // the cleared title/description/theme payload.
+      revisions.set(normalized, {
+        ...row,
+        html_content: null,
+        title: null,
+        description: null,
+        markdown_theme: null,
+        snapshot_hash: null,
+        purged_at: Date.now()
+      });
+    }
+
+    // Receipt scrub: ONLY records whose committed result is this exact
+    // Share+Revision. Other revisions of the same Share and other Shares
+    // keep their receipts; identities (result_revision) are never changed.
+    const receiptPurgedAt = Date.now();
+    for (const [key, record] of this.publishOperations) {
+      if (record.result_share_id === id && String(record.result_revision) === normalized) {
+        this.publishOperations.set(key, {
+          ...record,
+          receipt_encrypted: null,
+          purged_at: record.purged_at === null || record.purged_at === undefined ? receiptPurgedAt : record.purged_at
+        });
+      }
+    }
+
+    return { found: true, current: false, revision: true, alreadyPurged, purgedAt: alreadyPurged ? row.purged_at : Date.now() };
   }
 
   async deletePages(ids) {

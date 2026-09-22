@@ -53,6 +53,8 @@ let hasAccessRevision = false;
 let hasRevisions = false;
 // Publish-operation fixture gate (#32): false on a 001–007 base.
 let hasOperations = false;
+// #34 purge fixture gate: false on a 001–008 base (no purged_at columns).
+let hasPurgeColumns = false;
 
 const childEnv = sanitizeChildEnv(process.env, { SESSION_SECRET: FIXTURE.sessionSecret });
 
@@ -101,6 +103,7 @@ test.before(async () => {
     hasAccessRevision = seedResult.accessRevisionSeeded === true;
     hasRevisions = seedResult.revisionsSeeded === true;
     hasOperations = seedResult.operationsSeeded === true;
+    hasPurgeColumns = seedResult.purgeSeeded === true;
 
     // Recreate the restore database from scratch so the drill proves a full restore.
     const quotedDatabase = `"${restoreDatabase.replace(/"/g, '""')}"`;
@@ -256,12 +259,14 @@ test('native restore rebuilds the database and passes full verification', async 
     'markdown-themes',
     'favorite-share',
     'share-revisions',
+    'revision-purge-tombstones',
     'revision-current-pointer',
     'password-verify-and-decrypt',
     'expiry',
     'managed-api-keys',
     'audit-logs',
     'publish-operations',
+    'operation-receipt-purges',
     'site-settings',
     'migration-ledger'
   ]);
@@ -312,9 +317,18 @@ test('native restore rebuilds the database and passes full verification', async 
     assert.equal(revisionsCheck.ok, true, `snapshot inventory issues: ${JSON.stringify(revisionsCheck.issues)}`);
     assert.deepEqual(revisionsCheck.details.comparedColumns, [
       'share_id', 'revision', 'html_content', 'code_type', 'title', 'description', 'markdown_theme', 'created_at',
-      'snapshot_hash', 'source', 'actor', 'restored_from'
+      'snapshot_hash', 'source', 'actor', 'restored_from', ...(hasPurgeColumns ? ['purged_at'] : [])
     ]);
-    assert.ok(revisionsCheck.details.snapshotCount >= 7, 'baselines + v2 + big-pointer snapshots restored');
+    if (hasPurgeColumns) {
+      assert.ok(revisionsCheck.details.snapshotCount >= 8, 'baselines + v2 + big-pointer + #34 tombstone snapshots restored');
+      assert.equal(revisionsCheck.details.tombstoneCount, 1,
+        '#34: exactly one purge tombstone is inventoried, compared on identity/provenance only');
+      const operationsCheck34 = report.checks.find(check => check.name === 'publishOperations');
+      assert.equal(operationsCheck34.details.receiptPurgedCount, 1,
+        '#34: the receipt-scrubbed operation is inventoried');
+    } else {
+      assert.ok(revisionsCheck.details.snapshotCount >= 7, 'baselines + v2 + big-pointer snapshots restored');
+    }
     const pointerCheck = report.checks.find(check => check.name === 'revisionCurrentPointer');
     assert.equal(pointerCheck.ok, true, `pointer issues: ${JSON.stringify(pointerCheck.issues)}`);
 
@@ -374,13 +388,18 @@ test('native restore rebuilds the database and passes full verification', async 
     const operationsCheck = report.checks.find(check => check.name === 'publishOperations');
     assert.ok(operationsCheck, 'the publishOperations check is always reported when the table exists');
     assert.equal(operationsCheck.ok, true, `operation issues: ${JSON.stringify(operationsCheck.issues)}`);
-    assert.equal(operationsCheck.details.operationCount, 4,
-      'committed creation + tombstone + #33 restore + #33 content-update restored');
+    assert.equal(operationsCheck.details.operationCount, hasPurgeColumns ? 5 : 4,
+      'committed creation + tombstone + #33 restore + #33 content-update (+ #34 receipt-purged) restored');
     assert.equal(operationsCheck.details.tombstoneCount, 1, 'the deletion tombstone restores as a tombstone');
+    if (hasPurgeColumns) {
+      assert.equal(operationsCheck.details.receiptPurgedCount, 1,
+        '#34: the receipt-scrubbed operation restores with its purged_at marker');
+    }
     assert.deepEqual(operationsCheck.details.comparedColumns, [
       'actor_namespace', 'request_id', 'action', 'request_digest', 'target_id',
       'result_share_id', 'result_revision', 'result_access_revision',
-      'receipt_encrypted', 'created_at', 'deleted_at'
+      'receipt_encrypted', 'created_at', 'deleted_at',
+      ...(hasPurgeColumns ? ['purged_at'] : [])
     ]);
     const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
     try {
@@ -744,7 +763,7 @@ test('current_revision pointer tamper fails the pointer-consistency check by nam
   const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
   try {
     await restorePool.query(
-      'UPDATE pages SET current_revision = 2 WHERE id = $1',
+      'UPDATE pages SET current_revision = 9 WHERE id = $1',
       [FIXTURE.pages.publicHtml]
     );
   } finally {
@@ -905,4 +924,80 @@ test('restored_from tamper fails the share-revisions check by field and key', as
     && issue.shareId === FIXTURE.pages.markdownThemed
     && issue.revision === '2'
     && /9007199254740993/.test(issue.message)), `issues: ${JSON.stringify(revisionsCheck.issues)}`);
+});
+
+// #34: a purge tombstone that "regains" payload bytes during restore must
+// fail the share-revisions check with a named field issue — tombstones are
+// compared on identity/provenance only, and resurrection is a hard failure,
+// never recomputed or tolerated against live content hashes.
+test('purge tombstone payload resurrection fails the share-revisions check by name', async (t) => {
+  if (!hasRevisions || !hasPurgeColumns) {
+    return t.skip('share_revisions/purged_at absent on pre-009 base; integrator must exercise after merging #34');
+  }
+
+  const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
+  const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+  try {
+    await restorePool.query(
+      `UPDATE share_revisions SET html_content = $1
+       WHERE share_id = $2 AND revision = 2 AND purged_at IS NOT NULL`,
+      ['<p>resurrected payload</p>', FIXTURE.pages.publicHtml]
+    );
+  } finally {
+    await restorePool.end();
+  }
+
+  const result = await runStep(process.execPath, [
+    'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+    '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+    '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+    '--output', path.join(tmpDir, 'verification-tombstone-resurrect.json')
+  ]);
+  assert.equal(result.code, 1);
+
+  const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-tombstone-resurrect.json'), 'utf8'));
+  assert.equal(report.safeToServe, false);
+  const revisionsCheck = report.checks.find(check => check.name === 'shareRevisions');
+  assert.equal(revisionsCheck.ok, false, 'the dedicated snapshot check must fail, not only the overall exit');
+  assert.ok(revisionsCheck.issues.some(issue =>
+    issue.field === 'html_content'
+    && issue.shareId === FIXTURE.pages.publicHtml
+    && issue.revision === '2'
+    && /tombstone/.test(issue.message)), `issues: ${JSON.stringify(revisionsCheck.issues)}`);
+});
+
+// #34: a receipt that was scrubbed by a revision purge must stay scrubbed on
+// restore; re-encrypting a receipt onto a purged operation fails by name.
+test('operation receipt resurrection on a purged revision fails the operations check by name', async (t) => {
+  if (!hasOperations || !hasPurgeColumns) {
+    return t.skip('publish_operations/purged_at absent on pre-009 base; integrator must exercise after merging #34');
+  }
+
+  const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
+  const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+  try {
+    await restorePool.query(
+      `UPDATE publish_operations SET receipt_encrypted = $1
+       WHERE request_id = $2`,
+      ['resurrected-receipt-ciphertext', OPERATION_FIXTURE.purgedReceiptRequestId]
+    );
+  } finally {
+    await restorePool.end();
+  }
+
+  const result = await runStep(process.execPath, [
+    'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+    '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+    '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+    '--output', path.join(tmpDir, 'verification-receipt-resurrect.json')
+  ]);
+  assert.equal(result.code, 1);
+
+  const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-receipt-resurrect.json'), 'utf8'));
+  const operationsCheck = report.checks.find(check => check.name === 'publishOperations');
+  assert.equal(operationsCheck.ok, false, 'the dedicated operations check must fail, not only the overall exit');
+  assert.ok(operationsCheck.issues.some(issue =>
+    issue.field === 'publish_operations'
+    && issue.requestId === OPERATION_FIXTURE.purgedReceiptRequestId
+    && /receipt_encrypted/.test(issue.message)), `issues: ${JSON.stringify(operationsCheck.issues)}`);
 });

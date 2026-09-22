@@ -307,7 +307,7 @@ class PostgresPageRepository {
     const [pageResult, countResult] = await Promise.all([
       this.pool.query(
         `
-          SELECT share_id, revision, created_at, source, restored_from
+          SELECT share_id, revision, created_at, source, restored_from, purged_at
           FROM share_revisions
           WHERE share_id = $1
           ORDER BY revision DESC
@@ -331,7 +331,7 @@ class PostgresPageRepository {
     const result = await this.pool.query(
       `
         SELECT share_id, revision, html_content, code_type, title, description, markdown_theme, created_at,
-               snapshot_hash, source, actor, restored_from
+               snapshot_hash, source, actor, restored_from, purged_at
         FROM share_revisions
         WHERE share_id = $1 AND revision = $2
         LIMIT 1
@@ -339,6 +339,71 @@ class PostgresPageRepository {
       [shareId, revision]
     );
     return result.rows[0] || null;
+  }
+
+  /**
+   * Revision purge (#34). MUST run inside a publishing transaction on the
+   * transaction client: the Share row is locked FOR UPDATE first, the
+   * current-pointer recheck reads that locked row, and the payload clearing
+   * plus the sensitive-receipt scrub commit in the SAME transaction.
+   */
+  async purgeContentRevision(id, revision) {
+    if (!this.transactionClient) {
+      throw new Error('Revision purge requires a publishing transaction');
+    }
+    if (!isContentRevision(revision)) {
+      throw contentError(400, 'content revision must be a positive decimal string');
+    }
+    const normalized = String(revision);
+
+    // Lock the Share row first (#24 §9): the current-version recheck below
+    // reads the LOCKED row, so a concurrent restore/save cannot interleave
+    // between the check and the payload clearing.
+    const current = await this.pool.query('SELECT id, current_revision FROM pages WHERE id = $1 FOR UPDATE', [id]);
+    if (current.rowCount === 0) return { found: false };
+    if (String(current.rows[0].current_revision) === normalized) {
+      return { found: true, current: true };
+    }
+
+    const existing = await this.pool.query(
+      'SELECT revision, restored_from, purged_at FROM share_revisions WHERE share_id = $1 AND revision = $2 FOR UPDATE',
+      [id, normalized]
+    );
+    if (existing.rowCount === 0) return { found: true, revision: false };
+    const row = existing.rows[0];
+    const alreadyPurged = row.purged_at !== null && row.purged_at !== undefined;
+    const purgedAt = alreadyPurged ? row.purged_at : Date.now();
+
+    if (!alreadyPurged) {
+      // Payload bytes go; identity, original time, action, provenance and
+      // restore origin stay. Snapshot hash is dropped with the payload: a
+      // surviving canonical digest would keep a verifiable trace of the
+      // cleared title/description/theme.
+      await this.pool.query(
+        `
+          UPDATE share_revisions
+          SET html_content = NULL, title = NULL, description = NULL, markdown_theme = NULL,
+              snapshot_hash = NULL, purged_at = $3
+          WHERE share_id = $1 AND revision = $2
+        `,
+        [id, normalized, purgedAt]
+      );
+    }
+
+    // Receipt scrub, same transaction: ONLY records whose committed result
+    // is this exact Share+Revision, across every actor namespace. Other
+    // revisions of this Share and other Shares keep their receipts.
+    await this.pool.query(
+      `
+        UPDATE publish_operations
+        SET receipt_encrypted = NULL,
+            purged_at = COALESCE(purged_at, $3)
+        WHERE result_share_id = $1 AND result_revision = $2::bigint
+      `,
+      [id, normalized, purgedAt]
+    );
+
+    return { found: true, current: false, revision: true, alreadyPurged, purgedAt: Number(purgedAt) };
   }
 
   async listPagesMissingBaselineRevision(limit = 200) {

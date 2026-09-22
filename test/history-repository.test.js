@@ -13,7 +13,8 @@ process.env.SESSION_SECRET = 'issue31-repo-synthetic-secret';
 for (const key of ['DATABASE_URL', 'POSTGRES_URL', 'DATABASE_MIGRATION_URL', 'DATABASE_URL_UNPOOLED', 'POSTGRES_URL_NON_POOLING']) delete process.env[key];
 
 // Keys of a metadata-only list item, in sorted order for deep comparisons.
-const LIST_ITEM_KEYS = ['created_at', 'restored_from', 'revision', 'share_id', 'source'];
+// #34 adds the nullable purge marker purged_at to the same metadata-only shape.
+const LIST_ITEM_KEYS = ['created_at', 'purged_at', 'restored_from', 'revision', 'share_id', 'source'];
 
 async function seedRevisions(repository, count) {
   const { id } = await repository.create({

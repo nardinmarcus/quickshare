@@ -154,6 +154,13 @@ recover.
 - Deleting a Share clears its receipts and sets `deleted_at` in the same
   transaction, leaving a non-content dedupe tombstone. A late replay answers
   `410 RESULT_UNAVAILABLE` and never revives or recreates the Share.
+- Purging a revision (#34) scrubs `receipt_encrypted` and sets `purged_at`
+  for exactly the operations whose committed result is that Share+Revision,
+  in the same transaction as the snapshot payload clearing — across every
+  actor namespace; other revisions and other Shares keep their receipts and
+  `deleted_at` stays the whole-Share marker. Replays of those operations
+  confirm the operation happened but answer `410 RESULT_UNAVAILABLE` without
+  returning any receipt or payload byte.
 
 ## Owner review
 
@@ -166,9 +173,12 @@ be used to replay secrets across identities.
 ## Backup and restore
 
 `publish_operations` rows (including encrypted receipts, #33 restore and
-content-update rows, and tombstones) are part of the full backup inventory
+content-update rows, deletion tombstones, and #34 receipt-purged rows with
+`purged_at`) are part of the full backup inventory
 and are compared column-by-column by `scripts/verify-backup.js`
 (`publishOperations` check); the backup drill seeds named restore/
-content-update rows whose receipt tampering fails verification by request
-id. Restored snapshots keep `safeToServe: false` and owner-review
-reconciliation semantics; see [backup-restore](backup-restore.md).
+content-update rows and a #34 receipt-scrubbed row whose receipt or
+tombstone tampering fails verification by request id. Restored snapshots
+keep `safeToServe: false` and owner-review reconciliation semantics; a
+`page.revision.purge` audit event recorded after the snapshot point marks
+the restore `unreconciled`. See [backup-restore](backup-restore.md).

@@ -79,7 +79,7 @@ test('repository pagination orders exact BIGINT revisions descending without rea
   assert.deepEqual(firstPage.items.map(item => item.revision), ['4611686018427387904', '9007199254740993'],
     'descending order uses exact BIGINT arithmetic, never Number or string order');
   for (const item of firstPage.items) {
-    assert.deepEqual(Object.keys(item).sort(), ['created_at', 'restored_from', 'revision', 'share_id', 'source'],
+    assert.deepEqual(Object.keys(item).sort(), ['created_at', 'purged_at', 'restored_from', 'revision', 'share_id', 'source'],
       'the SQL projection selects metadata columns only');
     assert.equal(item.html_content, undefined, 'bodies are not even SELECTed for list pages');
   }

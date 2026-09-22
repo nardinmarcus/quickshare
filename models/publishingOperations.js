@@ -388,6 +388,8 @@ async function classifyOperationReplay(repository, { record, requestDigest }) {
   // Result Revision availability (#24 §8: Share/Revision existence is
   // re-confirmed before replay). A missing committed revision means the
   // original result is no longer confirmable — 410, no metadata, no rebuild.
+  // #34: a PURGED result revision is the same contract — the replay may
+  // confirm the operation happened, but no payload or receipt byte returns.
   const revisionRow = await repository.getContentRevision(record.result_share_id, String(record.result_revision));
   if (!revisionRow || typeof revisionRow.html_content !== 'string') {
     return { kind: 'result-unavailable' };
