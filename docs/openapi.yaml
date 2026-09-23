@@ -1,0 +1,2023 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "QuickShare Share API (implemented subset)",
+    "version": "1",
+    "description": "This document covers the public /api/v1 Share API operations currently exposed by this repository. It is not a complete schema for every QuickShare route; dashboard, legacy /api/pages, public view, private client-maintenance actions and Key/history purge are intentionally excluded."
+  },
+  "paths": {
+    "/api/v1/share": {
+      "post": {
+        "operationId": "createShare",
+        "summary": "Create a Share",
+        "description": "Creates a Share. Idempotency-Key is optional for legacy compatibility; when supplied, a matching replay confirms the original result.",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "x-quickshare-capability": {
+          "id": "share:create",
+          "method": "POST",
+          "path": "/api/v1/share",
+          "scope": "share:create"
+        },
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "htmlContent"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "htmlContent": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "codeType": {
+                    "type": "string",
+                    "enum": [
+                      "html",
+                      "markdown",
+                      "svg",
+                      "mermaid"
+                    ]
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "isProtected": {
+                    "type": "boolean"
+                  },
+                  "password": {
+                    "type": "string"
+                  },
+                  "expiresAt": {
+                    "oneOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9]+$"
+                      }
+                    ]
+                  },
+                  "markdownTheme": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or revoked API Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds the configured parser limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service or storage is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/{requestId}": {
+      "get": {
+        "operationId": "getOperationStatus",
+        "summary": "Confirm an operation",
+        "description": "Returns metadata only within the current credential namespace. Content-update, restore and publish operations additionally require their current scope and Share grant.",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "x-quickshare-capability": {
+          "id": "share:create:status",
+          "method": "GET",
+          "path": "/api/v1/operations/:requestId",
+          "scope": "share:create"
+        },
+        "parameters": [
+          {
+            "name": "requestId",
+            "in": "path",
+            "required": true,
+            "description": "Credential-namespace operation identifier.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or revoked API Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Required scope is not enabled for this credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is missing or the matching resource grant is absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Requested result or revision is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service or storage is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/shares": {
+      "get": {
+        "operationId": "listGrantedShares",
+        "summary": "List readable Shares",
+        "description": "Requires share:read and can_read grants. Publish-only grants are excluded.",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "x-quickshare-capability": {
+          "id": "share:list",
+          "method": "GET",
+          "path": "/api/v1/shares",
+          "scope": "share:read",
+          "grant": "can_read"
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size; default 20, maximum 100.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque stable keyset cursor.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or revoked API Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Required scope is not enabled for this credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service or storage is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadUnavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/shares/{id}/content": {
+      "get": {
+        "operationId": "getShareContent",
+        "summary": "Read current Share content",
+        "description": "Requires share:read and can_read for this Share. Returns the current content snapshot and a strong content ETag.",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "x-quickshare-capability": {
+          "id": "share:content:read",
+          "method": "GET",
+          "path": "/api/v1/shares/:id/content",
+          "scope": "share:read",
+          "grant": "can_read"
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Share ID.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional cache validator; responses remain private/no-store.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified."
+          },
+          "401": {
+            "description": "Missing, invalid or revoked API Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Required scope is not enabled for this credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is missing or the matching resource grant is absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service or storage is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadUnavailable"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "updateShareContent",
+        "summary": "Conditionally replace Share content",
+        "description": "Requires a managed Key with share:read and share:update plus can_read and can_update grants. Requires a concrete strong content If-Match and Idempotency-Key.",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "x-quickshare-capability": {
+          "id": "share:content:update",
+          "method": "PUT",
+          "path": "/api/v1/shares/:id/content",
+          "scopes": [
+            "share:read",
+            "share:update"
+          ],
+          "grants": [
+            "can_read",
+            "can_update"
+          ]
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Share ID.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "One concrete strong content ETag from the corresponding content representation.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\"content:[A-Za-z0-9_-]{1,64}:[1-9][0-9]*\"$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Request identity, 16–128 ASCII letters, digits, hyphens or underscores.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "htmlContent",
+                  "title",
+                  "description",
+                  "markdownTheme"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "htmlContent": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "description": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "markdownTheme": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "codeType": {
+                    "type": "string",
+                    "enum": [
+                      "html",
+                      "markdown",
+                      "svg",
+                      "mermaid"
+                    ],
+                    "description": "Optional; must equal the Share’s immutable type."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or revoked API Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Required scope is not enabled for this credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is missing or the matching resource grant is absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key conflicts with another request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Requested result or revision is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The strong If-Match validator is stale.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds the configured parser limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "A required If-Match or Idempotency-Key is missing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service or storage is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/shares/{id}/state": {
+      "get": {
+        "operationId": "getShareState",
+        "summary": "Read minimal Share state",
+        "description": "Requires either share:read with can_read, or share:publish with can_publish for this Share. Publish-only access reveals no title, description, body, list, history or content metadata.",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "x-quickshare-capability": {
+          "id": "share:state:read",
+          "method": "GET",
+          "path": "/api/v1/shares/:id/state",
+          "anyOf": [
+            {
+              "scope": "share:read",
+              "grant": "can_read"
+            },
+            {
+              "scope": "share:publish",
+              "grant": "can_publish"
+            }
+          ]
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Share ID.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional cache validator; responses remain private/no-store.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareState"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified."
+          },
+          "401": {
+            "description": "Missing, invalid or revoked API Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Required scope is not enabled for this credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is missing or the matching resource grant is absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service or storage is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadUnavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/shares/{id}/revisions": {
+      "get": {
+        "operationId": "listShareRevisions",
+        "summary": "List Share revisions",
+        "description": "Requires share:read and can_read. Returns revision metadata only.",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "x-quickshare-capability": {
+          "id": "share:revisions:read",
+          "method": "GET",
+          "path": "/api/v1/shares/:id/revisions",
+          "scope": "share:read",
+          "grant": "can_read"
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Share ID.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size; default 20, maximum 100.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque stable keyset cursor.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or revoked API Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Required scope is not enabled for this credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is missing or the matching resource grant is absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service or storage is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/shares/{id}/revisions/{revision}": {
+      "get": {
+        "operationId": "getShareRevision",
+        "summary": "Read one Share revision",
+        "description": "Requires share:read and can_read. A purged revision returns 410 without payload.",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "x-quickshare-capability": {
+          "id": "share:revision:read",
+          "method": "GET",
+          "path": "/api/v1/shares/:id/revisions/:revision",
+          "scope": "share:read",
+          "grant": "can_read"
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Share ID.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          },
+          {
+            "name": "revision",
+            "in": "path",
+            "required": true,
+            "description": "Positive decimal content revision; use a string above JavaScript safe integer range.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or revoked API Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Required scope is not enabled for this credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is missing or the matching resource grant is absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Requested result or revision is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service or storage is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/shares/{id}/restore": {
+      "post": {
+        "operationId": "restoreShareRevision",
+        "summary": "Conditionally restore a Share revision",
+        "description": "Requires share:read and share:update plus can_read and can_update. The body contains only revision; the current content ETag is used for If-Match.",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "x-quickshare-capability": {
+          "id": "share:restore",
+          "method": "POST",
+          "path": "/api/v1/shares/:id/restore",
+          "scopes": [
+            "share:read",
+            "share:update"
+          ],
+          "grants": [
+            "can_read",
+            "can_update"
+          ]
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Share ID.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "One concrete strong content ETag from the corresponding content representation.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\"content:[A-Za-z0-9_-]{1,64}:[1-9][0-9]*\"$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Request identity, 16–128 ASCII letters, digits, hyphens or underscores.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "revision"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "revision": {
+                    "oneOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^[1-9][0-9]*$"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or revoked API Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Required scope is not enabled for this credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is missing or the matching resource grant is absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key conflicts with another request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Requested result or revision is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The strong If-Match validator is stale.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds the configured parser limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "A required If-Match or Idempotency-Key is missing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service or storage is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/shares/{id}/unpublish": {
+      "post": {
+        "operationId": "unpublishShare",
+        "summary": "Unpublish a Share",
+        "description": "Requires a managed Key with share:publish and the Share can_publish grant. Requires a concrete strong access-state If-Match, Idempotency-Key and an empty JSON object body. Does not change content, password or expiry.",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "x-quickshare-capability": {
+          "id": "share:unpublish",
+          "method": "POST",
+          "path": "/api/v1/shares/:id/unpublish",
+          "scope": "share:publish",
+          "grant": "can_publish"
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Share ID.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "One concrete strong state ETag from GET /api/v1/shares/{id}/state; content ETags, wildcard, weak tags and tag lists are rejected.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\"access:[A-Za-z0-9_-]{1,64}:[1-9][0-9]*\"$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Request identity; retries must reuse the original value and input.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Empty object only. The deployment parser limit is reported by GET /api/v1/capabilities.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 0,
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishStateResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or revoked API Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Required scope is not enabled for this credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is missing or the matching resource grant is absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key conflicts with another request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Requested result or revision is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The strong If-Match validator is stale.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds the configured parser limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "A required If-Match or Idempotency-Key is missing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service or storage is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/shares/{id}/republish": {
+      "post": {
+        "operationId": "republishShare",
+        "summary": "Republish a Share",
+        "description": "Requires a managed Key with share:publish and the Share can_publish grant. Requires a concrete strong access-state If-Match, Idempotency-Key and an empty JSON object body. Does not remove protection or extend expiry.",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "x-quickshare-capability": {
+          "id": "share:republish",
+          "method": "POST",
+          "path": "/api/v1/shares/:id/republish",
+          "scope": "share:publish",
+          "grant": "can_publish"
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Share ID.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "One concrete strong state ETag from GET /api/v1/shares/{id}/state; content ETags, wildcard, weak tags and tag lists are rejected.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\"access:[A-Za-z0-9_-]{1,64}:[1-9][0-9]*\"$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Request identity; retries must reuse the original value and input.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Empty object only. The deployment parser limit is reported by GET /api/v1/capabilities.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 0,
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishStateResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or revoked API Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Required scope is not enabled for this credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is missing or the matching resource grant is absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key conflicts with another request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Requested result or revision is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The strong If-Match validator is stale.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds the configured parser limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "A required If-Match or Idempotency-Key is missing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service or storage is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me": {
+      "get": {
+        "operationId": "getApiIdentity",
+        "summary": "Read API credential identity",
+        "description": "Returns the current API credential identity and scopes without its secret, hash or resource grants.",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "x-quickshare-capability": {
+          "id": "identity:read",
+          "method": "GET",
+          "path": "/api/v1/me"
+        },
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Identity"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or revoked API Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service or storage is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/capabilities": {
+      "get": {
+        "operationId": "getApiCapabilities",
+        "summary": "Read implemented API capabilities",
+        "description": "Returns the live capability definitions, content types, Markdown Presets, parser limits and implemented scopes for this instance.",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "x-quickshare-capability": {
+          "id": "capabilities:read",
+          "method": "GET",
+          "path": "/api/v1/capabilities"
+        },
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capabilities"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or revoked API Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service or storage is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Managed or legacy API Key. Legacy Keys are create-only."
+      }
+    },
+    "schemas": {
+      "Identity": {
+        "type": "object",
+        "required": [
+          "success",
+          "origin",
+          "credentialKind",
+          "scopes"
+        ],
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "origin": {
+            "type": "string",
+            "format": "uri"
+          },
+          "credentialKind": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "managed"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "credentialVersion": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "share:create",
+                "share:read",
+                "share:update",
+                "share:publish"
+              ]
+            }
+          }
+        }
+      },
+      "Capabilities": {
+        "type": "object",
+        "required": [
+          "success",
+          "protocolVersion",
+          "contentTypes",
+          "markdownThemePresets",
+          "limits",
+          "operations",
+          "scopes",
+          "idempotency"
+        ],
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "protocolVersion": {
+            "const": "1"
+          },
+          "contentTypes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "html",
+                "markdown",
+                "svg",
+                "mermaid"
+              ]
+            }
+          },
+          "markdownThemePresets": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "bytedance",
+                "github",
+                "apple",
+                "notion",
+                "claude",
+                "raycast",
+                "google",
+                "tesla",
+                "airbnb",
+                "bugatti",
+                "linear",
+                "playstation"
+              ]
+            }
+          },
+          "limits": {
+            "$ref": "#/components/schemas/Limits"
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "method",
+                "path"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "method": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "scopes": {
+            "type": "object"
+          },
+          "idempotency": {
+            "type": "object"
+          }
+        }
+      },
+      "ShareState": {
+        "type": "object",
+        "required": [
+          "success",
+          "id",
+          "published",
+          "isProtected",
+          "expiresAt",
+          "accessRevision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "id": {
+            "type": "string"
+          },
+          "published": {
+            "type": "boolean"
+          },
+          "isProtected": {
+            "type": "boolean"
+          },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "accessRevision": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          }
+        }
+      },
+      "PublishStateResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "success",
+              "action",
+              "requestId",
+              "changed",
+              "id",
+              "published",
+              "isProtected",
+              "expiresAt",
+              "accessRevision"
+            ],
+            "properties": {
+              "success": {
+                "const": true
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "unpublish",
+                  "republish"
+                ]
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "changed": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": "string"
+              },
+              "published": {
+                "type": "boolean"
+              },
+              "isProtected": {
+                "type": "boolean"
+              },
+              "expiresAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "accessRevision": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]*$"
+              },
+              "replayed": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "success",
+              "action",
+              "requestId",
+              "changed",
+              "replayed",
+              "stateChangedSinceCommit"
+            ],
+            "properties": {
+              "success": {
+                "const": true
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "unpublish",
+                  "republish"
+                ]
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "changed": {
+                "type": "boolean"
+              },
+              "replayed": {
+                "const": true
+              },
+              "stateChangedSinceCommit": {
+                "const": true
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "success",
+          "code",
+          "retryable",
+          "error"
+        ],
+        "properties": {
+          "success": {
+            "const": false
+          },
+          "code": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "ReadUnavailable": {
+        "type": "object",
+        "required": [
+          "success",
+          "code",
+          "requestId",
+          "retryable",
+          "error"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "success": {
+            "const": false
+          },
+          "code": {
+            "const": "API_READ_UNAVAILABLE"
+          },
+          "requestId": {
+            "type": "null"
+          },
+          "retryable": {
+            "const": true
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "Limits": {
+        "type": "object",
+        "required": [
+          "shareRequestBodyBytes",
+          "smallRequestBodyBytes",
+          "rawContentBytes"
+        ],
+        "properties": {
+          "shareRequestBodyBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Configured decoded JSON request-body limit; query GET /api/v1/capabilities for this instance."
+          },
+          "smallRequestBodyBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Configured decoded small JSON request-body limit; query GET /api/v1/capabilities for this instance."
+          },
+          "rawContentBytes": {
+            "type": "null",
+            "description": "No independent raw content byte allowance."
+          }
+        }
+      }
+    }
+  },
+  "x-quickshare-capabilities": {
+    "protocolVersion": "1",
+    "contentTypes": [
+      "html",
+      "markdown",
+      "svg",
+      "mermaid"
+    ],
+    "markdownThemePresets": [
+      "bytedance",
+      "github",
+      "apple",
+      "notion",
+      "claude",
+      "raycast",
+      "google",
+      "tesla",
+      "airbnb",
+      "bugatti",
+      "linear",
+      "playstation"
+    ],
+    "scopes": {
+      "implemented": [
+        "share:create",
+        "share:read",
+        "share:update",
+        "share:publish"
+      ],
+      "notImplemented": []
+    },
+    "idempotency": {
+      "header": "Idempotency-Key",
+      "pattern": "^[A-Za-z0-9_-]{16,128}$",
+      "appliesTo": [
+        "share:create",
+        "share:content:update",
+        "share:restore",
+        "share:unpublish",
+        "share:republish"
+      ],
+      "conflictStatus": 409,
+      "replayRequiresSameInput": true
+    }
+  }
+}

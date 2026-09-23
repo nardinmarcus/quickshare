@@ -5230,7 +5230,7 @@ body:hover::-webkit-scrollbar,
   color: var(--text-secondary);
 }
 
-/* Scope 徽标与逐 Share 读取/编辑授权（#37）：仅真实控件，无装饰性开关 */
+/* Scope 徽标与逐 Share 读取/编辑/上下架授权（#39）：仅真实控件，无装饰性开关 */
 .api-key-scope-list {
   display: flex;
   flex-wrap: wrap;
@@ -5293,7 +5293,8 @@ body:hover::-webkit-scrollbar,
   overflow-wrap: anywhere;
 }
 
-.api-key-edit-grant-btn {
+.api-key-edit-grant-btn,
+.api-key-publish-grant-btn {
   min-height: 36px;
   padding: 0.4rem 0.65rem;
   border: 1px solid rgba(var(--primary-rgb), 0.45);
@@ -5305,12 +5306,15 @@ body:hover::-webkit-scrollbar,
   cursor: pointer;
 }
 
-.api-key-edit-grant-btn[aria-pressed="true"] {
+.api-key-edit-grant-btn[aria-pressed="true"],
+.api-key-publish-grant-btn[aria-pressed="true"] {
   background: rgba(var(--primary-rgb), 0.12);
 }
 
 .api-key-edit-grant-btn:hover,
-.api-key-edit-grant-btn:focus-visible {
+.api-key-edit-grant-btn:focus-visible,
+.api-key-publish-grant-btn:hover,
+.api-key-publish-grant-btn:focus-visible {
   border-color: var(--primary);
   outline: 2px solid rgba(var(--primary-rgb), 0.22);
   outline-offset: 1px;
@@ -5325,6 +5329,15 @@ body:hover::-webkit-scrollbar,
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.api-key-grant-access {
+  padding: 0.2rem 0.45rem;
+  border: 1px solid rgba(var(--primary-rgb), 0.25);
+  border-radius: 999px;
+  color: var(--text-primary);
+  font-size: 0.72rem;
+  white-space: nowrap;
 }
 
 .api-key-grant-empty {
@@ -5345,7 +5358,8 @@ body:hover::-webkit-scrollbar,
 }
 
 .api-key-auto-edit-option,
-.api-key-edit-option {
+.api-key-edit-option,
+.api-key-publish-option {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -5355,7 +5369,8 @@ body:hover::-webkit-scrollbar,
 }
 
 .api-key-auto-edit-option input,
-.api-key-edit-option input {
+.api-key-edit-option input,
+.api-key-publish-option input {
   width: 1rem;
   height: 1rem;
   margin: 0;

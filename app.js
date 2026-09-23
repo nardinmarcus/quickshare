@@ -12,9 +12,11 @@ const { performance } = require('node:perf_hooks');
 
 const config = require('./config');
 const { managedIdentity, CREATE_ONLY_SCOPES, READ_SCOPE } = require('./utils/apiKeyIdentity');
-const { CONTENT_TYPES, CREATE_SHARE, SHARE_CONTENT_UPDATE, apiCapabilities } = require('./utils/apiCapabilities');
+const {
+  CONTENT_TYPES, CREATE_SHARE, SHARE_CONTENT_UPDATE, SHARE_UNPUBLISH, SHARE_REPUBLISH, apiCapabilities
+} = require('./utils/apiCapabilities');
 const capabilities = apiCapabilities(config);
-const { isAccessRevision, requireAccessRevision } = require('./utils/shareAccess');
+const { isAccessRevision, requireAccessRevision, accessError } = require('./utils/shareAccess');
 const { contentEtag, accessEtag, ifNoneMatchMatches, requireContentBaselineFor, isContentRevision } = require('./utils/contentRevision');
 const { publicShareProjection } = require('./utils/publicShareProjection');
 const { createPageRepository } = require('./models/pageRepository');
@@ -76,6 +78,7 @@ const DASHBOARD_ADMIN_COOKIE = 'dashboard_admin_session';
 const PUBLISH_SESSION_COOKIE = 'publish_session';
 const CLONE_INTENT_DONE_COOKIE = 'clone_intent_done';
 const ADMIN_TTL_MS = 24 * 60 * 60 * 1000;
+const PUBLISH_SCOPE = 'share:publish';
 const PAGE_ACCESS_TTL_MS = 24 * 60 * 60 * 1000;
 const VALID_CODE_TYPES = new Set(CONTENT_TYPES);
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -555,6 +558,21 @@ function requireDashboardCsrf(req, res, next) {
   return next();
 }
 
+function sendApiReadUnavailable(res) {
+  return res.status(503).json({
+    success: false,
+    code: 'API_READ_UNAVAILABLE',
+    requestId: null,
+    retryable: true,
+    error: 'Share data is temporarily unavailable'
+  });
+}
+
+function markApiResourceReadEndpoint(req, res, next) {
+  req.apiResourceReadEndpoint = true;
+  return next();
+}
+
 function sendApiContentUpdateError(req, res, status, code, error, retryable = false) {
   return res.status(status).json({
     success: false,
@@ -587,10 +605,32 @@ function markApiRevisionEndpoint({ write = false } = {}) {
   };
 }
 
+function sendApiPublishError(req, res, status, code, error, retryable = false, details = {}) {
+  return res.status(status).json({
+    success: false,
+    code,
+    requestId: isvalidRequestId(req.apiPublishRequestId) ? req.apiPublishRequestId : null,
+    retryable,
+    ...details,
+    error
+  });
+}
+
+function markApiPublishStateEndpoint({ write = false } = {}) {
+  return (req, res, next) => {
+    req.apiPublishStateEndpoint = true;
+    if (write) req.apiPublishRequestId = req.get('Idempotency-Key');
+    return next();
+  };
+}
+
 async function requireApiKey(req, res, next) {
   const key = req.get('x-api-key');
 
   if (!key) {
+    if (req.apiPublishStateEndpoint) {
+      return sendApiPublishError(req, res, 401, 'INVALID_API_KEY', 'Missing X-API-Key header');
+    }
     if (req.apiContentUpdateEndpoint || req.apiRevisionEndpoint) {
       return sendApiContentUpdateError(req, res, 401, 'INVALID_API_KEY', 'Missing X-API-Key header');
     }
@@ -612,6 +652,9 @@ async function requireApiKey(req, res, next) {
   const match = /^qs\.([A-Za-z0-9_-]{1,64})\.([A-Za-z0-9_-]{20,})$/.exec(key);
 
   if (!match) {
+    if (req.apiPublishStateEndpoint) {
+      return sendApiPublishError(req, res, 401, 'INVALID_API_KEY', 'Invalid API key');
+    }
     if (req.apiContentUpdateEndpoint || req.apiRevisionEndpoint) {
       return sendApiContentUpdateError(req, res, 401, 'INVALID_API_KEY', 'Invalid API key');
     }
@@ -625,6 +668,9 @@ async function requireApiKey(req, res, next) {
     const isValid = apiKey && await verifySecret(match[2], apiKey.key_hash);
 
     if (!isValid) {
+      if (req.apiPublishStateEndpoint) {
+        return sendApiPublishError(req, res, 401, 'INVALID_API_KEY', 'Invalid API key');
+      }
       if (req.apiContentUpdateEndpoint || req.apiRevisionEndpoint) {
         return sendApiContentUpdateError(req, res, 401, 'INVALID_API_KEY', 'Invalid API key');
       }
@@ -640,6 +686,12 @@ async function requireApiKey(req, res, next) {
     return next();
   } catch (error) {
     console.error('API key validation failed:', { name: error?.name || 'Error', code: safeErrorCode(error) });
+    if (req.apiResourceReadEndpoint) {
+      return sendApiReadUnavailable(res);
+    }
+    if (req.apiPublishStateEndpoint) {
+      return sendApiPublishError(req, res, 503, 'PUBLISHING_UNAVAILABLE', 'API authentication unavailable', true);
+    }
     if (req.apiContentUpdateEndpoint || req.apiRevisionEndpoint) {
       return sendApiContentUpdateError(req, res, 503, 'PUBLISHING_UNAVAILABLE', 'API authentication unavailable', true);
     }
@@ -678,6 +730,84 @@ function requireApiRevisionScopes(scopes) {
     }
     return next();
   };
+}
+
+function requireApiStateScope(req, res, next) {
+  const scopes = req.apiKeyIdentity?.scopes || [];
+  if (scopes.includes(READ_SCOPE) || scopes.includes(PUBLISH_SCOPE)) return next();
+  return res.status(403).json({
+    success: false,
+    code: 'SCOPE_REQUIRED',
+    scopesAnyOf: [READ_SCOPE, PUBLISH_SCOPE],
+    retryable: false,
+    error: '当前凭据缺少读取 Share 状态所需的 scope'
+  });
+}
+
+function requireApiPublishScope(req, res, next) {
+  if (req.apiKeyIdentity?.scopes?.includes(PUBLISH_SCOPE)) return next();
+  return sendApiPublishError(req, res, 403, 'SCOPE_REQUIRED', '当前凭据缺少所需 scope: share:publish', false, { scope: PUBLISH_SCOPE });
+}
+
+function requireAccessBaselineFor(shareId, raw) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    throw accessError(428, 'If-Match access ETag is required');
+  }
+  const value = String(raw).trim();
+  const match = /^\"access:([A-Za-z0-9_-]{1,64}):([1-9][0-9]{0,18})\"$/.exec(value);
+  if (!match || match[1] !== shareId) {
+    throw accessError(400, 'If-Match must be one concrete strong access ETag for this Share');
+  }
+  requireAccessRevision(match[2]);
+  return { shareId: match[1], revision: match[2] };
+}
+
+function validateApiPublishStateHeaders(req, res, next) {
+  const requestId = req.get('Idempotency-Key');
+  req.apiPublishRequestId = requestId;
+  if (requestId === undefined || requestId === '') {
+    return sendApiPublishError(req, res, 428, 'IDEMPOTENCY_KEY_REQUIRED', 'Idempotency-Key is required');
+  }
+  if (!isvalidRequestId(requestId)) {
+    return sendApiPublishError(req, res, 400, 'INVALID_REQUEST_ID', INVALID_REQUEST_ID_MESSAGE);
+  }
+  try {
+    req.apiPublishBaseline = requireAccessBaselineFor(req.params.id, req.get('If-Match'));
+  } catch (error) {
+    return sendApiPublishError(req, res, error.status || 400, error.code || 'INVALID_ACCESS_REVISION', error.message);
+  }
+  return next();
+}
+
+function parseApiPublishStateJson(req, res, next) {
+  const mediaType = String(req.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
+  if (mediaType !== 'application/json') {
+    return sendApiPublishError(req, res, 400, 'INVALID_PUBLISH_STATE_INPUT', '上下架请求必须使用 application/json 空对象');
+  }
+  return parseSmallJson(req, res, error => {
+    if (error?.type === 'entity.too.large') {
+      return sendApiPublishError(req, res, 413, 'PAYLOAD_TOO_LARGE', '请求内容超过 small request body limit');
+    }
+    if (error?.type === 'entity.parse.failed') {
+      return sendApiPublishError(req, res, 400, 'INVALID_JSON', 'Invalid JSON body');
+    }
+    return next(error);
+  });
+}
+
+function validateApiPublishStateBody(req, res, next) {
+  const body = req.body;
+  if (body === undefined) {
+    const contentLength = Number(req.get('Content-Length') || 0);
+    const contentType = req.get('Content-Type');
+    if (contentLength > 0 || req.get('Transfer-Encoding')
+      || (contentType && !req.is('application/json') && !req.is('application/*+json'))) {
+      return sendApiPublishError(req, res, 400, 'INVALID_PUBLISH_STATE_INPUT', '上下架请求体必须为空或空 JSON 对象');
+    }
+    return next();
+  }
+  if (body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).length === 0) return next();
+  return sendApiPublishError(req, res, 400, 'INVALID_PUBLISH_STATE_INPUT', '上下架请求体必须为空对象，不能包含内容或访问策略字段');
 }
 
 function validateApiRestoreHeaders(req, res, next) {
@@ -1586,8 +1716,8 @@ app.post('/admin/apis/keys/:id/grants', privateNoStore, requireDashboardAdmin, p
   try {
     const respond = await publishing.run(async (repository) => {
       if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)
-        || Object.keys(req.body).some(field => !['shareId', 'canUpdate'].includes(field))
-        || (req.body.canUpdate !== undefined && typeof req.body.canUpdate !== 'boolean')) {
+        || Object.keys(req.body).some(field => !['shareId', 'canRead', 'canUpdate', 'canPublish'].includes(field))
+        || ['canRead', 'canUpdate', 'canPublish'].some(field => req.body[field] !== undefined && typeof req.body[field] !== 'boolean')) {
         return (res) => res.status(400).json({ success: false, error: '授权请求字段无效' });
       }
       const shareId = String(req.body.shareId || '').trim();
@@ -1597,34 +1727,57 @@ app.post('/admin/apis/keys/:id/grants', privateNoStore, requireDashboardAdmin, p
       }
 
       const canUpdate = req.body.canUpdate === true;
-      const outcome = canUpdate
-        ? await repository.grantShareEdit({ apiKeyId: req.params.id, shareId })
-        : await repository.grantShareRead({ apiKeyId: req.params.id, shareId });
+      const canPublish = req.body.canPublish === true;
+      const permissionFieldsSupplied = ['canRead', 'canUpdate', 'canPublish']
+        .some(field => Object.prototype.hasOwnProperty.call(req.body, field));
+      const legacyReadDefault = req.body.canUpdate === false
+        && req.body.canRead === undefined && req.body.canPublish === undefined;
+      const canRead = canUpdate || req.body.canRead === true || !permissionFieldsSupplied || legacyReadDefault;
+      if ((req.body.canRead === false && canUpdate) || (!canRead && !canPublish)) {
+        return (res) => res.status(400).json({ success: false, error: '至少选择读取、编辑或上下架授权；编辑权包含读取权' });
+      }
 
-      if (outcome.status === 'key-not-found') {
+      const outcomes = [];
+      if (canRead || canUpdate) {
+        outcomes.push(canUpdate
+          ? await repository.grantShareEdit({ apiKeyId: req.params.id, shareId })
+          : await repository.grantShareRead({ apiKeyId: req.params.id, shareId }));
+      }
+      if (canPublish) outcomes.push(await repository.grantSharePublish({ apiKeyId: req.params.id, shareId }));
+
+      const missing = outcomes.find(outcome => outcome.status === 'key-not-found' || outcome.status === 'share-not-found');
+      if (missing?.status === 'key-not-found') {
         return (res) => res.status(404).json({ success: false, error: 'API key not found' });
       }
-      if (outcome.status === 'share-not-found') {
-        return (res) => sendShareNotFound(res);
-      }
+      if (missing?.status === 'share-not-found') return (res) => sendShareNotFound(res);
 
-      if (outcome.status === 'granted') {
+      const changed = outcomes.some(outcome => outcome.status === 'granted');
+      if (changed) {
         await repository.createAuditLog({
           action: 'api_key.grant',
           pageId: shareId,
-          details: JSON.stringify({ apiKeyId: req.params.id, shareId, grants: canUpdate ? ['read', 'update'] : ['read'] }),
+          details: JSON.stringify({
+            apiKeyId: req.params.id,
+            shareId,
+            grants: [...(canRead ? ['read'] : []), ...(canUpdate ? ['update'] : []), ...(canPublish ? ['publish'] : [])]
+          }),
           ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
         });
       }
 
-      // Authoritative scope list so the UI badges mirror the server (#36).
       const scopes = (await repository.getApiKeyById(req.params.id))?.scopes || [];
       const currentGrant = await repository.getShareGrant(req.params.id, shareId);
-      const changed = outcome.status === 'granted';
+      const grantProjection = {
+        apiKeyId: req.params.id,
+        shareId,
+        canRead: currentGrant?.can_read === true,
+        canUpdate: currentGrant?.can_update === true,
+        ...(currentGrant?.can_publish === true ? { canPublish: true } : {})
+      };
       return (res) => res.status(changed ? 201 : 200).json({
         success: true,
         changed,
-        grant: { apiKeyId: req.params.id, shareId, canRead: currentGrant?.can_read === true, canUpdate: currentGrant?.can_update === true },
+        grant: grantProjection,
         scopes
       });
     });
@@ -1639,16 +1792,20 @@ app.post('/admin/apis/keys/:id/grants', privateNoStore, requireDashboardAdmin, p
 app.put('/admin/apis/keys/:id/grants/:shareId', privateNoStore, requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
   try {
     const respond = await publishing.run(async repository => {
-      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)
-        || Object.keys(req.body).length !== 1 || typeof req.body.canUpdate !== 'boolean') {
-        return response => response.status(400).json({ success: false, error: 'canUpdate 必须是布尔值' });
+      const validBody = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+        && Object.keys(req.body).length === 1
+        && (typeof req.body.canUpdate === 'boolean' || typeof req.body.canPublish === 'boolean');
+      if (!validBody) {
+        return response => response.status(400).json({ success: false, error: '请求必须且只能包含布尔 canUpdate 或 canPublish' });
       }
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(req.params.shareId)) {
         return response => response.status(400).json({ success: false, error: 'shareId 无效' });
       }
-      const outcome = await repository.setShareEdit({
-        apiKeyId: req.params.id, shareId: req.params.shareId, canUpdate: req.body.canUpdate
-      });
+      const isPublishToggle = Object.prototype.hasOwnProperty.call(req.body, 'canPublish');
+      const enabled = isPublishToggle ? req.body.canPublish : req.body.canUpdate;
+      const outcome = isPublishToggle
+        ? await repository.setSharePublish({ apiKeyId: req.params.id, shareId: req.params.shareId, canPublish: enabled })
+        : await repository.setShareEdit({ apiKeyId: req.params.id, shareId: req.params.shareId, canUpdate: enabled });
       if (outcome.status === 'key-not-found') {
         return response => response.status(404).json({ success: false, error: 'API key not found' });
       }
@@ -1656,23 +1813,29 @@ app.put('/admin/apis/keys/:id/grants/:shareId', privateNoStore, requireDashboard
       const changed = outcome.status === 'granted' || outcome.status === 'updated';
       if (changed) {
         await repository.createAuditLog({
-          action: req.body.canUpdate ? 'api_key.grant' : 'api_key.revoke',
+          action: enabled ? 'api_key.grant' : 'api_key.revoke',
           pageId: req.params.shareId,
           details: JSON.stringify({
             apiKeyId: req.params.id,
             shareId: req.params.shareId,
-            grants: req.body.canUpdate ? ['read', 'update'] : ['update']
+            grants: isPublishToggle ? ['publish'] : (enabled ? ['read', 'update'] : ['update'])
           }),
           ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
         });
       }
       const grant = await repository.getShareGrant(req.params.id, req.params.shareId);
       const scopes = (await repository.getApiKeyById(req.params.id))?.scopes || [];
+      const grantProjection = grant ? {
+        apiKeyId: req.params.id,
+        shareId: req.params.shareId,
+        canRead: grant.can_read === true,
+        canUpdate: grant.can_update === true,
+        ...((isPublishToggle || grant.can_publish === true) ? { canPublish: grant.can_publish === true } : {})
+      } : null;
       return response => response.json({
         success: true,
         changed,
-        grant: { apiKeyId: req.params.id, shareId: req.params.shareId,
-          canRead: grant?.can_read === true, canUpdate: grant?.can_update === true },
+        grant: grantProjection,
         scopes
       });
     });
@@ -1746,9 +1909,17 @@ app.delete('/admin/apis/keys/:id/grants/:shareId', privateNoStore, requireDashbo
         return (res) => res.status(409).json({ success: false, error: '编辑授权依赖读取授权，不能单独撤回' });
       }
 
-      // Authoritative scope list so the UI badges mirror the server (#36).
       const scopes = (await repository.getApiKeyById(req.params.id))?.scopes || [];
-      return (res) => res.json({ success: true, changed: outcome.status === 'revoked', scopes });
+      const grant = await repository.getShareGrant(req.params.id, req.params.shareId);
+      return (res) => res.json({
+        success: true,
+        changed: outcome.status === 'revoked',
+        grant: grant ? {
+          apiKeyId: req.params.id, shareId: req.params.shareId,
+          canRead: grant.can_read === true, canUpdate: grant.can_update === true, canPublish: grant.can_publish === true
+        } : null,
+        scopes
+      });
     });
     return respond(res);
   } catch (error) {
@@ -3369,7 +3540,7 @@ app.get('/api/v1/capabilities', privateNoStore, requireApiKey, (req, res) => {
 // tables, no Favorite state. Grant-missing answers 404 identically to
 // Share-missing; unpublished/locked/expired Shares stay readable because
 // management authorization is independent of public visibility (#24 §6).
-app.get('/api/v1/shares', privateNoStore, requireApiKey, requireScope(READ_SCOPE), async (req, res) => {
+app.get('/api/v1/shares', privateNoStore, markApiResourceReadEndpoint, requireApiKey, requireScope(READ_SCOPE), async (req, res) => {
   const limit = parseShareListLimit(req.query.limit);
   if (limit.error) {
     return res.status(400).json({ success: false, code: 'INVALID_LIMIT', retryable: false, error: limit.error });
@@ -3397,12 +3568,12 @@ app.get('/api/v1/shares', privateNoStore, requireApiKey, requireScope(READ_SCOPE
       ...(nextCursor ? { nextCursor } : {})
     });
   } catch (error) {
-    console.error('Granted share list failed:', error);
-    return res.status(500).json({ success: false, error: '服务器错误' });
+    console.error('Granted share list failed:', { name: error?.name || 'Error', code: safeErrorCode(error) });
+    return sendApiReadUnavailable(res);
   }
 });
 
-app.get('/api/v1/shares/:id/content', privateNoStore, requireApiKey, requireScope(READ_SCOPE), async (req, res) => {
+app.get('/api/v1/shares/:id/content', privateNoStore, markApiResourceReadEndpoint, requireApiKey, requireScope(READ_SCOPE), async (req, res) => {
   try {
     const identity = req.apiKeyIdentity;
     const grant = await pageRepository.getShareGrant(identity.id, req.params.id);
@@ -3433,18 +3604,22 @@ app.get('/api/v1/shares/:id/content', privateNoStore, requireApiKey, requireScop
       markdownTheme: page.markdown_theme
     });
   } catch (error) {
-    console.error('Granted share content failed:', error);
-    return res.status(500).json({ success: false, error: '服务器错误' });
+    console.error('Granted share content failed:', { name: error?.name || 'Error', code: safeErrorCode(error) });
+    return sendApiReadUnavailable(res);
   }
 });
 
-app.get('/api/v1/shares/:id/state', privateNoStore, requireApiKey, requireScope(READ_SCOPE), async (req, res) => {
+app.get('/api/v1/shares/:id/state', privateNoStore, markApiResourceReadEndpoint, requireApiKey, requireApiStateScope, async (req, res) => {
   try {
     const identity = req.apiKeyIdentity;
     const grant = await pageRepository.getShareGrant(identity.id, req.params.id);
-    // State-only model (#24 §6): a future publish grant also unlocks this
-    // read, but the response stays title/description/body-free either way.
-    if (!grant || (grant.can_read !== true && grant.can_publish !== true)) return sendShareNotFound(res);
+    const scopes = identity.scopes || [];
+    // State is intentionally the only intersection for a publish-only Key:
+    // its publish scope must match can_publish, while read scope must match
+    // can_read. One permission never implies the other.
+    const canReadState = scopes.includes(READ_SCOPE) && grant?.can_read === true;
+    const canPublishState = scopes.includes(PUBLISH_SCOPE) && grant?.can_publish === true;
+    if (!canReadState && !canPublishState) return sendShareNotFound(res);
 
     const page = await pageRepository.getById(req.params.id);
     if (!page) return sendShareNotFound(res);
@@ -3466,10 +3641,138 @@ app.get('/api/v1/shares/:id/state', privateNoStore, requireApiKey, requireScope(
       accessRevision: String(page.access_revision)
     });
   } catch (error) {
-    console.error('Granted share state failed:', error);
-    return res.status(500).json({ success: false, error: '服务器错误' });
+    console.error('Granted share state failed:', { name: error?.name || 'Error', code: safeErrorCode(error) });
+    return sendApiReadUnavailable(res);
   }
 });
+
+function apiPublishStateProjection(page) {
+  return {
+    id: page.id,
+    published: page.published !== false,
+    isProtected: page.is_protected === 1,
+    expiresAt: page.expires_at === null || page.expires_at === undefined ? null : Number(page.expires_at),
+    accessRevision: String(page.access_revision)
+  };
+}
+
+function sendApiPublishStateResult(res, page, { action, requestId, changed, replayed = false }) {
+  const state = apiPublishStateProjection(page);
+  res.set('ETag', accessEtag(page.id, state.accessRevision));
+  return res.json({ success: true, action, requestId, changed, ...(replayed ? { replayed: true } : {}), ...state });
+}
+
+async function handleApiPublishStateRequest(req, res, action) {
+  const identity = req.apiKeyIdentity;
+  const requestId = req.apiPublishRequestId;
+  const baseline = req.apiPublishBaseline;
+  const namespace = resolveApiCredentialNamespace(identity);
+  const digestInput = normalizePublishStateDigestInput({ expectedAccessRevision: baseline.revision });
+  const requestDigest = createRequestDigest(digestInput.fields, { action, targetId: req.params.id });
+  const publishingOperation = {
+    actorNamespace: namespace,
+    requestId,
+    action,
+    targetId: req.params.id,
+    requestDigest
+  };
+
+  try {
+    const respond = await publishing.run(async (repository, existingOperation) => {
+      // The Key row is already locked and credential_version rechecked by
+      // publishing.run. Re-read scopes under that lock, then lock the Share
+      // and grant before either replay or state CAS.
+      const currentKey = await repository.getApiKeyById(identity.id);
+      if (!currentKey || !currentKey.scopes?.includes(PUBLISH_SCOPE)) {
+        return response => sendApiPublishError(req, response, 403, 'SCOPE_REQUIRED', '当前凭据缺少所需 scope: share:publish', false, { scope: PUBLISH_SCOPE });
+      }
+      const authorization = await repository.getShareGrantForWrite(identity.id, req.params.id);
+      if (!authorization || authorization.grant?.can_publish !== true) {
+        return response => sendApiPublishError(req, response, 404, 'SHARE_NOT_FOUND', 'Share 不存在或没有上下架授权');
+      }
+
+      if (existingOperation) {
+        const outcome = await classifyOperationReplay(repository, { record: existingOperation, requestDigest });
+        if (outcome.kind === 'conflict') {
+          return response => sendApiPublishError(req, response, 409, 'REQUEST_ID_CONFLICT', '同一请求标识对应了不同的请求内容');
+        }
+        if (outcome.kind === 'result-unavailable') {
+          return response => sendApiPublishError(req, response, 410, 'RESULT_UNAVAILABLE', '该操作已提交，但其结果不可用');
+        }
+        if (!outcome.accessUnchanged) {
+          // Confirm the operation, but never present its once-current state as
+          // if it were the Share's current state after a later access change.
+          return response => response.json({
+            success: true,
+            action,
+            requestId,
+            changed: outcome.receipt.changed === true,
+            replayed: true,
+            stateChangedSinceCommit: true
+          });
+        }
+        return response => sendApiPublishStateResult(response, outcome.page, {
+          action, requestId, changed: outcome.receipt.changed === true, replayed: true
+        });
+      }
+
+      const result = await repository.setPublished(req.params.id, {
+        published: action === 'republish',
+        expectedAccessRevision: baseline.revision,
+        returnUpdated: true
+      });
+      if (!result?.page) {
+        return response => sendApiPublishError(req, response, 404, 'SHARE_NOT_FOUND', 'Share 不存在或没有上下架授权');
+      }
+
+      const page = result.page;
+      const accessRevision = String(page.access_revision);
+      if (result.changed) {
+        await repository.createAuditLog({
+          action: action === 'unpublish' ? 'page.unpublish' : 'page.republish',
+          pageId: req.params.id,
+          details: JSON.stringify({ accessRevision, changed: true, actor: `api-key:${identity.id}` }),
+          ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+        });
+      }
+      await repository.createPublishingOperation({
+        actor_namespace: namespace,
+        request_id: requestId,
+        action,
+        request_digest: requestDigest,
+        target_id: req.params.id,
+        result_share_id: req.params.id,
+        result_revision: String(page.current_revision),
+        result_access_revision: accessRevision,
+        receipt_encrypted: encodeOperationReceipt({ changed: result.changed, published: action === 'republish' }),
+        created_at: Date.now()
+      });
+      return response => sendApiPublishStateResult(response, page, { action, requestId, changed: result.changed });
+    }, { apiKeyIdentity: identity, publishingOperation });
+    return respond(res);
+  } catch (error) {
+    if (error.code === 'INVALID_API_KEY') return sendApiPublishError(req, res, 401, 'INVALID_API_KEY', 'Invalid API key');
+    if (error.code === 'PUBLISHING_MAINTENANCE') return sendApiPublishError(req, res, 503, error.code, error.message, true);
+    if (['55P03', '40P01', '57014'].includes(error.code)) {
+      return sendApiPublishError(req, res, 503, 'PUBLISHING_UNAVAILABLE', 'Share publication is temporarily unavailable', true);
+    }
+    if (error.code === 'ACCESS_PRECONDITION_REQUIRED' || error.code === 'INVALID_ACCESS_REVISION'
+      || error.code === 'ACCESS_REVISION_CONFLICT') {
+      return sendApiPublishError(req, res, error.status || 400, error.code, error.message);
+    }
+    if (error.code === '23505') return sendApiPublishError(req, res, 409, 'REQUEST_ID_CONFLICT', '同一请求标识对应了不同的请求内容');
+    console.error('Managed-Key publish-state transition failed:', { name: error?.name || 'Error', code: safeErrorCode(error) });
+    return sendApiPublishError(req, res, 503, 'PUBLISHING_UNAVAILABLE', 'Share publication is temporarily unavailable', true);
+  }
+}
+
+app.post(SHARE_UNPUBLISH.path, privateNoStore, markApiPublishStateEndpoint({ write: true }), requireApiKey,
+  requireApiPublishScope, validateApiPublishStateHeaders, parseApiPublishStateJson, validateApiPublishStateBody,
+  (req, res) => handleApiPublishStateRequest(req, res, 'unpublish'));
+
+app.post(SHARE_REPUBLISH.path, privateNoStore, markApiPublishStateEndpoint({ write: true }), requireApiKey,
+  requireApiPublishScope, validateApiPublishStateHeaders, parseApiPublishStateJson, validateApiPublishStateBody,
+  (req, res) => handleApiPublishStateRequest(req, res, 'republish'));
 
 app.get('/api/v1/shares/:id/revisions', privateNoStore, markApiRevisionEndpoint(), requireApiKey,
   requireApiRevisionScopes([READ_SCOPE]), async (req, res) => {
@@ -3903,6 +4206,31 @@ app.get('/api/v1/operations/:requestId', privateNoStore, (req, res, next) => {
             return response => response.status(410).json({ success: false, code: 'RESULT_UNAVAILABLE', requestId, retryable: false, error: '该操作已提交，但来源或结果版本已不可用' });
           }
         }
+      }
+      if (isPublishStateAction(record.action)) {
+        const currentKey = await repository.getApiKeyById(req.apiKeyIdentity.id);
+        if (!currentKey || !currentKey.scopes?.includes(PUBLISH_SCOPE)) {
+          return response => response.status(403).json({
+            success: false, code: 'SCOPE_REQUIRED', scope: PUBLISH_SCOPE, requestId,
+            retryable: false, error: '当前凭据缺少所需 scope'
+          });
+        }
+        const authorization = await repository.getShareGrantForWrite(req.apiKeyIdentity.id, record.result_share_id);
+        if (!authorization || authorization.grant?.can_publish !== true) {
+          return response => response.status(404).json({ success: false, code: 'OPERATION_NOT_FOUND', requestId, retryable: false, error: '未找到该请求标识对应的操作' });
+        }
+        const outcome = await classifyOperationReplay(repository, {
+          record, requestDigest: record.request_digest
+        });
+        if (outcome.kind === 'result-unavailable') {
+          return response => response.status(410).json({ success: false, code: 'RESULT_UNAVAILABLE', requestId, retryable: false, error: '该操作已提交，但其结果不可用' });
+        }
+        const projection = operationStatusProjection(record);
+        if (!outcome.accessUnchanged) {
+          delete projection.accessRevision;
+          projection.stateChangedSinceCommit = true;
+        }
+        return response => response.json({ success: true, requestId, operations: [projection] });
       }
       // Metadata only: no receipt, body, title/description or password.
       return response => response.json({ success: true, requestId, operations: [operationStatusProjection(record)] });

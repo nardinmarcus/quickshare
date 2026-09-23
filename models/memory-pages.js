@@ -551,6 +551,56 @@ class MemoryPageRepository {
     return { status: 'updated', grant: { ...grant } };
   }
 
+  // Publish grants are independent from read/edit. A publish-only row keeps
+  // all content projections closed while still making state transitions
+  // available to a Key with the matching global scope.
+  async grantSharePublish({ apiKeyId, shareId }) {
+    const key = this.apiKeys.get(apiKeyId);
+    if (!key) return { status: 'key-not-found' };
+    if (!this.pages.has(shareId)) return { status: 'share-not-found' };
+
+    const mapKey = `${apiKeyId}\u0000${shareId}`;
+    let grant = this.shareGrants.get(mapKey);
+    const changed = !grant || grant.can_publish !== true;
+    if (!grant) {
+      grant = {
+        api_key_id: apiKeyId,
+        share_id: shareId,
+        can_read: false,
+        can_update: false,
+        can_publish: true,
+        created_at: Date.now()
+      };
+      this.shareGrants.set(mapKey, grant);
+    } else {
+      grant.can_publish = true;
+    }
+
+    if (!Array.isArray(key.scopes)) key.scopes = ['share:create'];
+    if (!key.scopes.includes('share:publish')) key.scopes.push('share:publish');
+    return { status: changed ? 'granted' : 'unchanged', grant: { ...grant } };
+  }
+
+  async setSharePublish({ apiKeyId, shareId, canPublish }) {
+    if (typeof canPublish !== 'boolean') throw new TypeError('canPublish must be a boolean');
+    if (canPublish) return this.grantSharePublish({ apiKeyId, shareId });
+    const key = this.apiKeys.get(apiKeyId);
+    if (!key) return { status: 'key-not-found' };
+    if (!this.pages.has(shareId)) return { status: 'share-not-found' };
+    const mapKey = `${apiKeyId}\u0000${shareId}`;
+    const grant = this.shareGrants.get(mapKey);
+    if (!grant || grant.can_publish !== true) return { status: 'unchanged', grant: grant ? { ...grant } : null };
+
+    grant.can_publish = false;
+    if (grant.can_read !== true && grant.can_update !== true) this.shareGrants.delete(mapKey);
+    const stillHasPublish = Array.from(this.shareGrants.values())
+      .some(row => row.api_key_id === apiKeyId && row.can_publish === true);
+    if (!stillHasPublish && Array.isArray(key.scopes)) {
+      key.scopes = key.scopes.filter(scope => scope !== 'share:publish');
+    }
+    return { status: 'updated', grant: this.shareGrants.has(mapKey) ? { ...grant } : null };
+  }
+
   async getShareGrantForWrite(apiKeyId, shareId) {
     const page = this.pages.get(shareId);
     if (!page) return null;
@@ -1080,12 +1130,15 @@ class MemoryPageRepository {
       });
     }
 
-    // Receipt scrub: ONLY records whose committed result is this exact
-    // Share+Revision. Other revisions of the same Share and other Shares
-    // keep their receipts; identities (result_revision) are never changed.
+    // Receipt scrub: only content-dependent results whose committed result
+    // is this exact Share+Revision are invalidated. Publish-state receipts
+    // confirm a state transition independently of the content snapshot, so
+    // preserve them even when result_revision names the purged version.
+    // Other revisions of this Share and other Shares keep their receipts.
     const receiptPurgedAt = Date.now();
     for (const [key, record] of this.publishOperations) {
-      if (record.result_share_id === id && String(record.result_revision) === normalized) {
+      if (record.action !== 'unpublish' && record.action !== 'republish'
+        && record.result_share_id === id && String(record.result_revision) === normalized) {
         this.publishOperations.set(key, {
           ...record,
           receipt_encrypted: null,

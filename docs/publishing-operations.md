@@ -2,9 +2,10 @@
 
 Scope: this document describes **what is implemented** — idempotent creation
 (web page, dashboard clone, Share API), managed-Key conditional content
-updates (#37) and history restore (#38), idempotent dashboard content updates
-and history restores (#33), operation status confirmation, and the deletion
-tombstone. Key-driven publish-state writes remain unavailable.
+updates (#37), history restore (#38), publish-state operations (#39),
+idempotent dashboard content updates and history restores (#33), operation
+status confirmation, and the deletion tombstone. Key-driven publication uses
+a distinct `share:publish` capability and never grants content read.
 
 ## Request identity
 
@@ -115,6 +116,54 @@ replay. `GET /api/v1/operations/:requestId` is namespace-bound and
 metadata-only; for restore it rechecks the current edit grant and source/result
 availability, returning 404 for a missing/unauthorized operation and 410 when
 its result is unavailable. This does not add a Key purge endpoint.
+
+## Managed Key publication-state operations (#39)
+
+The owner dashboard grants `can_publish` independently for each Share using
+`/admin/apis`; the first such grant adds `share:publish` to that Key, and
+removing the last publish grant removes the scope. Read/edit bits are preserved
+when publish is toggled. A publish-only row is retained even with
+`can_read=false` and `can_update=false`, and is visibly labeled as
+publish-only. Auto-edit for future creations never adds `share:publish`.
+
+`GET /api/v1/shares/:id/state` permits either `share:read` + `can_read`, or
+`share:publish` + `can_publish`. The allow-list is exactly `id`, `published`,
+`isProtected`, `expiresAt`, and decimal-string `accessRevision`, with the
+strong state ETag `"access:<id>:<accessRevision>"` and private/no-store. A
+publish-only Key cannot list Shares, read content or revision history, or see
+title/description metadata; the list adapter selects only `can_read` rows.
+
+`POST /api/v1/shares/:id/unpublish` and `/republish` require a managed Key,
+`share:publish`, the current Share `can_publish` grant, the exact strong state
+ETag in `If-Match`, and a 16–128 character `Idempotency-Key`. The request is
+an empty JSON object only and is parsed with the configured small-body limit
+(default 16 KiB). Content ETags, weak validators, wildcard, tag lists and
+content/policy fields are rejected. Missing either required header is 428,
+malformed labels are 400, stale access state is 412, a reused request id with
+a different action/target/baseline is 409, unauthorized target is 404, and
+maintenance/lock/database faults are retryable 503.
+
+Each operation reuses the #35 `setPublished` CAS inside the shared publishing
+transaction: maintenance gate → Key credential/version lock → operation lock
+→ Share → grant. Scope and grant are rechecked while the Key row is locked,
+before both a fresh write and a replay; rotation, deletion or grant revocation
+that commits first prevents the old request from acting. `published`,
+`access_revision`, audit and a minimal encrypted `{changed,published}` receipt
+commit atomically. A true state change advances access revision once; a
+same-state no-op records success without a bump or duplicate audit. Content
+revision, password/protection, expiry, URL, history, favorite and counts are
+untouched.
+
+A matching retry confirms the committed operation before re-running CAS. It
+returns its state and state ETag only while the current access revision still
+matches the recorded result. If a later access change occurred, the response
+confirms replay but omits the old published value and ETag. The operation
+status endpoint likewise checks current `share:publish` and `can_publish`; it
+removes the result access revision after later access change. Revoked
+credentials/grants cannot replay or query the result. Old access cookies are
+invalidated by the real transition. The public projection remains #35's:
+unpublished is neutral 404, published-but-expired is 410, and republish never
+removes protection or extends expiry.
 
 ## Dashboard content saves and restores (#33)
 
@@ -286,10 +335,17 @@ recover.
   create replay never reads the live Share row for metadata, so it can never
   become a channel for reading the owner's later edits; the live-row
   availability check only decides whether the result can be confirmed at all.
-- Per #24 §8, replay re-checks the availability of the result Share AND its
-  committed Revision. Tombstoned (deleted), Share-missing, or
-  revision-missing results answer `410 RESULT_UNAVAILABLE` with no metadata
-  and never rebuild anything.
+- For content-result operations (`create`, `clone`, `content-update` and
+  `restore`), replay re-checks the availability of the result Share AND its
+  committed Revision under #24 §8. A missing or deleted Share, or a missing
+  or purged content result Revision, answers `410 RESULT_UNAVAILABLE` with no
+  metadata and never rebuilds anything. Publish-state `unpublish`/`republish`
+  is the #35/#39 exception: replay still requires current Key/scope/grant
+  authorization, an existing Share and a readable receipt, but does not
+  require the recorded content Revision to remain available. If access state
+  changed since commit, replay confirms the operation without exposing its
+  stale `published` value, access revision or ETag; operation status likewise
+  omits the stale access revision.
 - Receipts are stored for every creation and always encrypted with the
   existing application secret capability. The generated password (when one
   exists) is the sensitive member: it replays through the creator's own
@@ -301,12 +357,21 @@ recover.
   transaction, leaving a non-content dedupe tombstone. A late replay answers
   `410 RESULT_UNAVAILABLE` and never revives or recreates the Share.
 - Purging a revision (#34) scrubs `receipt_encrypted` and sets `purged_at`
-  for exactly the operations whose committed result is that Share+Revision,
-  in the same transaction as the snapshot payload clearing — across every
-  actor namespace; other revisions and other Shares keep their receipts and
-  `deleted_at` stays the whole-Share marker. Replays of those operations
-  confirm the operation happened but answer `410 RESULT_UNAVAILABLE` without
-  returning any receipt or payload byte.
+  only for content-dependent operations (`create`, `clone`, `content-update`,
+  `restore`, as applicable) whose committed content result is exactly that
+  Share+Revision. This is atomic with snapshot payload clearing and applies
+  across actor namespaces; other revisions and Shares keep their receipts,
+  and `deleted_at` remains the whole-Share marker. Replays of these content
+  operations confirm that the operation happened but answer
+  `410 RESULT_UNAVAILABLE` without returning receipt or payload bytes.
+  Content purge explicitly excludes `unpublish`/`republish`: their minimal
+  `{changed, published}` receipt is independent of the content Revision named
+  in `result_revision`, so purge neither scrubs that receipt nor sets the
+  operation's `purged_at`. State replay/status still re-check current Key,
+  `share:publish` scope and `can_publish` grant; replay also requires the Share
+  and receipt to remain available. A later access-state change permits only
+  confirmation without the old published value/access revision/ETag as
+  described above; purging content alone does not invalidate that confirmation.
 
 ## Owner review
 

@@ -26,7 +26,7 @@ test('Key discovery truthfully reports scopes, catalog and configured request by
   assert.equal(capabilities.status, 200);
   assert.deepEqual(capabilities.body.contentTypes, ['html', 'markdown', 'svg', 'mermaid']);
   assert.deepEqual(capabilities.body.markdownThemePresets, ['bytedance', 'github', 'apple', 'notion', 'claude', 'raycast', 'google', 'tesla', 'airbnb', 'bugatti', 'linear', 'playstation']);
-  assert.deepEqual(capabilities.body.operations, [
+  assert.deepEqual(capabilities.body.operations.map(({ id, method, path }) => ({ id, method, path })), [
     { id: 'share:create', method: 'POST', path: '/api/v1/share' },
     { id: 'share:create:status', method: 'GET', path: '/api/v1/operations/:requestId' },
     { id: 'share:list', method: 'GET', path: '/api/v1/shares' },
@@ -35,16 +35,24 @@ test('Key discovery truthfully reports scopes, catalog and configured request by
     { id: 'share:content:update', method: 'PUT', path: '/api/v1/shares/:id/content' },
     { id: 'share:revisions:read', method: 'GET', path: '/api/v1/shares/:id/revisions' },
     { id: 'share:revision:read', method: 'GET', path: '/api/v1/shares/:id/revisions/:revision' },
-    { id: 'share:restore', method: 'POST', path: '/api/v1/shares/:id/restore' }
+    { id: 'share:restore', method: 'POST', path: '/api/v1/shares/:id/restore' },
+    { id: 'share:unpublish', method: 'POST', path: '/api/v1/shares/:id/unpublish' },
+    { id: 'share:republish', method: 'POST', path: '/api/v1/shares/:id/republish' },
+    { id: 'identity:read', method: 'GET', path: '/api/v1/me' },
+    { id: 'capabilities:read', method: 'GET', path: '/api/v1/capabilities' }
+  ]);
+  assert.deepEqual(capabilities.body.operations.find(operation => operation.id === 'share:state:read').anyOf, [
+    { scope: 'share:read', grant: 'can_read' },
+    { scope: 'share:publish', grant: 'can_publish' }
   ]);
   assert.deepEqual(capabilities.body.scopes, {
-    implemented: ['share:create', 'share:read', 'share:update'],
-    notImplemented: ['share:publish']
+    implemented: ['share:create', 'share:read', 'share:update', 'share:publish'],
+    notImplemented: []
   });
   assert.deepEqual(capabilities.body.idempotency, {
     header: 'Idempotency-Key',
     pattern: '^[A-Za-z0-9_-]{16,128}$',
-    appliesTo: ['share:create', 'share:content:update', 'share:restore'],
+    appliesTo: ['share:create', 'share:content:update', 'share:restore', 'share:unpublish', 'share:republish'],
     conflictStatus: 409,
     replayRequiresSameInput: true
   });

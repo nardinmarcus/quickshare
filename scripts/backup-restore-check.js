@@ -78,8 +78,9 @@ const REVISION_DRILL_VALUE = '9007199254740993';
 // Publish-operation fixture (#32 migration 008): one committed creation with
 // an encrypted receipt and one deletion tombstone (receipt cleared). #33 adds
 // dashboard restore/content-update rows; #37 adds a managed-Key content
-// update receipt; #38 adds a Key-driven restore receipt. The full-row verifier
-// covers every operation byte by name.
+// update receipt; #38 adds a Key-driven restore receipt; #39 adds a managed-Key
+// publish-state result on a Share already unpublished by #35. The full-row
+// verifier covers every operation byte by name.
 const OPERATION_FIXTURE = {
   namespace: 'managed-key:issue27key00001',
   requestId: 'issue32-op-000000000001',
@@ -89,7 +90,7 @@ const OPERATION_FIXTURE = {
   apiContentUpdateRequestId: 'issue37-op-000000000007',
   purgedReceiptRequestId: 'issue34-op-000000000005',
   apiRestoreRequestId: 'issue38-op-000000000008',
-  unpublishRequestId: 'issue35-op-000000000006'
+  apiPublishRequestId: 'issue39-op-000000000009'
 };
 
 // Publication-state fixture gate (#35). When migration 007's `published`
@@ -402,7 +403,7 @@ async function seedFixture(pool) {
               ($1, $8, 'create', $9, NULL, $10, '1', $5, NULL, $7, $11),
               ($24, $12, 'restore', $13, $14, $14, '3', '1', $15, $7, NULL),
               ($1, $16, 'content-update', $17, $18, $18, '2', '1', $19, $7, NULL),
-              ($1, $20, 'unpublish', $21, $18, $18, '3', $22, $23, $7, NULL),
+              ($1, $20, 'unpublish', $21, $14, $14, '3', $22, $23, $7, NULL),
               ($28, $25, 'restore', $26, $14, $14, '3', $22, $27, $7, NULL)`,
       [
         OPERATION_FIXTURE.namespace,
@@ -424,10 +425,10 @@ async function seedFixture(pool) {
         '0'.repeat(64),
         pages.protectedPage,
         updateReceipt,
-        OPERATION_FIXTURE.unpublishRequestId,
+        OPERATION_FIXTURE.apiPublishRequestId,
         '3'.repeat(64),
         UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE,
-        encryptSecret(JSON.stringify({ changed: true, published: false })),
+        encryptSecret(JSON.stringify({ changed: false, published: false })),
         'dashboard-session:issue27-drill-session',
         OPERATION_FIXTURE.apiRestoreRequestId,
         '8'.repeat(64),
@@ -503,15 +504,15 @@ async function seedFixture(pool) {
   if (scopesSeeded) {
     await pool.query(
       'UPDATE api_keys SET scopes = $2::jsonb, auto_grant_new_share_edit = TRUE WHERE id = $1',
-      [FIXTURE.apiKey.id, JSON.stringify(['share:create', 'share:read', 'share:update'])]
+      [FIXTURE.apiKey.id, JSON.stringify(['share:create', 'share:read', 'share:update', 'share:publish'])]
     );
   }
 
   const grantsSeeded = await probeShareGrantsTable(pool);
   if (grantsSeeded) {
     await pool.query(
-      `INSERT INTO share_grants (api_key_id, share_id, can_read, can_update, created_at)
-       VALUES ($1, $2, TRUE, TRUE, $3)`,
+      `INSERT INTO share_grants (api_key_id, share_id, can_read, can_update, can_publish, created_at)
+       VALUES ($1, $2, TRUE, TRUE, TRUE, $3)`,
       [FIXTURE.apiKey.id, pages.markdownThemed, base + 110]
     );
   }
@@ -703,12 +704,12 @@ async function runDrill({ keepContainers = false, skipContainerSetup = false, ou
       publicationState: seedResult.revisionsSeeded ? 'unpublished-exercised' : 'absent-schema001-006',
       publicationStateAccessRevision: seedResult.revisionsSeeded ? UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE : null,
       publishedFixture: seedResult.revisionsSeeded ? 'non-default-false-with-bumped-access' : 'absent-schema001-006',
-      // #36/#37 scope/grant coverage (existing migration 010): the fixture
-      // key carries read+update scopes, the enabled future auto-edit option
-      // and one real read+update grant bound to its logical id at
+      // #36–#39 scope/grant coverage (existing migration 010): the fixture
+      // key carries read+update+publish scopes, the enabled future auto-edit option
+      // and one real read+update+publish grant bound to its logical id at
       // credential_version 9007199254740993.
       apiKeyScopes: seedResult.scopesSeeded ? 'exercised' : 'absent-schema001-009',
-      shareGrants: seedResult.grantsSeeded ? 'exercised-read-update-auto-edit-and-rotation-survival' : 'absent-schema001-009',
+      shareGrants: seedResult.grantsSeeded ? 'exercised-read-update-publish-auto-edit-and-rotation-survival' : 'absent-schema001-009',
       reconciliation: verification ? verification.reconciliation.status : 'not-available',
       safeToServe: false,
       durationsMs: {

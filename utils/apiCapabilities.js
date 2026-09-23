@@ -2,25 +2,33 @@ const bytes = require('bytes');
 const { MARKDOWN_THEME_CATALOG } = require('./markdownThemeCatalog');
 
 const CONTENT_TYPES = Object.freeze(['html', 'markdown', 'svg', 'mermaid']);
-const CREATE_SHARE = Object.freeze({ id: 'share:create', method: 'POST', path: '/api/v1/share' });
-const SHARE_CREATE_STATUS = Object.freeze({ id: 'share:create:status', method: 'GET', path: '/api/v1/operations/:requestId' });
-// Read-only resource APIs (#36): each also requires a per-Share read grant;
-// scopes filter what a credential MAY ask for, grants decide what it sees.
-const SHARE_LIST = Object.freeze({ id: 'share:list', method: 'GET', path: '/api/v1/shares' });
-const SHARE_CONTENT_READ = Object.freeze({ id: 'share:content:read', method: 'GET', path: '/api/v1/shares/:id/content' });
-const SHARE_STATE_READ = Object.freeze({ id: 'share:state:read', method: 'GET', path: '/api/v1/shares/:id/state' });
-const SHARE_CONTENT_UPDATE = Object.freeze({ id: 'share:content:update', method: 'PUT', path: '/api/v1/shares/:id/content' });
-const SHARE_REVISIONS_READ = Object.freeze({ id: 'share:revisions:read', method: 'GET', path: '/api/v1/shares/:id/revisions' });
-const SHARE_REVISION_READ = Object.freeze({ id: 'share:revision:read', method: 'GET', path: '/api/v1/shares/:id/revisions/:revision' });
-const SHARE_RESTORE = Object.freeze({ id: 'share:restore', method: 'POST', path: '/api/v1/shares/:id/restore' });
-const IMPLEMENTED_SCOPES = Object.freeze(['share:create', 'share:read', 'share:update']);
-const NOT_IMPLEMENTED_SCOPES = Object.freeze(['share:publish']);
+const CREATE_SHARE = Object.freeze({ id: 'share:create', method: 'POST', path: '/api/v1/share', scope: 'share:create' });
+const SHARE_CREATE_STATUS = Object.freeze({ id: 'share:create:status', method: 'GET', path: '/api/v1/operations/:requestId', scope: 'share:create' });
+const SHARE_LIST = Object.freeze({ id: 'share:list', method: 'GET', path: '/api/v1/shares', scope: 'share:read', grant: 'can_read' });
+const SHARE_CONTENT_READ = Object.freeze({ id: 'share:content:read', method: 'GET', path: '/api/v1/shares/:id/content', scope: 'share:read', grant: 'can_read' });
+const SHARE_STATE_READ = Object.freeze({
+  id: 'share:state:read',
+  method: 'GET',
+  path: '/api/v1/shares/:id/state',
+  anyOf: Object.freeze([
+    Object.freeze({ scope: 'share:read', grant: 'can_read' }),
+    Object.freeze({ scope: 'share:publish', grant: 'can_publish' })
+  ])
+});
+const SHARE_CONTENT_UPDATE = Object.freeze({ id: 'share:content:update', method: 'PUT', path: '/api/v1/shares/:id/content', scopes: Object.freeze(['share:read', 'share:update']), grants: Object.freeze(['can_read', 'can_update']) });
+const SHARE_REVISIONS_READ = Object.freeze({ id: 'share:revisions:read', method: 'GET', path: '/api/v1/shares/:id/revisions', scope: 'share:read', grant: 'can_read' });
+const SHARE_REVISION_READ = Object.freeze({ id: 'share:revision:read', method: 'GET', path: '/api/v1/shares/:id/revisions/:revision', scope: 'share:read', grant: 'can_read' });
+const SHARE_RESTORE = Object.freeze({ id: 'share:restore', method: 'POST', path: '/api/v1/shares/:id/restore', scopes: Object.freeze(['share:read', 'share:update']), grants: Object.freeze(['can_read', 'can_update']) });
+const SHARE_UNPUBLISH = Object.freeze({ id: 'share:unpublish', method: 'POST', path: '/api/v1/shares/:id/unpublish', scope: 'share:publish', grant: 'can_publish' });
+const SHARE_REPUBLISH = Object.freeze({ id: 'share:republish', method: 'POST', path: '/api/v1/shares/:id/republish', scope: 'share:publish', grant: 'can_publish' });
+const API_IDENTITY = Object.freeze({ id: 'identity:read', method: 'GET', path: '/api/v1/me' });
+const API_CAPABILITIES = Object.freeze({ id: 'capabilities:read', method: 'GET', path: '/api/v1/capabilities' });
+const IMPLEMENTED_SCOPES = Object.freeze(['share:create', 'share:read', 'share:update', 'share:publish']);
+const NOT_IMPLEMENTED_SCOPES = Object.freeze([]);
 
-// Managed Key conditional content updates share the existing operation
-// ledger; publication-state writes remain unavailable until their ticket.
-
-// Shared by HTTP parsing, discovery and the dashboard API documentation.
-// These are request-body limits, not a promise about raw Share content size.
+// Shared by HTTP parsing, capability discovery, dashboard documentation and
+// the bounded OpenAPI subset. Body limits count the decoded request body,
+// not raw Share content bytes.
 function apiCapabilities(config) {
   const shareRequestBodyBytes = bytes.parse(config.shareBodyLimit);
   const smallRequestBodyBytes = bytes.parse(config.smallBodyLimit);
@@ -33,9 +41,8 @@ function apiCapabilities(config) {
     markdownThemePresets: MARKDOWN_THEME_CATALOG.map(preset => preset.id),
     limits: { shareRequestBodyBytes, smallRequestBodyBytes, rawContentBytes: null },
     operations: [CREATE_SHARE, SHARE_CREATE_STATUS, SHARE_LIST, SHARE_CONTENT_READ, SHARE_STATE_READ, SHARE_CONTENT_UPDATE,
-      SHARE_REVISIONS_READ, SHARE_REVISION_READ, SHARE_RESTORE],
-    // Truthful scope surface: content update is live; publish-state writes
-    // stay unadvertised until their ticket lands.
+      SHARE_REVISIONS_READ, SHARE_REVISION_READ, SHARE_RESTORE, SHARE_UNPUBLISH, SHARE_REPUBLISH,
+      API_IDENTITY, API_CAPABILITIES],
     scopes: Object.freeze({
       implemented: IMPLEMENTED_SCOPES,
       notImplemented: NOT_IMPLEMENTED_SCOPES
@@ -43,7 +50,7 @@ function apiCapabilities(config) {
     idempotency: Object.freeze({
       header: 'Idempotency-Key',
       pattern: '^[A-Za-z0-9_-]{16,128}$',
-      appliesTo: ['share:create', 'share:content:update', 'share:restore'],
+      appliesTo: ['share:create', 'share:content:update', 'share:restore', 'share:unpublish', 'share:republish'],
       conflictStatus: 409,
       replayRequiresSameInput: true
     })
@@ -61,6 +68,10 @@ module.exports = {
   SHARE_REVISIONS_READ,
   SHARE_REVISION_READ,
   SHARE_RESTORE,
+  SHARE_UNPUBLISH,
+  SHARE_REPUBLISH,
+  API_IDENTITY,
+  API_CAPABILITIES,
   IMPLEMENTED_SCOPES,
   NOT_IMPLEMENTED_SCOPES,
   apiCapabilities

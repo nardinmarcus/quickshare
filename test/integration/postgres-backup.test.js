@@ -413,7 +413,7 @@ test('native restore rebuilds the database and passes full verification', async 
   const keyCheck = report.checks.find(check => check.name === 'managedApiKeys');
   assert.deepEqual(keyCheck.details, { keys: 1, fixtureCovered: 1, comparedColumns: expectedKeyComparedColumns });
 
-  // #36/#37: scopes, auto-edit and the per-Share read+update grant restore
+  // #36–#39: scopes, auto-edit and the per-Share read+edit+publish grant restore
   // with named coverage; the grant binds the logical Key id whose
   // credential_version is far past rotation.
   if (hasScopes || hasGrants) {
@@ -429,13 +429,13 @@ test('native restore rebuilds the database and passes full verification', async 
         [FIXTURE.apiKey.id]
       );
       if (hasScopes) {
-        assert.deepEqual(restoredKey.rows[0].scopes, ['share:create', 'share:read', 'share:update'],
-          'the non-default read+update scope set travels exactly');
+        assert.deepEqual(restoredKey.rows[0].scopes, ['share:create', 'share:read', 'share:update', 'share:publish'],
+          'the non-default read+edit+publish scope set travels exactly');
         assert.equal(restoredKey.rows[0].auto_grant_new_share_edit, true,
           'the non-default auto-grant flag survives');
       }
       const restoredGrant = await restorePool.query(
-        'SELECT api_key_id, share_id, can_read, can_update FROM share_grants WHERE api_key_id = $1',
+        'SELECT api_key_id, share_id, can_read, can_update, can_publish FROM share_grants WHERE api_key_id = $1',
         [FIXTURE.apiKey.id]
       );
       if (hasGrants) {
@@ -443,6 +443,7 @@ test('native restore rebuilds the database and passes full verification', async 
         assert.equal(restoredGrant.rows[0].share_id, FIXTURE.pages.markdownThemed);
         assert.equal(restoredGrant.rows[0].can_read, true, 'the read grant survives restore');
         assert.equal(restoredGrant.rows[0].can_update, true, 'the update grant survives restore');
+        assert.equal(restoredGrant.rows[0].can_publish, true, 'the independent publish grant survives restore');
         assert.equal(restoredKey.rows[0].credential_version, '9007199254740993',
           'grants bind a key whose version is far past rotation');
       }
@@ -460,7 +461,7 @@ test('native restore rebuilds the database and passes full verification', async 
     assert.ok(operationsCheck, 'the publishOperations check is always reported when the table exists');
     assert.equal(operationsCheck.ok, true, `operation issues: ${JSON.stringify(operationsCheck.issues)}`);
     assert.equal(operationsCheck.details.operationCount, hasPurgeColumns ? 8 : 7,
-      'create+tombstone, Dashboard and managed-Key restore, dashboard/API update, unpublish, and #34 receipt purge restore');
+      'create+tombstone, Dashboard and managed-Key restore, dashboard/API update, #39 publish-state operation, and #34 receipt purge restore');
     assert.equal(operationsCheck.details.tombstoneCount, 1, 'the deletion tombstone restores as a tombstone');
     if (hasPurgeColumns) {
       assert.equal(operationsCheck.details.receiptPurgedCount, 1,
@@ -475,7 +476,7 @@ test('native restore rebuilds the database and passes full verification', async 
     const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
     try {
       const restoredOps = await restorePool.query(
-        'SELECT actor_namespace, request_id, action, result_revision, receipt_encrypted, created_at, deleted_at, purged_at FROM publish_operations ORDER BY request_id ASC');
+        'SELECT actor_namespace, request_id, action, result_share_id, result_revision, result_access_revision, receipt_encrypted, created_at, deleted_at, purged_at FROM publish_operations ORDER BY request_id ASC');
       assert.equal(restoredOps.rows[0].receipt_encrypted !== null, true, 'the encrypted receipt travels byte-identically');
       assert.equal(restoredOps.rows[1].receipt_encrypted, null, 'the tombstone carries no receipt');
       assert.notEqual(restoredOps.rows[1].deleted_at, null);
@@ -509,10 +510,17 @@ test('native restore rebuilds the database and passes full verification', async 
         assert.equal(restoreTombstone.deleted_at, null);
         assert.ok(Number(restoreTombstone.purged_at) > 0, 'the restore receipt tombstone retains its purge moment');
       }
-      // #35: the unpublish ledger row travels with its receipt, proving the
-      // publish-action history is part of every trustworthy backup.
-      const unpublishRow = restoredOps.rows.find(row => row.request_id === OPERATION_FIXTURE.unpublishRequestId);
-      assert.ok(unpublishRow && unpublishRow.receipt_encrypted, 'the #35 unpublish row carries its receipt');
+      // #39: the managed-Key no-op unpublish row is on the same #35-unpublished
+      // Share, so its result Revision/accessRevision and minimal receipt are
+      // consistent and covered by the full-row verifier.
+      const apiPublishRow = restoredOps.rows.find(row => row.request_id === OPERATION_FIXTURE.apiPublishRequestId);
+      assert.ok(apiPublishRow && apiPublishRow.receipt_encrypted, 'the #39 Key publication-state row carries its encrypted receipt');
+      assert.equal(apiPublishRow.actor_namespace, `managed-key:${FIXTURE.apiKey.id}`);
+      assert.equal(apiPublishRow.action, 'unpublish');
+      assert.equal(apiPublishRow.result_share_id, FIXTURE.pages.markdownThemed);
+      assert.equal(apiPublishRow.result_revision, '3');
+      assert.equal(apiPublishRow.result_access_revision, UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE);
+      assert.deepEqual(decodeOperationReceipt(apiPublishRow.receipt_encrypted), { changed: false, published: false });
     } finally {
       await restorePool.end();
     }
@@ -815,10 +823,10 @@ test('credential_version drift alone fails native backup verification', async ()
   }
 });
 
-// #36/#37: tampering with the granted permission bits or the scope column in
+// #36–#39: tampering with the granted permission bits or the scope column in
 // the restored copy must fail verification naming the exact field, and a revert
 // (re-restore from the same manifest) returns the drill to green.
-test('read/update grant and scope tampers fail verification by name (#36/#37)', async () => {
+test('read/edit/publish grant and scope tampers fail verification by name (#36–#39)', async () => {
   if (!hasGrants && !hasScopes) return;
   const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
   const verify = (output) => runStep(process.execPath, [
@@ -830,11 +838,11 @@ test('read/update grant and scope tampers fail verification by name (#36/#37)', 
   if (hasGrants) {
     const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
     try {
-      // Constraint-legal tamper: update flips OFF while publish flips ON — a
-      // real authorization change the verifier must catch by column name.
-      await restorePool.query('UPDATE share_grants SET can_update = FALSE, can_publish = TRUE WHERE api_key_id = $1', [FIXTURE.apiKey.id]);
+      // Constraint-legal tamper: edit and publish both flip OFF — real
+      // authorization changes the verifier must catch by column name.
+      await restorePool.query('UPDATE share_grants SET can_update = FALSE, can_publish = FALSE WHERE api_key_id = $1', [FIXTURE.apiKey.id]);
       const result = await verify(path.join(tmpDir, 'verification-grant-tamper.json'));
-      assert.equal(result.code, 1, 'flipping the granted bit must fail verification');
+      assert.equal(result.code, 1, 'flipping a grant bit must fail verification');
       const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-grant-tamper.json')));
       const grantsCheck = report.checks.find(check => check.name === 'shareGrants');
       assert.equal(grantsCheck.ok, false);
@@ -842,9 +850,9 @@ test('read/update grant and scope tampers fail verification by name (#36/#37)', 
         issue.key === `${FIXTURE.apiKey.id}\u0000${FIXTURE.pages.markdownThemed}` && issue.column === 'can_update'),
         'the tampered grant fails by its (api_key_id, share_id) and column name');
       assert.ok(grantsCheck.issues.some(issue => issue.column === 'can_publish'),
-        'the smuggled publish bit is named too');
+        'the changed publish bit is named too');
     } finally {
-      await restorePool.query('UPDATE share_grants SET can_update = TRUE, can_publish = FALSE WHERE api_key_id = $1', [FIXTURE.apiKey.id]);
+      await restorePool.query('UPDATE share_grants SET can_update = TRUE, can_publish = TRUE WHERE api_key_id = $1', [FIXTURE.apiKey.id]);
       await restorePool.end();
     }
   }
@@ -854,7 +862,7 @@ test('read/update grant and scope tampers fail verification by name (#36/#37)', 
     try {
       await restorePool.query('UPDATE api_keys SET scopes = $2::jsonb WHERE id = $1', [FIXTURE.apiKey.id, JSON.stringify(['share:create', 'share:read'])]);
       const result = await verify(path.join(tmpDir, 'verification-scopes-tamper.json'));
-      assert.equal(result.code, 1, 'dropping the update scope must fail verification');
+      assert.equal(result.code, 1, 'dropping edit and publish scopes must fail verification');
       const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-scopes-tamper.json')));
       const keyCheck = report.checks.find(check => check.name === 'managedApiKeys');
       assert.equal(keyCheck.ok, false);
@@ -862,7 +870,7 @@ test('read/update grant and scope tampers fail verification by name (#36/#37)', 
         issue.column === 'scopes' || issue.message.includes('scopes')),
         'the scope drift fails naming the scopes column');
     } finally {
-      await restorePool.query('UPDATE api_keys SET scopes = $2::jsonb WHERE id = $1', [FIXTURE.apiKey.id, JSON.stringify(['share:create', 'share:read', 'share:update'])]);
+      await restorePool.query('UPDATE api_keys SET scopes = $2::jsonb WHERE id = $1', [FIXTURE.apiKey.id, JSON.stringify(['share:create', 'share:read', 'share:update', 'share:publish'])]);
       await restorePool.end();
     }
   }
@@ -1269,7 +1277,7 @@ test('post-snapshot api_key.revoke is a named hard revocation, not generic revie
   const sourcePool = createPostgresPool(sourceUrl, { env: poolEnv, max: 1 });
   try {
     // Revoke for real (exactly what app.js emits: page_id = shareId).
-    const grantRow = (await sourcePool.query('SELECT can_read, created_at FROM share_grants WHERE api_key_id = $1 AND share_id = $2', [FIXTURE.apiKey.id, FIXTURE.pages.markdownThemed])).rows[0];
+    const grantRow = (await sourcePool.query('SELECT can_read, can_update, can_publish, created_at FROM share_grants WHERE api_key_id = $1 AND share_id = $2', [FIXTURE.apiKey.id, FIXTURE.pages.markdownThemed])).rows[0];
     await sourcePool.query('DELETE FROM share_grants WHERE api_key_id = $1 AND share_id = $2', [FIXTURE.apiKey.id, FIXTURE.pages.markdownThemed]);
     await sourcePool.query(
       'INSERT INTO audit_logs (action, page_id, details, ip, created_at) VALUES ($1, $2, $3, $4, $5)',
@@ -1294,8 +1302,10 @@ test('post-snapshot api_key.revoke is a named hard revocation, not generic revie
     assert.match(JSON.stringify(grantsCheck.issues), new RegExp(FIXTURE.apiKey.id));
 
     // Cleanup: restore the fixture grant; keep the audit row (real history).
-    await sourcePool.query('INSERT INTO share_grants (api_key_id, share_id, can_read, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
-      [FIXTURE.apiKey.id, FIXTURE.pages.markdownThemed, grantRow?.can_read ?? true, grantRow?.created_at ?? Date.now()]);
+    await sourcePool.query(`INSERT INTO share_grants (api_key_id, share_id, can_read, can_update, can_publish, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`,
+      [FIXTURE.apiKey.id, FIXTURE.pages.markdownThemed, grantRow?.can_read ?? true,
+        grantRow?.can_update ?? true, grantRow?.can_publish ?? true, grantRow?.created_at ?? Date.now()]);
   } finally {
     await sourcePool.end();
   }
@@ -1404,12 +1414,12 @@ test('a 001-009-shaped database pair yields a structured report, never a SQL cra
       for (const pool of [sourcePool, restorePool]) {
         await pool.query(
           'UPDATE api_keys SET scopes = $2::jsonb, auto_grant_new_share_edit = TRUE WHERE id = $1',
-          [FIXTURE.apiKey.id, JSON.stringify(['share:create', 'share:read'])]
+          [FIXTURE.apiKey.id, JSON.stringify(['share:create', 'share:read', 'share:update', 'share:publish'])]
         );
         await pool.query(
-          `INSERT INTO share_grants (api_key_id, share_id, can_read, created_at)
-           VALUES ($1, $2, TRUE, $3) ON CONFLICT (api_key_id, share_id) DO UPDATE
-           SET can_read = TRUE, can_update = FALSE, can_publish = FALSE, created_at = EXCLUDED.created_at`,
+          `INSERT INTO share_grants (api_key_id, share_id, can_read, can_update, can_publish, created_at)
+           VALUES ($1, $2, TRUE, TRUE, TRUE, $3) ON CONFLICT (api_key_id, share_id) DO UPDATE
+           SET can_read = TRUE, can_update = TRUE, can_publish = TRUE, created_at = EXCLUDED.created_at`,
           [FIXTURE.apiKey.id, FIXTURE.pages.markdownThemed, base + 110]
         );
       }

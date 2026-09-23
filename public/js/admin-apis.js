@@ -68,7 +68,7 @@
 
     const hint = document.createElement('p');
     hint.className = 'admin-muted';
-    hint.textContent = '按 Share 分别授予读取或编辑权。编辑权始终包含读取权；撤销编辑权不会撤销读取权。';
+    hint.textContent = '读取、编辑与上下架是分开的 Share 权限。编辑包含读取；上下架不会获得正文读取、编辑、列表或历史权限。';
     panel.appendChild(hint);
 
     const list = document.createElement('ul');
@@ -112,13 +112,28 @@
     input.required = true;
     input.placeholder = '例如：xS_9ngJnG9NX';
     formRow.appendChild(input);
+    const readLabel = document.createElement('label');
+    readLabel.className = 'api-key-edit-option';
+    const readToggle = document.createElement('input');
+    readToggle.type = 'checkbox';
+    readToggle.name = 'canRead';
+    readToggle.checked = true;
+    readLabel.append(readToggle, document.createTextNode(' 授予读取'));
+    formRow.appendChild(readLabel);
     const editLabel = document.createElement('label');
     editLabel.className = 'api-key-edit-option';
     const editToggle = document.createElement('input');
     editToggle.type = 'checkbox';
     editToggle.name = 'canUpdate';
-    editLabel.append(editToggle, document.createTextNode(' 同时授予编辑'));
+    editLabel.append(editToggle, document.createTextNode(' 授予编辑'));
     formRow.appendChild(editLabel);
+    const publishLabel = document.createElement('label');
+    publishLabel.className = 'api-key-publish-option';
+    const publishToggle = document.createElement('input');
+    publishToggle.type = 'checkbox';
+    publishToggle.name = 'canPublish';
+    publishLabel.append(publishToggle, document.createTextNode(' 单独授予上下架'));
+    formRow.appendChild(publishLabel);
     const submit = document.createElement('button');
     submit.className = 'cyber-btn cyber-btn-secondary';
     submit.type = 'submit';
@@ -127,7 +142,7 @@
     grantForm.appendChild(formRow);
     const grantHint = document.createElement('p');
     grantHint.className = 'admin-muted';
-    grantHint.textContent = '编辑权包含读取权；单独授予读取时不启用编辑能力。';
+    grantHint.textContent = '编辑自动包含读取；只勾选上下架即可创建 publish-only 授权，不会开放列表、正文、历史或标题元信息。';
     grantForm.appendChild(grantHint);
     panel.appendChild(grantForm);
 
@@ -273,7 +288,14 @@
     }
   }
 
-  function appendGrantItem(keyId, shareId, canUpdate = false) {
+  function appendGrantItem(keyId, grant) {
+    const shareId = grant?.shareId || grant?.share_id;
+    if (!shareId) return null;
+    const canRead = grant.canRead === true || grant.can_read === true;
+    const canUpdate = grant.canUpdate === true || grant.can_update === true;
+    const canPublish = grant.canPublish === true || grant.can_publish === true;
+    if (!canRead && !canUpdate && !canPublish) return null;
+
     const panel = grantsPanelFor(keyId);
     if (!panel) return null;
     const list = panel.querySelector('[data-grant-list]');
@@ -283,9 +305,24 @@
       item.dataset.grantItem = shareId;
       const code = document.createElement('code');
       code.textContent = shareId;
-      item.appendChild(code);
+      const title = document.createElement('span');
+      title.className = 'admin-muted';
+      title.textContent = grant.shareTitle || grant.share_title || '（已授权 Share）';
+      item.append(code, title);
       list.appendChild(item);
     }
+
+    let access = item.querySelector('[data-grant-access]');
+    if (!access) {
+      access = document.createElement('strong');
+      access.className = 'api-key-grant-access';
+      access.dataset.grantAccess = '';
+      item.appendChild(access);
+    }
+    access.textContent = canUpdate && canPublish ? '编辑 + 上下架'
+      : canUpdate ? '编辑 + 读取'
+        : canRead && canPublish ? '读取 + 上下架'
+          : canRead ? '仅读取' : '仅可上下架';
 
     let edit = item.querySelector('.api-key-edit-grant-btn');
     if (!edit) {
@@ -296,27 +333,43 @@
       edit.dataset.shareId = shareId;
       item.appendChild(edit);
     }
-    edit.dataset.canUpdate = String(canUpdate === true);
-    edit.setAttribute('aria-pressed', String(canUpdate === true));
+    edit.dataset.canUpdate = String(canUpdate);
+    edit.setAttribute('aria-pressed', String(canUpdate));
     edit.setAttribute('aria-label', (canUpdate ? '撤销' : '授予') + '该密钥对 ' + shareId + ' 的编辑权');
     edit.textContent = canUpdate ? '撤销编辑权' : '授予编辑权';
 
-    let revoke = item.querySelector('.api-key-revoke-btn');
-    if (!revoke) {
-      revoke = document.createElement('button');
-      revoke.type = 'button';
-      revoke.className = 'admin-delete-btn api-key-revoke-btn';
-      revoke.dataset.apiKeyId = keyId;
-      revoke.dataset.shareId = shareId;
-      item.appendChild(revoke);
+    let publish = item.querySelector('.api-key-publish-grant-btn');
+    if (!publish) {
+      publish = document.createElement('button');
+      publish.type = 'button';
+      publish.className = 'api-key-publish-grant-btn';
+      publish.dataset.apiKeyId = keyId;
+      publish.dataset.shareId = shareId;
+      item.appendChild(publish);
     }
-    revoke.dataset.blockedByEdit = String(canUpdate === true);
-    revoke.disabled = canUpdate === true;
-    revoke.title = canUpdate === true ? '请先撤销编辑权，再撤回读取授权' : '';
-    revoke.setAttribute('aria-label', canUpdate === true
-      ? '请先撤销编辑权'
-      : '撤回该密钥对 ' + shareId + ' 的读取授权');
-    revoke.textContent = canUpdate === true ? '先撤销编辑权' : '撤回读取授权';
+    publish.dataset.canPublish = String(canPublish);
+    publish.setAttribute('aria-pressed', String(canPublish));
+    publish.setAttribute('aria-label', (canPublish ? '撤销' : '授予') + '该密钥对 ' + shareId + ' 的上下架权');
+    publish.textContent = canPublish ? '撤销上下架权' : '授予上下架权';
+
+    let revoke = item.querySelector('.api-key-revoke-btn');
+    if (canRead) {
+      if (!revoke) {
+        revoke = document.createElement('button');
+        revoke.type = 'button';
+        revoke.className = 'admin-delete-btn api-key-revoke-btn';
+        revoke.dataset.apiKeyId = keyId;
+        revoke.dataset.shareId = shareId;
+        item.appendChild(revoke);
+      }
+      revoke.dataset.blockedByEdit = String(canUpdate);
+      revoke.disabled = canUpdate;
+      revoke.title = canUpdate ? '请先撤销编辑权，再撤回读取授权' : '';
+      revoke.setAttribute('aria-label', canUpdate ? '请先撤销编辑权' : '撤回该密钥对 ' + shareId + ' 的读取授权');
+      revoke.textContent = canUpdate ? '先撤销编辑权' : '撤回读取授权';
+    } else {
+      revoke?.remove();
+    }
     refreshGrantEmptyState(keyId);
     return item;
   }
@@ -339,16 +392,37 @@
     }
   }
 
+  function applyGrantUpdate(keyId, shareId, grant) {
+    const existing = grantsPanelFor(keyId)?.querySelector('[data-grant-item="' + CSS.escape(shareId) + '"]');
+    if (grant && (grant.canRead || grant.canUpdate || grant.canPublish)) {
+      appendGrantItem(keyId, grant);
+      if (!existing) bumpGrantCount(keyId, 1);
+    } else if (existing) {
+      existing.remove();
+      bumpGrantCount(keyId, -1);
+      refreshGrantEmptyState(keyId);
+    }
+  }
+
   async function grantRead(form) {
     if (busy) return;
     const keyId = form.dataset.grantForm;
     const input = form.querySelector('input[name="shareId"]');
+    const canReadInput = form.querySelector('input[name="canRead"]');
     const canUpdateInput = form.querySelector('input[name="canUpdate"]');
+    const canPublishInput = form.querySelector('input[name="canPublish"]');
     const canUpdate = canUpdateInput?.checked === true;
+    const canRead = canReadInput?.checked === true || canUpdate;
+    const canPublish = canPublishInput?.checked === true;
     const shareId = (input.value || '').trim();
 
     if (!shareId) {
       input.focus();
+      return;
+    }
+    if (!canRead && !canPublish) {
+      notify('error', '至少选择读取、编辑或上下架授权');
+      canReadInput?.focus();
       return;
     }
 
@@ -357,24 +431,34 @@
       const response = await fetch('/admin/apis/keys/' + encodeURIComponent(keyId) + '/grants', {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken() },
-        body: JSON.stringify({ shareId, ...(canUpdate ? { canUpdate: true } : {}) })
+        body: JSON.stringify({ shareId, canRead, canUpdate, canPublish })
       });
       const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || '授权失败');
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || '授权失败');
-      }
-
-      if (data.changed) {
-        const hadGrant = grantsPanelFor(keyId)?.querySelector('[data-grant-item="' + CSS.escape(shareId) + '"]') !== null;
-        appendGrantItem(keyId, shareId, data.grant?.canUpdate === true);
-        if (!hadGrant) bumpGrantCount(keyId, 1);
-        notify('success', canUpdate ? '已授予读取与编辑权' : '已授予读取授权');
-      } else {
-        notify('info', '该 Share 已在授权列表中，未重复添加');
-      }
+      const existingItem = grantsPanelFor(keyId)?.querySelector('[data-grant-item="' + CSS.escape(shareId) + '"]');
+      const hadGrant = Boolean(existingItem);
+      if (data.grant) applyGrantUpdate(keyId, shareId, data.grant);
+      else if (data.changed) applyGrantUpdate(keyId, shareId, null);
       renderKeyScopes(keyId, data.scopes);
+      if (data.changed) {
+        const effective = {
+          canRead: data.grant?.canRead === true,
+          canUpdate: data.grant?.canUpdate === true,
+          canPublish: data.grant?.canPublish === true
+        };
+        if (effective.canUpdate && effective.canPublish) notify('success', '已分别授予读取、编辑与上下架权');
+        else if (effective.canUpdate) notify('success', '已授予读取与编辑权');
+        else if (effective.canRead && effective.canPublish) notify('success', '已分别授予读取与上下架权');
+        else if (effective.canRead) notify('success', '已授予读取授权');
+        else if (effective.canPublish) notify('success', '已授予 publish-only 上下架权；读取、列表与历史仍不可用');
+        else notify('success', '授权已更新');
+      } else {
+        notify('info', hadGrant ? '该 Share 已具有所选授权，未重复添加' : '授权状态未改变');
+      }
+      if (canReadInput) canReadInput.checked = true;
       if (canUpdateInput) canUpdateInput.checked = false;
+      if (canPublishInput) canPublishInput.checked = false;
       input.value = '';
       input.focus();
     } catch (error) {
@@ -398,11 +482,37 @@
       });
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || '更新编辑授权失败');
-      appendGrantItem(keyId, shareId, data.grant?.canUpdate === true);
+      applyGrantUpdate(keyId, shareId, data.grant);
       renderKeyScopes(keyId, data.scopes);
       notify(data.changed ? 'success' : 'info', data.changed
         ? (canUpdate ? '已授予编辑权（同时保留读取权）' : '已撤销编辑权，读取授权仍保留')
         : '编辑授权状态未改变');
+    } catch (error) {
+      notify('error', error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function togglePublishGrant(button) {
+    if (busy) return;
+    const keyId = button.dataset.apiKeyId;
+    const shareId = button.dataset.shareId;
+    const canPublish = button.dataset.canPublish !== 'true';
+    setBusy(true);
+    try {
+      const response = await fetch('/admin/apis/keys/' + encodeURIComponent(keyId) + '/grants/' + encodeURIComponent(shareId), {
+        method: 'PUT',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken() },
+        body: JSON.stringify({ canPublish })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || '更新上下架授权失败');
+      applyGrantUpdate(keyId, shareId, data.grant);
+      renderKeyScopes(keyId, data.scopes);
+      notify(data.changed ? 'success' : 'info', data.changed
+        ? (canPublish ? '已授予上下架权；该权限不包含内容读取' : '已撤销上下架权；其他读取/编辑授权保持不变')
+        : '上下架授权状态未改变');
     } catch (error) {
       notify('error', error.message);
     } finally {
@@ -453,12 +563,12 @@
       }
 
       if (data.changed) {
-        button.closest('[data-grant-item]')?.remove();
-        bumpGrantCount(keyId, -1);
-        refreshGrantEmptyState(keyId);
-        notify('success', '已撤回读取授权');
+        applyGrantUpdate(keyId, shareId, data.grant);
+        notify('success', data.grant?.canPublish === true
+          ? '已撤回读取授权；独立上下架权仍保留'
+          : '已撤回读取授权');
       } else {
-        notify('info', '该授权已不存在');
+        notify('info', '该读取授权已不存在');
       }
       renderKeyScopes(keyId, data.scopes);
     } catch (error) {
@@ -594,6 +704,11 @@
     const editGrant = event.target.closest('.api-key-edit-grant-btn');
     if (editGrant) {
       toggleEditGrant(editGrant);
+      return;
+    }
+    const publishGrant = event.target.closest('.api-key-publish-grant-btn');
+    if (publishGrant) {
+      togglePublishGrant(publishGrant);
       return;
     }
     const revoke = event.target.closest('.api-key-revoke-btn');

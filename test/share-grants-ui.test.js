@@ -293,12 +293,19 @@ async function seedShare(title) {
   return created.urlId;
 }
 
-test('served page renders per-key grant controls and scope badges; no dead update/publish switches', async () => {
+test('served page renders separate read/edit/publish controls and truthful publish-only rows', async () => {
   const key = await seedKey('UI render key');
   const shareId = await seedShare('UI Render Share');
+  const publishOnlyKey = await seedKey('UI publish-only render key');
+  const publishOnlyShareId = await seedShare('UI Publish Only Share');
   await fetch(`${origin}/admin/apis/keys/${key.id}/grants`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shareId })
   });
+  const publishOnlyGrant = await fetch(`${origin}/admin/apis/keys/${publishOnlyKey.id}/grants`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shareId: publishOnlyShareId, canPublish: true })
+  });
+  assert.equal(publishOnlyGrant.status, 201);
 
   const page = await fetch(`${origin}/admin/apis`).then(response => response.text());
   assert.match(page, /data-read-grant-count="[^"]+"/);
@@ -310,13 +317,15 @@ test('served page renders per-key grant controls and scope badges; no dead updat
   assert.match(page, /撤回读取授权/);
   assert.match(page, /api-key-edit-grant-btn/);
   assert.match(page, /data-can-update="false"/);
+  assert.match(page, /api-key-publish-grant-btn/);
+  assert.match(page, /data-can-publish="true"/);
+  assert.match(page, /仅可上下架/, 'publish-only row names its real access level');
   assert.match(page, /data-auto-grant-edit="[^"]+"/);
   assert.match(page, /data-grant-form="[^"]+"/);
   assert.match(page, /api-key-scope">share:create</, 'scope badges render');
   assert.match(page, /授予授权/);
   assert.match(page, /share:update/);
-  // Publish-state mutation remains unavailable.
-  assert.doesNotMatch(page, /share:publish/);
+  assert.match(page, /share:publish/, 'publish scope is rendered from the active server capability');
   // Secrets never render.
   assert.doesNotMatch(page, new RegExp(key.secret));
 
@@ -376,15 +385,24 @@ test('toggle opens the panel; grant and revoke round-trip over CSRF with honest 
   const shareInput = createElement('input');
   shareInput.tagName = 'INPUT';
   shareInput.setAttribute('name', 'shareId');
+  const readInput = createElement('input');
+  readInput.setAttribute('name', 'canRead');
+  readInput.type = 'checkbox';
+  readInput.checked = true;
+  const editInput = createElement('input');
+  editInput.setAttribute('name', 'canUpdate');
+  editInput.type = 'checkbox';
+  const publishInput = createElement('input');
+  publishInput.setAttribute('name', 'canPublish');
+  publishInput.type = 'checkbox';
   const submit = buttonLike({ className: 'cyber-btn', dataset: {}, label: '授予读取' });
-  shareInput.appendChild; // inputs have no children
   grantForm.appendChild(shareInput);
-  grantForm.appendChild(submit);
+  grantForm.append(readInput, editInput, publishInput, submit);
   panel.appendChild(grantForm);
 
   const harness = makeDom({ keyRowsChildren: [keyRow, grantsRow] });
   harness.register(keyRow); harness.register(grantsRow);
-  harness.nextResponse = { ok: true, status: 201, json: async () => ({ success: true, changed: true, grant: { apiKeyId: key.id, shareId, canRead: true }, scopes: ['share:create', 'share:read'] }) };
+  harness.nextResponse = { ok: true, status: 201, json: async () => ({ success: true, changed: true, grant: { apiKeyId: key.id, shareId, canRead: true, canUpdate: false, canPublish: false }, scopes: ['share:create', 'share:read'] }) };
   const context = harness.run();
 
   // 1. Toggle opens the panel and moves focus to the input.
@@ -401,7 +419,7 @@ test('toggle opens the panel; grant and revoke round-trip over CSRF with honest 
   assert.equal(harness.fetchCalls.length, 1);
   assert.equal(harness.fetchCalls[0].url, `/admin/apis/keys/${key.id}/grants`);
   assert.equal(harness.fetchCalls[0].options.headers['X-CSRF-Token'], 'ui-csrf-token');
-  assert.deepEqual(JSON.parse(harness.fetchCalls[0].options.body), { shareId });
+  assert.deepEqual(JSON.parse(harness.fetchCalls[0].options.body), { shareId, canRead: true, canUpdate: false, canPublish: false });
   assert.ok(list.children.some(item => item.matches(`[data-grant-item="${CSS_ESCAPE(shareId)}"]`)), 'grant item rendered');
   assert.equal(counter.textContent, '1', 'counter bumped');
   assert.deepEqual(scopeList.children.map(node => node.textContent), ['share:create', 'share:read'], 'scope badges reflect grant');
@@ -413,7 +431,7 @@ test('toggle opens the panel; grant and revoke round-trip over CSRF with honest 
   shareInput.value = shareId;
   await keyRowsSubmit(harness, grantForm);
   await settle(() => harness.toasts.length >= 2, 'duplicate toast');
-  assert.deepEqual(harness.toasts[1], ['info', '该 Share 已在授权列表中，未重复添加']);
+  assert.deepEqual(harness.toasts[1], ['info', '该 Share 已具有所选授权，未重复添加']);
   assert.equal(counter.textContent, '1', 'counter unchanged on duplicate');
 
   // 4. Revoke via the item button: DELETE, item removed, count restored.
@@ -467,11 +485,18 @@ test('edit grant and auto-edit controls send real CSRF-protected requests and pr
   const shareInput = createElement('input');
   shareInput.setAttribute('name', 'shareId');
   shareInput.value = shareId;
+  const readInput = createElement('input');
+  readInput.setAttribute('name', 'canRead');
+  readInput.type = 'checkbox';
+  readInput.checked = true;
   const editInput = createElement('input');
   editInput.setAttribute('name', 'canUpdate');
   editInput.type = 'checkbox';
   editInput.checked = true;
-  form.append(shareInput, editInput);
+  const publishInput = createElement('input');
+  publishInput.setAttribute('name', 'canPublish');
+  publishInput.type = 'checkbox';
+  form.append(shareInput, readInput, editInput, publishInput);
   panel.appendChild(form);
   const panelCell = createElement('td');
   panelCell.appendChild(panel);
@@ -494,7 +519,7 @@ test('edit grant and auto-edit controls send real CSRF-protected requests and pr
 
   await keyRowsSubmit(harness, form);
   await settle(() => counter.textContent === '1', 'edit grant request');
-  assert.deepEqual(JSON.parse(harness.fetchCalls[0].options.body), { shareId, canUpdate: true });
+  assert.deepEqual(JSON.parse(harness.fetchCalls[0].options.body), { shareId, canRead: true, canUpdate: true, canPublish: false });
   assert.equal(harness.fetchCalls[0].options.headers['X-CSRF-Token'], 'ui-csrf-token');
   const item = list.children.find(node => node.matches(`[data-grant-item="${CSS_ESCAPE(shareId)}"]`));
   assert.ok(item);
@@ -564,6 +589,84 @@ async function settle(check, label, timeoutMs = 2000) {
   }
   assert.ok(check(), `did not settle: ${label}`);
 }
+
+test('publish toggle preserves read access and labels the effective combined grant', async () => {
+  const keyId = 'ui-publish-key01';
+  const shareId = 'ui-publish-share01';
+  const keyRow = createElement('tr');
+  const panelRow = createElement('tr');
+  panelRow.id = `grants-${keyId}`;
+  panelRow.hidden = false;
+  const panel = createElement('div');
+  panel.setAttribute('data-grants-panel', keyId);
+  const list = createElement('ul');
+  list.setAttribute('data-grant-list', keyId);
+  const existingItem = createElement('li');
+  existingItem.setAttribute('data-grant-item', shareId);
+  list.appendChild(existingItem);
+  panel.appendChild(list);
+  const form = createElement('form');
+  form.setAttribute('data-grant-form', keyId);
+  const shareInput = createElement('input');
+  shareInput.setAttribute('name', 'shareId');
+  shareInput.value = shareId;
+  const readInput = createElement('input');
+  readInput.setAttribute('name', 'canRead');
+  readInput.type = 'checkbox';
+  readInput.checked = false;
+  const editInput = createElement('input');
+  editInput.setAttribute('name', 'canUpdate');
+  editInput.type = 'checkbox';
+  const publishInput = createElement('input');
+  publishInput.setAttribute('name', 'canPublish');
+  publishInput.type = 'checkbox';
+  publishInput.checked = true;
+  form.append(shareInput, readInput, editInput, publishInput);
+  panel.appendChild(form);
+  const panelCell = createElement('td');
+  panelCell.appendChild(panel);
+  panelRow.appendChild(panelCell);
+  const counter = createElement('span');
+  counter.setAttribute('data-read-grant-count', keyId);
+  counter.textContent = '1';
+  const scopeList = createElement('div');
+  scopeList.setAttribute('data-api-key-scopes', keyId);
+  keyRow.append(counter, scopeList);
+
+  const harness = makeDom({ keyRowsChildren: [keyRow, panelRow] });
+  harness.register(keyRow); harness.register(panelRow);
+  harness.nextResponse = { ok: true, status: 201, json: async () => ({
+    success: true, changed: true,
+    grant: { apiKeyId: keyId, shareId, canRead: true, canUpdate: false, canPublish: true },
+    scopes: ['share:create', 'share:read', 'share:publish']
+  }) };
+  harness.run();
+
+  await keyRowsSubmit(harness, form);
+  await settle(() => harness.toasts.length === 1, 'publish permission added to an existing read grant');
+  assert.deepEqual(JSON.parse(harness.fetchCalls[0].options.body), { shareId, canRead: false, canUpdate: false, canPublish: true });
+  assert.equal(harness.toasts[0][1], '已分别授予读取与上下架权', 'feedback reports the merged server grant, not just the submitted checkbox');
+  assert.equal(counter.textContent, '1', 'adding an independent permission does not add a duplicate Share row');
+  let item = list.children[0];
+  assert.equal(item.querySelector('[data-grant-access]').textContent, '读取 + 上下架');
+  assert.deepEqual(scopeList.children.map(node => node.textContent), ['share:create', 'share:read', 'share:publish']);
+
+  const publishButton = item.querySelector('.api-key-publish-grant-btn');
+  harness.nextResponse = { ok: true, status: 200, json: async () => ({
+    success: true, changed: true,
+    grant: { apiKeyId: keyId, shareId, canRead: true, canUpdate: false, canPublish: false },
+    scopes: ['share:create', 'share:read']
+  }) };
+  await keyRowsClick(harness, publishButton);
+  await settle(() => publishButton.dataset.canPublish === 'false', 'publish permission revoked independently');
+  assert.equal(harness.fetchCalls[1].options.method, 'PUT');
+  assert.deepEqual(JSON.parse(harness.fetchCalls[1].options.body), { canPublish: false });
+  item = list.children[0];
+  assert.equal(item.querySelector('[data-grant-access]').textContent, '仅读取');
+  assert.equal(counter.textContent, '1', 'revoking publish preserves the read grant row');
+  assert.deepEqual(scopeList.children.map(node => node.textContent), ['share:create', 'share:read']);
+  assert.deepEqual(harness.toasts[1], ['success', '已撤销上下架权；其他读取/编辑授权保持不变']);
+});
 
 test('creation flow builds a matching row: scope badges, zero count, toggle and empty panel', async () => {
   const harness = makeDom({});
