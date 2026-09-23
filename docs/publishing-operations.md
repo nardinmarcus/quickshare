@@ -1,16 +1,16 @@
-# Publish operations: create, dashboard save/restore idempotency and status confirmation
+# Publish operations: create, conditional content updates, dashboard save/restore and status confirmation
 
 Scope: this document describes **what is implemented** — idempotent creation
-(web page, dashboard clone, Share API), idempotent dashboard content updates
-and history restores (#33), operation status confirmation, and the deletion
-tombstone. Key-driven management writes (content update, restore, publish
-state over `X-API-Key`) are **not** part of this protocol yet and no
-capability below claims them.
+(web page, dashboard clone, Share API), managed-Key conditional content
+updates (#37), idempotent dashboard content updates and history restores
+(#33), operation status confirmation, and the deletion tombstone. Key-driven
+history restore and publish-state writes remain unavailable.
 
 ## Request identity
 
-- `Idempotency-Key` (Share API, web creation, dashboard content save and
-  restore) / `requestId` form field (dashboard clone): 16–128 ASCII letters,
+- `Idempotency-Key` (Share API creation/update, web creation, dashboard
+  content save and restore) / `requestId` form field (dashboard clone):
+  16–128 ASCII letters,
   digits, hyphens or underscores. Invalid values are a
   `400 INVALID_REQUEST_ID`. Clients generate UUID v4 identifiers; the browser
   falls back to a well-formed RFC 4122 v4 generator when
@@ -25,6 +25,52 @@ capability below claims them.
   key.
 - Omitting the header on `POST /api/v1/share` keeps the legacy behavior
   (200, existing fields) which is **not** claimed to be deduplicated.
+
+## Managed Key content update (#37)
+
+`PUT /api/v1/shares/:id/content` is available only to a managed Key with both
+`share:read` and `share:update` scopes AND the current per-Share read+update
+grant. Edit implies read. Legacy environment Keys and browser/session
+identities cannot use this route. `GET /api/v1/shares/:id/content` supplies the
+strong content ETag; the update requires that concrete ETag in `If-Match` and
+a mandatory `Idempotency-Key`. Missing either header is 428, malformed
+request IDs or ETags are 400, and a stale baseline is 412. Wildcard, weak and
+multi-tag conditions are rejected.
+
+The request is a strict full snapshot with required own fields
+`htmlContent`, `title`, `description`, and `markdownTheme`; `codeType` may be
+omitted or equal the immutable existing type. Extra policy, access, favorite,
+view-count and password fields are rejected rather than ignored. The exact
+`htmlContent` string (including newline and Unicode representation) is stored
+unchanged. Title and description follow the dashboard's existing trim/null
+normalization; Markdown requires an existing theme preset, and non-Markdown
+requires `markdownTheme: null`.
+
+The normalized request digest covers action, target Share, exact body bytes,
+field presence and the concrete expected content revision. The route reuses
+the publishing operation lock, Key credential-version verification, Share
+row lock, repository content CAS/no-op/revision behavior, `page.update` audit
+and operation ledger. With a reused request id, current identity and edit
+grant are checked first; a matching committed result is replayed before stale
+CAS and returns the original content snapshot and same Share URL. A different
+request returns 409; a deleted Share or purged result cannot be replayed and
+returns 404/410. A new-id no-op is recorded with `changed:false` without
+manufacturing a revision. Update operation receipts contain only the changed
+flag; the bounded `GET /api/v1/operations/:requestId` projection has no body,
+title, description, password or receipt and requires the current edit grant
+for content-update records.
+
+Dashboard controls at `/admin/apis` independently grant/revoke `can_update`
+for one Share and toggle `auto_grant_new_share_edit`. Both use CSRF and audit
+inside the publishing transaction. Update grant creation sets both
+`can_read`/`can_update` and the read/update scopes; downgrading edit leaves
+read permission and scope in place where another grant still requires them.
+The auto option defaults off, affects only later creations by that managed
+Key, and does not touch existing Shares, legacy Keys or frontend creates. A
+managed API create reads the option after the Key lock and commits the page,
+read+update grant, scopes, audit and create operation together. Any failure
+rolls back the entire create transaction. Rotation preserves logical-key
+permissions; revocation/deletion prevents future updates and update replays.
 
 ## Dashboard content saves and restores (#33)
 
@@ -49,13 +95,16 @@ The owner dashboard reuses the same ledger with two targeted actions:
   Restores never move URL, password, expiry, access revision, publication
   state, Favorite or view counts.
 
-Static PUT field validation runs before digest normalization and result lookup.
-Malformed content/metadata/policy fields receive a controlled 400 on both fresh
-requests and retries; a committed ID never bypasses validation. Idempotent PUT
-accepts only content fields, optional `codeType`, and the `_csrf` transport field;
-policy controls (even `revokeAccess:false`, an access baseline, or an empty password)
-and unsupported fields receive `400 UNSUPPORTED_REQUEST_ID_SCOPE` when otherwise
-well-formed. Valid headerless content/policy/combined saves remain supported.
+Dashboard static PUT field validation runs before digest normalization and result
+lookup. Malformed content/metadata/policy fields receive a controlled 400 on both
+fresh requests and retries; a committed ID never bypasses validation. The
+idempotent dashboard PUT accepts only content fields, optional `codeType`, and
+the `_csrf` transport field; policy controls (even `revokeAccess:false`, an
+access baseline, or an empty password) and unsupported fields receive
+`400 UNSUPPORTED_REQUEST_ID_SCOPE` when otherwise well-formed. The managed-Key
+API is separate: it requires the strict four-field full snapshot described above
+and accepts no CSRF or extra fields. Valid headerless dashboard saves remain
+supported.
 
 After static validation, replays run BEFORE any share read or CAS: a committed save or restore
 confirms its ORIGINAL result even when the retried `If-Match` is long stale
@@ -175,8 +224,8 @@ Order inside one publishing transaction, one client:
 3. operation lock (`pg_advisory_xact_lock` over namespace + request id)
 4. operation lookup (replay decision BEFORE expiry checks, clone source
    re-reads, restore source re-reads and any content CAS)
-5. Share rows (batch deletes use sorted ids), Revision, audit, grant-free
-   creation writes
+5. Share and grant rows (batch deletes use sorted ids), Revision, audit;
+   create auto-edit grants/scopes are written on the same transaction client
 6. operation record insert (unique constraint is the final guard)
 
 The response is constructed only after COMMIT. There is no running state: a

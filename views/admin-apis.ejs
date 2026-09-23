@@ -107,9 +107,9 @@
                 <% } %>
               </td>
               <td class="admin-actions-col">
-                <button type="button" class="admin-icon-link api-key-grants-btn" data-api-key-id="<%= apiKey.id %>" data-api-key-name="<%= apiKey.name %>" aria-expanded="false" aria-controls="grants-<%= apiKey.id %>" aria-label="管理读取授权 <%= apiKey.name %>">
+                <button type="button" class="admin-icon-link api-key-grants-btn" data-api-key-id="<%= apiKey.id %>" data-api-key-name="<%= apiKey.name %>" aria-expanded="false" aria-controls="grants-<%= apiKey.id %>" aria-label="管理 Share 授权 <%= apiKey.name %>">
                   <i class="fas fa-user-check" aria-hidden="true"></i>
-                  <span class="sr-only">读取授权</span>
+                  <span class="sr-only">Share 授权</span>
                 </button>
                 <button type="button" class="admin-icon-link api-key-rotate-btn" data-api-key-id="<%= apiKey.id %>" data-api-key-name="<%= apiKey.name %>" aria-label="轮换 API 密钥 <%= apiKey.name %>">
                   <i class="fas fa-sync-alt" aria-hidden="true"></i>
@@ -124,8 +124,8 @@
             <tr id="grants-<%= apiKey.id %>" class="api-key-grants-row" hidden>
               <td colspan="7">
                 <div class="api-key-grants-panel" data-grants-panel="<%= apiKey.id %>">
-                  <h3>读取授权 · <%= apiKey.name %></h3>
-                  <p class="admin-muted">为该密钥授权读取指定 Share；授权后可用 <code>GET /api/v1/shares</code> 系列接口读取。撤回全部授权后该密钥立即失去读取能力（scope 自动收回）。</p>
+                  <h3>Share 授权 · <%= apiKey.name %></h3>
+                  <p class="admin-muted">按 Share 分别授予读取或编辑权。编辑权始终包含读取权；撤销编辑权不会撤销读取权。</p>
                   <ul class="api-key-grant-list" data-grant-list="<%= apiKey.id %>">
                     <% if (readGrants.length === 0) { %>
                       <li class="api-key-grant-empty" data-grant-empty>尚未授权任何 Share。</li>
@@ -134,17 +134,24 @@
                       <li data-grant-item="<%= grant.share_id %>">
                         <code><%= grant.share_id %></code>
                         <span class="admin-muted"><%= grant.share_title || '（无标题）' %></span>
-                        <button type="button" class="admin-delete-btn api-key-revoke-btn" data-api-key-id="<%= apiKey.id %>" data-share-id="<%= grant.share_id %>" aria-label="撤回 <%= apiKey.name %> 对 <%= grant.share_id %> 的读取授权">撤回</button>
+                        <button type="button" class="api-key-edit-grant-btn" data-api-key-id="<%= apiKey.id %>" data-share-id="<%= grant.share_id %>" data-can-update="<%= grant.can_update ? 'true' : 'false' %>" aria-pressed="<%= grant.can_update ? 'true' : 'false' %>" aria-label="<%= grant.can_update ? '撤销' : '授予' %> <%= apiKey.name %> 对 <%= grant.share_id %> 的编辑权"><%= grant.can_update ? '撤销编辑权' : '授予编辑权' %></button>
+                        <button type="button" class="admin-delete-btn api-key-revoke-btn" data-api-key-id="<%= apiKey.id %>" data-share-id="<%= grant.share_id %>" data-blocked-by-edit="<%= grant.can_update ? 'true' : 'false' %>" <% if (grant.can_update) { %>disabled title="请先撤销编辑权，再撤回读取授权"<% } %> aria-label="<%= grant.can_update ? '请先撤销编辑权' : '撤回 ' + apiKey.name + ' 对 ' + grant.share_id + ' 的读取授权' %>"><%= grant.can_update ? '先撤销编辑权' : '撤回读取授权' %></button>
                       </li>
                     <% }) %>
                   </ul>
+                  <label class="api-key-auto-edit-option">
+                    <input type="checkbox" class="api-key-auto-edit-toggle" data-auto-grant-edit="<%= apiKey.id %>" <%= apiKey.auto_grant_new_share_edit ? 'checked' : '' %>>
+                    后续通过此托管密钥创建的 Share 自动授予读取与编辑权
+                  </label>
+                  <p class="admin-muted">只影响启用后的新建；不会追溯旧 Share，也不影响旧版 <code>SHARE_API_KEY</code> 或前端登录创建。</p>
                   <form class="api-key-grant-form" data-grant-form="<%= apiKey.id %>">
                     <label for="grant-share-id-<%= apiKey.id %>">Share ID</label>
                     <div class="api-key-grant-form-row">
                       <input id="grant-share-id-<%= apiKey.id %>" name="shareId" class="cyber-input" autocomplete="off" required placeholder="例如：xS_9ngJnG9NX" aria-describedby="grant-help-<%= apiKey.id %>">
-                      <button class="cyber-btn cyber-btn-secondary" type="submit">授予读取</button>
+                      <label class="api-key-edit-option"><input type="checkbox" name="canUpdate"> 同时授予编辑</label>
+                      <button class="cyber-btn cyber-btn-secondary" type="submit">授予授权</button>
                     </div>
-                    <p id="grant-help-<%= apiKey.id %>" class="admin-muted">仅授予读取；编辑与上下架能力随后续票提供，不在此展示。</p>
+                    <p id="grant-help-<%= apiKey.id %>" class="admin-muted">编辑权包含读取权；单独授予读取时不启用编辑能力。</p>
                   </form>
                 </div>
               </td>
@@ -175,9 +182,14 @@
         <li><code><%= capabilities.operations[4].method %> <%= capabilities.operations[4].path %></code>：发布状态（独立强 ETag；不含标题、简介或正文）。</li>
       </ul>
       <p>已下架、带密码或已过期的 Share 仍可按管理授权读取——管理可见性与公开可见性分别判断。无凭据 401；缺少 <code>share:read</code> scope 403；目标未授权 404（与不存在不可区分）。响应不含密码、加密密码、授权表或 Favorite 状态。Cookie 与公开查看权永不授权管理接口。</p>
+      <h3>条件内容更新（仅托管密钥）</h3>
+      <p><code><%= capabilities.operations[5].method %> <%= capabilities.operations[5].path %></code> 要求托管密钥同时具有 <code>share:read</code>、<code>share:update</code>，且目标 Share 的当前授权含读取与编辑权。旧版环境变量密钥和前端登录凭据不能更新。编辑授权必然包含读取；撤销编辑权后，读取授权可继续保留。</p>
+      <p>请求必须带当前 <code>GET .../content</code> 返回的强 <code>If-Match</code> ETag，以及 16–128 位 <code>Idempotency-Key</code>。正文必须提供 <code>htmlContent</code>、<code>title</code>、<code>description</code>、<code>markdownTheme</code> 四个字段（后三者可为 null）；只可附加与原 Share 相同的 <code>codeType</code>。不接受保护、过期、发布状态、浏览量、Favorite 等策略字段。正文字符串不做换行或 Unicode 规范化，标题与简介按管理端规则去除首尾空白。非 Markdown 的 <code>markdownTheme</code> 必须为 null；Markdown 必须选已有 Preset。</p>
+      <p>相同幂等键与相同规范化输入重放提交时的内容快照；不同输入返回 409。缺少 If-Match 或幂等键返回 428，非法 ETag 返回 400，基线过期返回 412；重放前仍会检查当前凭据与编辑授权。<code>GET /api/v1/operations/:requestId</code> 对更新操作同样只返回有限状态元信息，并在撤销编辑权后返回 404，不暴露请求正文、标题或简介。</p>
+      <p>按需在后台为单个 Share 授予或撤销编辑权。默认关闭的“后续自动授予”只影响启用后的托管密钥新建，与创建页、旧版 Key 无关；禁用不会撤销既有授权。写操作与审计记录在同一事务提交。</p>
       <h3>身份与能力核验</h3>
       <p><code>GET /api/v1/me</code> 返回实例 origin、凭据身份与 scopes；<code>GET /api/v1/capabilities</code> 返回真实能力。两者均要求 <code>X-API-Key</code>，维护期间仍可读取。</p>
-      <p>托管密钥默认只能创建 Share 并确认自身创建结果；读取能力仅来自后台授予的逐 Share 授权，轮换后保持。旧版 <code>SHARE_API_KEY</code> 永远只能创建。更新与上下架协议随后续票交付，本页不提供也宜告不存在的开关。</p>
+      <p>托管密钥默认只能创建 Share 并确认自身创建结果；读取能力仅来自后台授予的逐 Share 授权，轮换后保持。条件内容更新按 <code>share:update</code> scope 与逐 Share 编辑授权控制。旧版 <code>SHARE_API_KEY</code> 永远只能创建。上下架写协议尚未开放。</p>
       <p>协议 <%= capabilities.protocolVersion %>；可用操作：<%= capabilities.operations.map(operation => operation.id).join('、') %>。</p>
       <h3>身份验证</h3>
       <p>在 <code>X-API-Key</code> 请求头中传入托管密钥。已配置的旧版 <code>SHARE_API_KEY</code> 仍然受支持。</p>
@@ -201,6 +213,14 @@
         <div><dt><code>isProtected</code></dt><dd>设为 true 时，QuickShare 会生成页面密码并仅返回一次。</dd></div>
       </dl>
       <p>Markdown Theme Preset ID：<%= capabilities.markdownThemePresets.join('、') %>。</p>
+      <h2>条件更新请求体</h2>
+      <pre><code>{
+  "htmlContent": "&lt;h1&gt;Updated&lt;/h1&gt;",
+  "title": "Updated",
+  "description": null,
+  "markdownTheme": null
+}</code></pre>
+      <p>成功响应含相同 Share URL、提交后的内容快照、强 ETag 和 <code>changed</code>；重复请求增加 <code>replayed: true</code>。更新不创建新 Share，不返回或修改密码、保护、Favorite、发布或过期状态。</p>
       <p>Share 请求体上限 <%= capabilities.limits.shareRequestBodyBytes %> bytes；小型请求体上限 <%= capabilities.limits.smallRequestBodyBytes %> bytes。上限包含 JSON 包装与转义开销，不等于原始正文容量。</p>
       <h2>响应</h2>
       <pre><code>{

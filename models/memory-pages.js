@@ -378,6 +378,15 @@ class MemoryPageRepository {
     return this.apiKeys.get(id) || null;
   }
 
+  async setApiKeyAutoGrantNewShareEdit({ apiKeyId, enabled }) {
+    if (typeof enabled !== 'boolean') throw new TypeError('enabled must be a boolean');
+    const key = this.apiKeys.get(apiKeyId);
+    if (!key) return { status: 'key-not-found' };
+    if (key.auto_grant_new_share_edit === enabled) return { status: 'unchanged', enabled };
+    key.auto_grant_new_share_edit = enabled;
+    return { status: 'updated', enabled };
+  }
+
   async verifyApiKeyForWrite(identity) {
     if (this.apiKeys.get(identity.id)?.credential_version !== identity.credentialVersion) throw invalidApiKey();
   }
@@ -430,6 +439,60 @@ class MemoryPageRepository {
     if (!Array.isArray(key.scopes)) key.scopes = ['share:create'];
     if (!key.scopes.includes('share:read')) key.scopes.push('share:read');
     return { status: 'granted' };
+  }
+
+  async grantShareEdit({ apiKeyId, shareId }) {
+    const key = this.apiKeys.get(apiKeyId);
+    if (!key) return { status: 'key-not-found' };
+    if (!this.pages.has(shareId)) return { status: 'share-not-found' };
+
+    const mapKey = `${apiKeyId}\u0000${shareId}`;
+    let grant = this.shareGrants.get(mapKey);
+    const changed = !grant || grant.can_read !== true || grant.can_update !== true;
+    if (!grant) {
+      grant = {
+        api_key_id: apiKeyId,
+        share_id: shareId,
+        can_read: true,
+        can_update: true,
+        can_publish: false,
+        created_at: Date.now()
+      };
+      this.shareGrants.set(mapKey, grant);
+    } else {
+      grant.can_read = true;
+      grant.can_update = true;
+    }
+
+    if (!Array.isArray(key.scopes)) key.scopes = ['share:create'];
+    if (!key.scopes.includes('share:read')) key.scopes.push('share:read');
+    if (!key.scopes.includes('share:update')) key.scopes.push('share:update');
+    return { status: changed ? 'granted' : 'unchanged', grant: { ...grant } };
+  }
+
+  async setShareEdit({ apiKeyId, shareId, canUpdate }) {
+    if (typeof canUpdate !== 'boolean') throw new TypeError('canUpdate must be a boolean');
+    if (canUpdate) return this.grantShareEdit({ apiKeyId, shareId });
+    const key = this.apiKeys.get(apiKeyId);
+    if (!key) return { status: 'key-not-found' };
+    if (!this.pages.has(shareId)) return { status: 'share-not-found' };
+    const mapKey = `${apiKeyId}\u0000${shareId}`;
+    const grant = this.shareGrants.get(mapKey);
+    if (!grant || grant.can_update !== true) return { status: 'unchanged', grant: grant ? { ...grant } : null };
+    grant.can_update = false;
+    const stillHasUpdate = Array.from(this.shareGrants.values())
+      .some(row => row.api_key_id === apiKeyId && row.can_update === true);
+    if (!stillHasUpdate && Array.isArray(key.scopes)) {
+      key.scopes = key.scopes.filter(scope => scope !== 'share:update');
+    }
+    return { status: 'updated', grant: { ...grant } };
+  }
+
+  async getShareGrantForWrite(apiKeyId, shareId) {
+    const page = this.pages.get(shareId);
+    if (!page) return null;
+    const grant = await this.getShareGrant(apiKeyId, shareId);
+    return { page, grant };
   }
 
   async revokeShareRead({ apiKeyId, shareId }) {

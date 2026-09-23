@@ -198,6 +198,36 @@ function validateDashboardUpdateInput(input, { idempotent = false } = {}) {
  * while theme resolution depends on the share's immutable code type inside
  * the transaction and must never require a pre-transaction share read.
  */
+function validateApiContentUpdateInput(input) {
+  const invalid = error => ({ error, code: 'INVALID_UPDATE_INPUT' });
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return invalid('更新内容必须是 JSON 对象');
+  }
+  const required = ['htmlContent', 'title', 'description', 'markdownTheme'];
+  const allowed = new Set([...required, 'codeType']);
+  if (required.some(field => !Object.prototype.hasOwnProperty.call(input, field))) {
+    return invalid('htmlContent、title、description、markdownTheme 四个字段均为必填');
+  }
+  if (Object.keys(input).some(field => !allowed.has(field))) {
+    return invalid('请求包含不支持的字段');
+  }
+  if (typeof input.htmlContent !== 'string' || input.htmlContent.length === 0) {
+    return invalid('htmlContent must be a non-empty string');
+  }
+  for (const field of ['title', 'description']) {
+    if (input[field] !== null && typeof input[field] !== 'string') {
+      return invalid(`${field} must be a string or null`);
+    }
+  }
+  if (input.markdownTheme !== null && typeof input.markdownTheme !== 'string') {
+    return invalid('markdownTheme must be a string or null');
+  }
+  if (input.codeType !== undefined && !VALID_CODE_TYPES.has(input.codeType)) {
+    return invalid('codeType must be a supported content type');
+  }
+  return { error: null };
+}
+
 function normalizeContentUpdateDigestInput(input) {
   const { expectedRevision, htmlContent, title, description, markdownTheme, codeType } = input || {};
   const presence = {
@@ -496,7 +526,9 @@ function operationStatusProjection(record) {
   return {
     namespaceKind: namespaceKind(record.actor_namespace),
     action: record.action,
-    status: (record.deleted_at === null || record.deleted_at === undefined) ? 'succeeded' : 'result-unavailable',
+    status: (record.deleted_at === null || record.deleted_at === undefined)
+      && (record.purged_at === null || record.purged_at === undefined)
+      ? 'succeeded' : 'result-unavailable',
     shareId: record.result_share_id,
     revision: record.result_revision === null || record.result_revision === undefined
       ? null
@@ -514,6 +546,7 @@ module.exports = {
   createRequestDigest,
   normalizeContentUpdateDigestInput,
   validateDashboardUpdateInput,
+  validateApiContentUpdateInput,
   normalizeRestoreDigestInput,
   normalizePublishStateDigestInput,
   isPublishStateAction,

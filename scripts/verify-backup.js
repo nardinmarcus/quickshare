@@ -65,7 +65,10 @@ const HARD_REVOCATION_AUDIT_ACTIONS = new Set([
   // #36 rework (St1): a post-snapshot read-grant revocation replayed from an
   // older backup would resurrect an authorization the owner withdrew. It is
   // a hard revocation by name, never generic owner-review noise.
-  'api_key.revoke'
+  'api_key.revoke',
+  // #37: restoring a pre-disable snapshot could silently re-enable a Key's
+  // authority to grant edit access to every future Share it creates.
+  'api_key.auto_grant_new_share_edit.disable'
 ]);
 
 // Policy-relevant field names emitted in page.update audit details as

@@ -1130,6 +1130,20 @@ class PostgresPageRepository {
     return result.rows[0] || null;
   }
 
+  async setApiKeyAutoGrantNewShareEdit({ apiKeyId, enabled }) {
+    if (!this.transactionClient) throw new Error('Auto-grant updates require a publishing transaction');
+    if (typeof enabled !== 'boolean') throw new TypeError('enabled must be a boolean');
+    const key = await this.pool.query(
+      'SELECT auto_grant_new_share_edit FROM api_keys WHERE id = $1 FOR UPDATE', [apiKeyId]
+    );
+    if (key.rowCount === 0) return { status: 'key-not-found' };
+    if (key.rows[0].auto_grant_new_share_edit === enabled) return { status: 'unchanged', enabled };
+    await this.pool.query(
+      'UPDATE api_keys SET auto_grant_new_share_edit = $2 WHERE id = $1', [apiKeyId, enabled]
+    );
+    return { status: 'updated', enabled };
+  }
+
   async verifyApiKeyForWrite(identity) {
     if (!this.transactionClient) throw new Error('Key verification requires a publishing transaction');
     const result = await this.pool.query('SELECT credential_version FROM api_keys WHERE id = $1 FOR UPDATE', [identity.id]);
@@ -1201,6 +1215,64 @@ class PostgresPageRepository {
     return { status };
   }
 
+  async grantShareEdit({ apiKeyId, shareId }) {
+    if (!this.transactionClient) throw new Error('Edit grant writes require a publishing transaction');
+
+    const keyRow = await this.pool.query('SELECT id, scopes FROM api_keys WHERE id = $1 FOR UPDATE', [apiKeyId]);
+    if (keyRow.rowCount === 0) return { status: 'key-not-found' };
+    const shareRow = await this.pool.query('SELECT id FROM pages WHERE id = $1 FOR UPDATE', [shareId]);
+    if (shareRow.rowCount === 0) return { status: 'share-not-found' };
+    const existing = await this.pool.query(
+      'SELECT api_key_id, share_id, can_read, can_update, can_publish, created_at FROM share_grants WHERE api_key_id = $1 AND share_id = $2 FOR UPDATE',
+      [apiKeyId, shareId]
+    );
+
+    const changed = existing.rowCount === 0
+      || existing.rows[0].can_read !== true
+      || existing.rows[0].can_update !== true;
+    if (existing.rowCount === 0) {
+      await this.pool.query(
+        'INSERT INTO share_grants (api_key_id, share_id, can_read, can_update, can_publish, created_at) VALUES ($1, $2, TRUE, TRUE, FALSE, $3)',
+        [apiKeyId, shareId, Date.now()]
+      );
+    } else if (changed) {
+      await this.pool.query(
+        'UPDATE share_grants SET can_read = TRUE, can_update = TRUE WHERE api_key_id = $1 AND share_id = $2',
+        [apiKeyId, shareId]
+      );
+    }
+    const currentScopes = Array.isArray(keyRow.rows[0].scopes) ? keyRow.rows[0].scopes : [];
+    await this.ensureApiKeyScope(apiKeyId, 'share:read', currentScopes);
+    const scopesWithRead = currentScopes.includes('share:read')
+      ? currentScopes : [...currentScopes, 'share:read'];
+    await this.ensureApiKeyScope(apiKeyId, 'share:update', scopesWithRead);
+    const grant = await this.getShareGrant(apiKeyId, shareId);
+    return { status: changed ? 'granted' : 'unchanged', grant };
+  }
+
+  async setShareEdit({ apiKeyId, shareId, canUpdate }) {
+    if (typeof canUpdate !== 'boolean') throw new TypeError('canUpdate must be a boolean');
+    if (canUpdate) return this.grantShareEdit({ apiKeyId, shareId });
+    if (!this.transactionClient) throw new Error('Edit grant writes require a publishing transaction');
+    const keyRow = await this.pool.query('SELECT id FROM api_keys WHERE id = $1 FOR UPDATE', [apiKeyId]);
+    if (keyRow.rowCount === 0) return { status: 'key-not-found' };
+    const shareRow = await this.pool.query('SELECT id FROM pages WHERE id = $1 FOR UPDATE', [shareId]);
+    if (shareRow.rowCount === 0) return { status: 'share-not-found' };
+    const existing = await this.pool.query(
+      'SELECT can_read, can_update, can_publish FROM share_grants WHERE api_key_id = $1 AND share_id = $2 FOR UPDATE',
+      [apiKeyId, shareId]
+    );
+    if (existing.rowCount === 0 || existing.rows[0].can_update !== true) {
+      return { status: 'unchanged', grant: existing.rows[0] || null };
+    }
+    await this.pool.query(
+      'UPDATE share_grants SET can_update = FALSE WHERE api_key_id = $1 AND share_id = $2',
+      [apiKeyId, shareId]
+    );
+    await this.dropApiKeyScopeIfUnused(apiKeyId, 'share:update', 'can_update');
+    return { status: 'updated', grant: await this.getShareGrant(apiKeyId, shareId) };
+  }
+
   async ensureApiKeyScope(apiKeyId, scope, currentScopes) {
     const scopes = Array.isArray(currentScopes) ? currentScopes : [];
     if (scopes.includes(scope)) return;
@@ -1210,9 +1282,10 @@ class PostgresPageRepository {
     );
   }
 
-  async dropApiKeyScopeIfUnused(apiKeyId, scope) {
+  async dropApiKeyScopeIfUnused(apiKeyId, scope, grantColumn = 'can_read') {
+    if (!['can_read', 'can_update'].includes(grantColumn)) throw new TypeError('unsupported grant column');
     const remaining = await this.pool.query(
-      'SELECT EXISTS (SELECT 1 FROM share_grants WHERE api_key_id = $1 AND can_read = TRUE) AS kept',
+      `SELECT EXISTS (SELECT 1 FROM share_grants WHERE api_key_id = $1 AND ${grantColumn} = TRUE) AS kept`,
       [apiKeyId]
     );
     if (remaining.rows[0]?.kept === true) return;
@@ -1266,6 +1339,17 @@ class PostgresPageRepository {
 
     await this.dropApiKeyScopeIfUnused(apiKeyId, 'share:read');
     return { status: 'revoked' };
+  }
+
+  async getShareGrantForWrite(apiKeyId, shareId) {
+    if (!this.transactionClient) throw new Error('Share update authorization requires a publishing transaction');
+    const page = await this.pool.query('SELECT * FROM pages WHERE id = $1 FOR UPDATE', [shareId]);
+    if (page.rowCount === 0) return null;
+    const grant = await this.pool.query(
+      'SELECT api_key_id, share_id, can_read, can_update, can_publish, created_at FROM share_grants WHERE api_key_id = $1 AND share_id = $2 FOR UPDATE',
+      [apiKeyId, shareId]
+    );
+    return { page: page.rows[0], grant: grant.rows[0] || null };
   }
 
   async getShareGrant(apiKeyId, shareId) {

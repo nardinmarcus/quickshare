@@ -1,6 +1,5 @@
-// #36 — Dashboard grant/revoke UI: the admin-apis page renders REAL
-// read-grant controls per key, the client script wires toggle/grant/revoke
-// over Cookie+CSRF, and no dead update/publish switches exist.
+// #37 — Dashboard grant/revoke UI: per-Share read/edit grants and future
+// auto-edit are real controls wired over Cookie+CSRF.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -215,6 +214,12 @@ function makeDom({ keyRowsChildren = [], csrf = 'ui-csrf-token' } = {}) {
       // Script-created nodes join the document so later lookups find them.
       queueMicrotask(() => adopt(node));
       return node;
+    },
+    createTextNode: text => {
+      const node = createElement('span');
+      node.tagName = '#TEXT';
+      node.textContent = String(text);
+      return node;
     }
   };
 
@@ -302,12 +307,15 @@ test('served page renders per-key grant controls and scope badges; no dead updat
   assert.match(page, /aria-expanded="false"/);
   assert.match(page, /data-grants-panel="[^"]+"/);
   assert.match(page, /data-grant-item="[^"]+"/, 'existing grants render as items');
-  assert.match(page, /撤回/);
+  assert.match(page, /撤回读取授权/);
+  assert.match(page, /api-key-edit-grant-btn/);
+  assert.match(page, /data-can-update="false"/);
+  assert.match(page, /data-auto-grant-edit="[^"]+"/);
   assert.match(page, /data-grant-form="[^"]+"/);
   assert.match(page, /api-key-scope">share:create</, 'scope badges render');
-  assert.match(page, /授予读取/);
-  // No dead toggles: the page never renders update/publish scope switches.
-  assert.doesNotMatch(page, /share:update/);
+  assert.match(page, /授予授权/);
+  assert.match(page, /share:update/);
+  // Publish-state mutation remains unavailable.
   assert.doesNotMatch(page, /share:publish/);
   // Secrets never render.
   assert.doesNotMatch(page, new RegExp(key.secret));
@@ -315,6 +323,14 @@ test('served page renders per-key grant controls and scope badges; no dead updat
   const script = await fetch(`${origin}/js/admin-apis.js`).then(response => response.text());
   assert.match(script, /api-key-grants-btn/);
   assert.match(script, /\/grants/);
+
+  const editGranted = await fetch(`${origin}/admin/apis/keys/${key.id}/grants/${shareId}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ canUpdate: true })
+  });
+  assert.equal(editGranted.status, 200);
+  const editPage = await fetch(`${origin}/admin/apis`).then(response => response.text());
+  assert.match(editPage, /disabled title=.*请先撤销编辑权，再撤回读取授权/);
+  assert.match(editPage, /先撤销编辑权/);
 });
 
 test('toggle opens the panel; grant and revoke round-trip over CSRF with honest feedback', async () => {
@@ -428,6 +444,103 @@ test('toggle opens the panel; grant and revoke round-trip over CSRF with honest 
   assert.equal(counter.textContent, '0');
 });
 
+test('edit grant and auto-edit controls send real CSRF-protected requests and preserve UI state on errors', async () => {
+  const keyId = 'ui-edit-key01';
+  const shareId = 'ui-edit-share01';
+  const keyRow = createElement('tr');
+  const panelRow = createElement('tr');
+  panelRow.id = `grants-${keyId}`;
+  panelRow.hidden = false;
+  const panel = createElement('div');
+  panel.setAttribute('data-grants-panel', keyId);
+  const list = createElement('ul');
+  list.setAttribute('data-grant-list', keyId);
+  panel.appendChild(list);
+  const autoToggle = createElement('input');
+  autoToggle.type = 'checkbox';
+  autoToggle.className = 'api-key-auto-edit-toggle';
+  autoToggle.dataset.autoGrantEdit = keyId;
+  autoToggle.checked = false;
+  panel.appendChild(autoToggle);
+  const form = createElement('form');
+  form.setAttribute('data-grant-form', keyId);
+  const shareInput = createElement('input');
+  shareInput.setAttribute('name', 'shareId');
+  shareInput.value = shareId;
+  const editInput = createElement('input');
+  editInput.setAttribute('name', 'canUpdate');
+  editInput.type = 'checkbox';
+  editInput.checked = true;
+  form.append(shareInput, editInput);
+  panel.appendChild(form);
+  const panelCell = createElement('td');
+  panelCell.appendChild(panel);
+  panelRow.appendChild(panelCell);
+  const counter = createElement('span');
+  counter.setAttribute('data-read-grant-count', keyId);
+  counter.textContent = '0';
+  const scopeList = createElement('div');
+  scopeList.setAttribute('data-api-key-scopes', keyId);
+  keyRow.append(counter, scopeList);
+
+  const harness = makeDom({ keyRowsChildren: [keyRow, panelRow] });
+  harness.register(keyRow); harness.register(panelRow);
+  harness.nextResponse = { ok: true, status: 201, json: async () => ({
+    success: true, changed: true,
+    grant: { apiKeyId: keyId, shareId, canRead: true, canUpdate: true },
+    scopes: ['share:create', 'share:read', 'share:update']
+  }) };
+  harness.run();
+
+  await keyRowsSubmit(harness, form);
+  await settle(() => counter.textContent === '1', 'edit grant request');
+  assert.deepEqual(JSON.parse(harness.fetchCalls[0].options.body), { shareId, canUpdate: true });
+  assert.equal(harness.fetchCalls[0].options.headers['X-CSRF-Token'], 'ui-csrf-token');
+  const item = list.children.find(node => node.matches(`[data-grant-item="${CSS_ESCAPE(shareId)}"]`));
+  assert.ok(item);
+  const editButton = item.querySelector('.api-key-edit-grant-btn');
+  const revokeButton = item.querySelector('.api-key-revoke-btn');
+  assert.equal(editButton.dataset.canUpdate, 'true');
+  assert.equal(revokeButton.disabled, true, 'read revocation waits until dependent edit grant is removed');
+  assert.equal(revokeButton.textContent, '先撤销编辑权');
+  assert.equal(counter.textContent, '1');
+  assert.deepEqual(scopeList.children.map(node => node.textContent), ['share:create', 'share:read', 'share:update']);
+
+  harness.nextResponse = { ok: true, status: 200, json: async () => ({
+    success: true, changed: true,
+    grant: { apiKeyId: keyId, shareId, canRead: true, canUpdate: false },
+    scopes: ['share:create', 'share:read']
+  }) };
+  await keyRowsClick(harness, revokeButton);
+  await settle(() => harness.fetchCalls.length === 1, 'dependent read revoke is blocked without a request');
+  assert.equal(revokeButton.disabled, true, 'client refuses to send a read revoke while edit depends on it');
+
+  await keyRowsClick(harness, editButton);
+  await settle(() => editButton.dataset.canUpdate === 'false', 'edit downgrade request');
+  assert.equal(revokeButton.disabled, false, 'read revoke becomes available after edit is removed');
+  assert.equal(revokeButton.textContent, '撤回读取授权');
+  assert.equal(harness.fetchCalls[1].options.method, 'PUT');
+  assert.deepEqual(JSON.parse(harness.fetchCalls[1].options.body), { canUpdate: false });
+  assert.equal(editButton.dataset.canUpdate, 'false');
+  assert.equal(editButton.getAttribute('aria-pressed'), 'false');
+  assert.deepEqual(scopeList.children.map(node => node.textContent), ['share:create', 'share:read']);
+
+  harness.nextResponse = { ok: true, status: 200, json: async () => ({ success: true, changed: true, autoGrantNewShareEdit: true }) };
+  autoToggle.checked = true;
+  await harness.byId.get('api-keys-body').events.change({ target: autoToggle });
+  await settle(() => harness.toasts.some(([, message]) => message.includes('启用自动编辑授权')), 'auto-grant enable request');
+  assert.equal(harness.fetchCalls[2].options.method, 'PUT');
+  assert.deepEqual(JSON.parse(harness.fetchCalls[2].options.body), { enabled: true });
+  assert.equal(autoToggle.checked, true);
+
+  harness.nextResponse = { ok: false, status: 503, json: async () => ({ success: false, error: '暂时不可用' }) };
+  autoToggle.checked = false;
+  await harness.byId.get('api-keys-body').events.change({ target: autoToggle });
+  await settle(() => harness.toasts.some(([type, message]) => type === 'error' && message === '暂时不可用'), 'auto-grant failure');
+  assert.equal(autoToggle.checked, true, 'failed request restores the visible previous state');
+  assert.deepEqual(harness.toasts[harness.toasts.length - 1], ['error', '暂时不可用']);
+});
+
 async function keyRowsClick(harness, button) {
   const keyRows = harness.byId.get('api-keys-body');
   await keyRows.events.click({ target: button });
@@ -464,7 +577,7 @@ test('creation flow builds a matching row: scope badges, zero count, toggle and 
   const keyRows = harness.byId.get('api-keys-body');
   nameInput.value = 'Fresh';
   await form.events.submit({ preventDefault() {} });
-  await settle(() => harness.byId.get('new-api-key-value').textContent !== '', 'creation settled');
+  await settle(() => harness.byId.get('new-api-key-value').textContent !== '' && keyRows.children.length > 0, 'creation settled');
 
   const newRow = keyRows.children[0];
   assert.ok(newRow, 'key row inserted');

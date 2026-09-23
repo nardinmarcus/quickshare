@@ -63,12 +63,12 @@
     panel.dataset.grantsPanel = apiKey.id;
 
     const heading = document.createElement('h3');
-    heading.textContent = '读取授权 · ' + apiKey.name;
+    heading.textContent = 'Share 授权 · ' + apiKey.name;
     panel.appendChild(heading);
 
     const hint = document.createElement('p');
     hint.className = 'admin-muted';
-    hint.textContent = '为该密钥授权读取指定 Share；授权后可用 GET /api/v1/shares 系列接口读取。撤回全部授权后该密钥立即失去读取能力（scope 自动收回）。';
+    hint.textContent = '按 Share 分别授予读取或编辑权。编辑权始终包含读取权；撤销编辑权不会撤销读取权。';
     panel.appendChild(hint);
 
     const list = document.createElement('ul');
@@ -80,6 +80,20 @@
     empty.textContent = '尚未授权任何 Share。';
     list.appendChild(empty);
     panel.appendChild(list);
+
+    const autoLabel = document.createElement('label');
+    autoLabel.className = 'api-key-auto-edit-option';
+    const autoToggle = document.createElement('input');
+    autoToggle.type = 'checkbox';
+    autoToggle.className = 'api-key-auto-edit-toggle';
+    autoToggle.dataset.autoGrantEdit = apiKey.id;
+    autoToggle.checked = apiKey.auto_grant_new_share_edit === true;
+    autoLabel.append(autoToggle, document.createTextNode(' 后续通过此托管密钥创建的 Share 自动授予读取与编辑权'));
+    panel.appendChild(autoLabel);
+    const autoHint = document.createElement('p');
+    autoHint.className = 'admin-muted';
+    autoHint.textContent = '只影响启用后的新建；不会追溯旧 Share，也不影响旧版 SHARE_API_KEY 或前端登录创建。';
+    panel.appendChild(autoHint);
 
     const grantForm = document.createElement('form');
     grantForm.className = 'api-key-grant-form';
@@ -98,12 +112,23 @@
     input.required = true;
     input.placeholder = '例如：xS_9ngJnG9NX';
     formRow.appendChild(input);
+    const editLabel = document.createElement('label');
+    editLabel.className = 'api-key-edit-option';
+    const editToggle = document.createElement('input');
+    editToggle.type = 'checkbox';
+    editToggle.name = 'canUpdate';
+    editLabel.append(editToggle, document.createTextNode(' 同时授予编辑'));
+    formRow.appendChild(editLabel);
     const submit = document.createElement('button');
     submit.className = 'cyber-btn cyber-btn-secondary';
     submit.type = 'submit';
-    submit.textContent = '授予读取';
+    submit.textContent = '授予授权';
     formRow.appendChild(submit);
     grantForm.appendChild(formRow);
+    const grantHint = document.createElement('p');
+    grantHint.className = 'admin-muted';
+    grantHint.textContent = '编辑权包含读取权；单独授予读取时不启用编辑能力。';
+    grantForm.appendChild(grantHint);
     panel.appendChild(grantForm);
 
     panelCell.appendChild(panel);
@@ -162,8 +187,8 @@
     manageGrants.dataset.apiKeyId = apiKey.id;
     manageGrants.setAttribute('aria-expanded', 'false');
     manageGrants.setAttribute('aria-controls', 'grants-' + apiKey.id);
-    manageGrants.setAttribute('aria-label', '管理读取授权 ' + apiKey.name);
-    manageGrants.innerHTML = '<i class="fas fa-user-check" aria-hidden="true"></i><span class="sr-only">读取授权</span>';
+    manageGrants.setAttribute('aria-label', '管理 Share 授权 ' + apiKey.name);
+    manageGrants.innerHTML = '<i class="fas fa-user-check" aria-hidden="true"></i><span class="sr-only">Share 授权</span>';
     actions.appendChild(manageGrants);
     const rotate = document.createElement('button');
     rotate.type = 'button';
@@ -193,7 +218,9 @@
     busy = value;
     form.setAttribute('aria-busy', String(value));
     keyRows.setAttribute('aria-busy', String(value));
-    document.querySelectorAll('#api-key-form button, #api-keys-body button').forEach(button => { button.disabled = value; });
+    document.querySelectorAll('#api-key-form button, #api-keys-body button, #api-keys-body input').forEach(control => {
+      control.disabled = value || control.dataset.blockedByEdit === 'true';
+    });
   }
 
   function clearSecret() {
@@ -246,28 +273,50 @@
     }
   }
 
-  function appendGrantItem(keyId, shareId) {
+  function appendGrantItem(keyId, shareId, canUpdate = false) {
     const panel = grantsPanelFor(keyId);
     if (!panel) return null;
     const list = panel.querySelector('[data-grant-list]');
-    if (list.querySelector('[data-grant-item="' + CSS.escape(shareId) + '"]')) {
-      return list.querySelector('[data-grant-item="' + CSS.escape(shareId) + '"]');
+    let item = list.querySelector('[data-grant-item="' + CSS.escape(shareId) + '"]');
+    if (!item) {
+      item = document.createElement('li');
+      item.dataset.grantItem = shareId;
+      const code = document.createElement('code');
+      code.textContent = shareId;
+      item.appendChild(code);
+      list.appendChild(item);
     }
 
-    const item = document.createElement('li');
-    item.dataset.grantItem = shareId;
-    const code = document.createElement('code');
-    code.textContent = shareId;
-    item.appendChild(code);
-    const revoke = document.createElement('button');
-    revoke.type = 'button';
-    revoke.className = 'admin-delete-btn api-key-revoke-btn';
-    revoke.dataset.apiKeyId = keyId;
-    revoke.dataset.shareId = shareId;
-    revoke.setAttribute('aria-label', '撤回该密钥对 ' + shareId + ' 的读取授权');
-    revoke.textContent = '撤回';
-    item.appendChild(revoke);
-    list.appendChild(item);
+    let edit = item.querySelector('.api-key-edit-grant-btn');
+    if (!edit) {
+      edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'api-key-edit-grant-btn';
+      edit.dataset.apiKeyId = keyId;
+      edit.dataset.shareId = shareId;
+      item.appendChild(edit);
+    }
+    edit.dataset.canUpdate = String(canUpdate === true);
+    edit.setAttribute('aria-pressed', String(canUpdate === true));
+    edit.setAttribute('aria-label', (canUpdate ? '撤销' : '授予') + '该密钥对 ' + shareId + ' 的编辑权');
+    edit.textContent = canUpdate ? '撤销编辑权' : '授予编辑权';
+
+    let revoke = item.querySelector('.api-key-revoke-btn');
+    if (!revoke) {
+      revoke = document.createElement('button');
+      revoke.type = 'button';
+      revoke.className = 'admin-delete-btn api-key-revoke-btn';
+      revoke.dataset.apiKeyId = keyId;
+      revoke.dataset.shareId = shareId;
+      item.appendChild(revoke);
+    }
+    revoke.dataset.blockedByEdit = String(canUpdate === true);
+    revoke.disabled = canUpdate === true;
+    revoke.title = canUpdate === true ? '请先撤销编辑权，再撤回读取授权' : '';
+    revoke.setAttribute('aria-label', canUpdate === true
+      ? '请先撤销编辑权'
+      : '撤回该密钥对 ' + shareId + ' 的读取授权');
+    revoke.textContent = canUpdate === true ? '先撤销编辑权' : '撤回读取授权';
     refreshGrantEmptyState(keyId);
     return item;
   }
@@ -294,6 +343,8 @@
     if (busy) return;
     const keyId = form.dataset.grantForm;
     const input = form.querySelector('input[name="shareId"]');
+    const canUpdateInput = form.querySelector('input[name="canUpdate"]');
+    const canUpdate = canUpdateInput?.checked === true;
     const shareId = (input.value || '').trim();
 
     if (!shareId) {
@@ -306,7 +357,7 @@
       const response = await fetch('/admin/apis/keys/' + encodeURIComponent(keyId) + '/grants', {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken() },
-        body: JSON.stringify({ shareId })
+        body: JSON.stringify({ shareId, ...(canUpdate ? { canUpdate: true } : {}) })
       });
       const data = await response.json();
 
@@ -315,13 +366,15 @@
       }
 
       if (data.changed) {
-        appendGrantItem(keyId, shareId);
-        bumpGrantCount(keyId, 1);
-        notify('success', '已授予读取授权');
+        const hadGrant = grantsPanelFor(keyId)?.querySelector('[data-grant-item="' + CSS.escape(shareId) + '"]') !== null;
+        appendGrantItem(keyId, shareId, data.grant?.canUpdate === true);
+        if (!hadGrant) bumpGrantCount(keyId, 1);
+        notify('success', canUpdate ? '已授予读取与编辑权' : '已授予读取授权');
       } else {
         notify('info', '该 Share 已在授权列表中，未重复添加');
       }
       renderKeyScopes(keyId, data.scopes);
+      if (canUpdateInput) canUpdateInput.checked = false;
       input.value = '';
       input.focus();
     } catch (error) {
@@ -331,8 +384,59 @@
     }
   }
 
-  async function revokeRead(button) {
+  async function toggleEditGrant(button) {
     if (busy) return;
+    const keyId = button.dataset.apiKeyId;
+    const shareId = button.dataset.shareId;
+    const canUpdate = button.dataset.canUpdate !== 'true';
+    setBusy(true);
+    try {
+      const response = await fetch('/admin/apis/keys/' + encodeURIComponent(keyId) + '/grants/' + encodeURIComponent(shareId), {
+        method: 'PUT',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken() },
+        body: JSON.stringify({ canUpdate })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || '更新编辑授权失败');
+      appendGrantItem(keyId, shareId, data.grant?.canUpdate === true);
+      renderKeyScopes(keyId, data.scopes);
+      notify(data.changed ? 'success' : 'info', data.changed
+        ? (canUpdate ? '已授予编辑权（同时保留读取权）' : '已撤销编辑权，读取授权仍保留')
+        : '编辑授权状态未改变');
+    } catch (error) {
+      notify('error', error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleAutoGrant(input) {
+    if (busy) return;
+    const keyId = input.dataset.autoGrantEdit;
+    const enabled = input.checked;
+    setBusy(true);
+    try {
+      const response = await fetch('/admin/apis/keys/' + encodeURIComponent(keyId) + '/auto-grant-edit', {
+        method: 'PUT',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken() },
+        body: JSON.stringify({ enabled })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || '更新自动编辑授权失败');
+      input.checked = data.autoGrantNewShareEdit === true;
+      notify(data.changed ? 'success' : 'info', data.changed
+        ? (enabled ? '已为后续托管密钥新建启用自动编辑授权' : '已关闭后续自动编辑授权；现有授权保持不变')
+        : '自动编辑授权状态未改变');
+    } catch (error) {
+      input.checked = !enabled;
+      notify('error', error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revokeRead(button) {
+    if (busy || button.disabled || button.dataset.blockedByEdit === 'true') return;
     const keyId = button.dataset.apiKeyId;
     const shareId = button.dataset.shareId;
 
@@ -487,6 +591,11 @@
   });
 
   keyRows.addEventListener('click', function (event) {
+    const editGrant = event.target.closest('.api-key-edit-grant-btn');
+    if (editGrant) {
+      toggleEditGrant(editGrant);
+      return;
+    }
     const revoke = event.target.closest('.api-key-revoke-btn');
     if (revoke) {
       revokeRead(revoke);
@@ -504,6 +613,11 @@
     }
     const rotate = event.target.closest('.api-key-rotate-btn');
     if (rotate) rotateKey(rotate);
+  });
+
+  keyRows.addEventListener('change', function (event) {
+    const autoGrant = event.target.closest('.api-key-auto-edit-toggle');
+    if (autoGrant) toggleAutoGrant(autoGrant);
   });
 
   keyRows.addEventListener('submit', function (event) {

@@ -77,15 +77,15 @@ const REVISION_DRILL_VALUE = '9007199254740993';
 
 // Publish-operation fixture (#32 migration 008): one committed creation with
 // an encrypted receipt and one deletion tombstone (receipt cleared). #33 adds
-// a restore row and a content-update row so the dashboard save/restore
-// operation ledger also travels through dump → restore byte-identically; the
-// verifier's full-row comparison covers every column by name.
+// dashboard restore/content-update rows; #37 adds a managed-Key content
+// update receipt. The full-row verifier covers every operation byte by name.
 const OPERATION_FIXTURE = {
   namespace: 'managed-key:issue27key00001',
   requestId: 'issue32-op-000000000001',
   tombstoneRequestId: 'issue32-op-000000000002',
   restoreRequestId: 'issue33-op-000000000003',
   contentUpdateRequestId: 'issue33-op-000000000004',
+  apiContentUpdateRequestId: 'issue37-op-000000000007',
   purgedReceiptRequestId: 'issue34-op-000000000005',
   unpublishRequestId: 'issue35-op-000000000006'
 };
@@ -374,6 +374,8 @@ async function seedFixture(pool) {
     // surface (no secrets): changed flag, source revision, policy display.
     const restoreReceipt = encryptSecret(JSON.stringify({ changed: true, sourceRevision: '1', isProtected: false, expiresAt: null }));
     const updateReceipt = encryptSecret(JSON.stringify({ changed: true, isProtected: true, expiresAt: null }));
+    // A Key-driven content-update receipt is intentionally bounded to the
+    // changed result flag; it never persists content or policy metadata.
     await pool.query(
       `INSERT INTO publish_operations (
          actor_namespace, request_id, action, request_digest, target_id,
@@ -409,6 +411,16 @@ async function seedFixture(pool) {
         UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE,
         encryptSecret(JSON.stringify({ changed: true, published: false }))
       ]
+    );
+    await pool.query(
+      `INSERT INTO publish_operations (
+         actor_namespace, request_id, action, request_digest, target_id,
+         result_share_id, result_revision, result_access_revision, receipt_encrypted, created_at, deleted_at
+       )
+       VALUES ($1, $2, 'content-update', $3, $4, $4, '2', $5, $6, $7, NULL)`,
+      [OPERATION_FIXTURE.namespace, OPERATION_FIXTURE.apiContentUpdateRequestId,
+        '7'.repeat(64), pages.markdownThemed, UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE,
+        encryptSecret(JSON.stringify({ changed: true })), base + 80]
     );
   }
 
@@ -460,24 +472,23 @@ async function seedFixture(pool) {
     );
   }
 
-  // #36 grants fixture: one REAL read grant from the fixture Key to the
-  // themed Share. This is also the rotation-survival fixture — the Key row
-  // carries credential_version 9007199254740993 (rotated far past float
-  // safety) while the grant still binds the SAME logical key id, proving
-  // grants reference identity that outlives secret rotation.
+  // #36/#37 grants fixture: one REAL read+edit grant from the fixture Key to
+  // the themed Share. This is also rotation-survival evidence — the Key row
+  // carries credential_version 9007199254740993 while both permissions remain
+  // bound to the same logical key id. The auto-grant flag is intentionally on.
   const scopesSeeded = await probeApiKeyScopesColumn(pool);
   if (scopesSeeded) {
     await pool.query(
       'UPDATE api_keys SET scopes = $2::jsonb, auto_grant_new_share_edit = TRUE WHERE id = $1',
-      [FIXTURE.apiKey.id, JSON.stringify(['share:create', 'share:read'])]
+      [FIXTURE.apiKey.id, JSON.stringify(['share:create', 'share:read', 'share:update'])]
     );
   }
 
   const grantsSeeded = await probeShareGrantsTable(pool);
   if (grantsSeeded) {
     await pool.query(
-      `INSERT INTO share_grants (api_key_id, share_id, can_read, created_at)
-       VALUES ($1, $2, TRUE, $3)`,
+      `INSERT INTO share_grants (api_key_id, share_id, can_read, can_update, created_at)
+       VALUES ($1, $2, TRUE, TRUE, $3)`,
       [FIXTURE.apiKey.id, pages.markdownThemed, base + 110]
     );
   }
@@ -669,12 +680,12 @@ async function runDrill({ keepContainers = false, skipContainerSetup = false, ou
       publicationState: seedResult.revisionsSeeded ? 'unpublished-exercised' : 'absent-schema001-006',
       publicationStateAccessRevision: seedResult.revisionsSeeded ? UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE : null,
       publishedFixture: seedResult.revisionsSeeded ? 'non-default-false-with-bumped-access' : 'absent-schema001-006',
-      // #36 scope/grant coverage (migration 010): the fixture key carries a
-      // non-default scope set + auto-grant flag, and one real read grant
-      // bound to its logical id at credential_version 9007199254740993 —
-      // the rotation-survival proof travels through dump → restore.
+      // #36/#37 scope/grant coverage (existing migration 010): the fixture
+      // key carries read+update scopes, the enabled future auto-edit option
+      // and one real read+update grant bound to its logical id at
+      // credential_version 9007199254740993.
       apiKeyScopes: seedResult.scopesSeeded ? 'exercised' : 'absent-schema001-009',
-      shareGrants: seedResult.grantsSeeded ? 'exercised-with-rotation-survival' : 'absent-schema001-009',
+      shareGrants: seedResult.grantsSeeded ? 'exercised-read-update-auto-edit-and-rotation-survival' : 'absent-schema001-009',
       reconciliation: verification ? verification.reconciliation.status : 'not-available',
       safeToServe: false,
       durationsMs: {

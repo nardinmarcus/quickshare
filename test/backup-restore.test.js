@@ -355,6 +355,8 @@ test('post-snapshot revocation detection uses the audit vocabulary the app actua
     // #36 read-grant revocation restores a dead authorization if replayed:
     // it must be named explicitly, not lost in generic owner review.
     { action: 'api_key.revoke', page_id: 'issue36share01', details: '{"apiKeyId":"k1","shareId":"issue36share01","grants":["read"]}', created_at: String(snapshotAt + 2600) },
+    // #37 disabling future auto-edit grants is also a durable revocation.
+    { action: 'api_key.auto_grant_new_share_edit.disable', page_id: null, details: '{"apiKeyId":"k1","enabled":false}', created_at: String(snapshotAt + 2700) },
     // Hard purges.
     { action: 'page.delete', page_id: 'gone2', details: null, created_at: String(snapshotAt + 3000) },
     { action: 'page.delete.batch', page_id: null, details: '{"ids":["x"]}', created_at: String(snapshotAt + 3500) },
@@ -372,6 +374,7 @@ test('post-snapshot revocation detection uses the audit vocabulary the app actua
     'api_key.rotate:null',
     'api_key.delete:null',
     'api_key.revoke:issue36share01',
+    'api_key.auto_grant_new_share_edit.disable:null',
     'page.delete:gone2',
     'page.delete.batch:null'
   ]);
@@ -385,6 +388,7 @@ test('post-snapshot revocation detection uses the audit vocabulary the app actua
 
   // St1: the revoke action is a hard revocation by name.
   assert.ok(verifyBackup.HARD_REVOCATION_AUDIT_ACTIONS.has('api_key.revoke'), 'api_key.revoke is in the hard revocation vocabulary');
+  assert.ok(verifyBackup.HARD_REVOCATION_AUDIT_ACTIONS.has('api_key.auto_grant_new_share_edit.disable'), 'disabling future edit grants is a named hard revocation');
 });
 
 test('managed key row comparison redacts credential material while naming the drift column (St2)', () => {
