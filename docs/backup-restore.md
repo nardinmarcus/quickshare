@@ -16,7 +16,7 @@ npm run backup:check
 该命令端到端完成一次完整演练，并输出快照点与真实耗时：
 
 1. 启动两台仅绑定 `127.0.0.1` 的一次性 PostgreSQL 17 容器（`issue27-pg-src` / `issue27-pg-restore`），创建 `issue27_src_test` / `issue27_restore_test` 数据库（执行者专属环境可用 scratch harness 覆盖 `FIXTURE` 的运行地址/身份后再 `runDrill`，生产源码不携带执行者身份）；
-2. 在源库执行真实迁移并植入合成夹具（四类页面、主题、收藏、密码保护、过期、managed Key、审计、站点设置；迁移 `007` 起还包含内容 Revision 快照、超过 2^53 的精确 `current_revision` 指针与非默认 `published=FALSE` 页面；迁移 `008` 起还包含发布操作记录：一条已提交创建（带加密回执）与一条删除墓碑；迁移 `009` 起还包含 #34 清除夹具：一条真实清除墓碑——载荷与快照哈希为 NULL、`purged_at` 已记录——以及一条结果版本即该墓碑的发布操作，其回执已按 Share+Revision 清除并带 `purged_at`；迁移 `010` 起还包含 #36 授权夹具：Key 的非默认 scopes 与 auto-grant 标记，以及一条指向主题 Share 的真实读取授权——即轮换存活夹具）；
+2. 在源库执行真实迁移并植入合成夹具（四类页面、主题、收藏、密码保护、过期、managed Key、审计、站点设置；迁移 `007` 起还包含内容 Revision 快照、超过 2^53 的精确 `current_revision` 指针与非默认 `published=FALSE` 页面；迁移 `008` 起还包含发布操作记录：创建回执、Dashboard restore receipt 与恢复来源、managed-Key restore receipt 与来源、Key content-update receipt，以及删除墓碑；迁移 `009` 起还包含 #34 清除夹具：一条真实清除墓碑——载荷与快照哈希为 NULL、`purged_at` 已记录——以及一条结果版本即该墓碑的 `restore` 操作，其回执已按 Share+Revision 清除并带 `purged_at`；迁移 `010` 起还包含 #36/#38 授权夹具：Key 的非默认 scopes 与 auto-grant 标记，以及一条指向主题 Share 的真实 read+update 授权——即轮换存活夹具）；
 3. `scripts/backup-db.js` 执行 `pg_dump -Fc`，记录快照点（时间戳 + WAL LSN）与耗时；
 4. `scripts/restore-db.js` 校验 dump SHA-256 后用 `pg_restore` 重建隔离库，记录耗时；
 5. `scripts/verify-backup.js` 用两条独立连接核对恢复结果，输出验证报告。
@@ -59,8 +59,8 @@ npm run verify:backup -- --source-url <src> --restore-url <restore> \
 - managed Key 行与 secret 校验，显式比较 `credential_version`；迁移 `006` 后夹具使用 `'9007199254740993'`，验证原生恢复的 BIGINT 十进制字符串保真及仅版本篡改时失败；
 - Key scopes 与逐 Share 授权（#36）：夹具 Key 携带非默认 `scopes = ["share:create","share:read"]` 与 `auto_grant_new_share_edit = TRUE`，并包含一条指向主题 Share 的真实读取授权。该授权即轮换存活夹具 —— Key 行的 `credential_version` 已远超轮换一次的值，而授权仍绑定同一逻辑 Key ID。恢复库单独篡改 scope 集合或授权位（`can_read`/`can_publish`）都必须按字段与 `(api_key_id, share_id)` 具名失败（exit 1）；
 - 审计日志（快照点两侧一致）；
-- 发布操作记录（迁移 `008` 起的 `publish_operations` 全表逐列对比：`(actor_namespace, request_id)` 主键、HMAC 请求摘要、加密回执 `receipt_encrypted`、删除墓碑 `deleted_at`；迁移 `009` 起加入回执清除时刻 `purged_at`。夹具含一条已提交创建（带加密回执）、一条删除墓碑（回执已清）、一条 #34 回执被清除的操作（`receipt_encrypted=NULL`、`purged_at` 已记录）与一条 #35 `unpublish` 操作（回执 `{changed, published}`）；恢复库单独篡改回执、墓碑位或 `purged_at` 时 `publishOperations` 检查必须按字段与 request id 具名失败）；
-- 内容快照墓碑（迁移 `009` 起的 `share_revisions.purged_at`）：墓碑行按身份/来源/时间/`purged_at` 列对比；任何载荷或快照哈希字节在墓碑上「复活」都按字段具名失败（`revision-purge-tombstones` 覆盖项），无载荷快照绝不与存活正文重算哈希比对；`shareRevisions` 检查报告 `tombstoneCount`/`liveCount`；
+- 发布操作记录（迁移 `008` 起的 `publish_operations` 全表逐列对比：`(actor_namespace, request_id)` 主键、HMAC 请求摘要、加密回执 `receipt_encrypted`、删除墓碑 `deleted_at`；迁移 `009` 起加入回执清除时刻 `purged_at`。夹具含创建回执、Dashboard restore receipt、managed-Key restore receipt（都只含 changed/sourceRevision 等最小结果）、一条删除墓碑、一条 #34 restore 结果回执被清除的操作（`receipt_encrypted=NULL`、`purged_at` 已记录）与一条 #35 `unpublish` 操作（回执 `{changed, published}`）；恢复库单独篡改 live receipt、墓碑回执或 `purged_at` 时 `publishOperations` 检查必须按字段与 request id 具名失败；
+- 内容快照墓碑（迁移 `009` 起的 `share_revisions.purged_at`）：墓碑行按身份/来源/时间/`purged_at` 列对比；任何载荷或快照哈希字节在墓碑上「复活」都按字段具名失败（`revision-purge-tombstones` 覆盖项），无载荷快照绝不与存活正文重算哈希比对；`shareRevisions` 检查报告 `tombstoneCount`/`liveCount`。#38 sourceRevision 加密回执与 #34 被清除 restore 回执都属于既有 008/009 全行检查，不需要 schema 变更；
 - 站点设置全行（迁移 `005` 后夹具将 `publishing_writes_paused` 置为非默认 `true`，必须完整恢复；恢复库单独篡改此值时 `siteSettings` 检查必须失败）；
 - 发布状态（#35）：迁移 `007` 起夹具在主题 Share 上写入真实的所有者下架终态——`published = FALSE` 且 `access_revision` 推进到 `'9007199254740994'`（即访问版本夹具值 +1，仍超出 2^53），两者必须成对完整恢复；单独篡改 `published`（复活已下架 Share）或单独篡改该 `access_revision` 都必须按字段与页面具名失败（exit 1），revert（用同一 manifest 重新恢复）后 VERIFY 回到 exit 0。忽略 `published` 的旧应用不是安全回滚候选；
 - 迁移台账（恢复库、源库与本地 `db/migrations` 三方一致，checksum 不符即失败）。

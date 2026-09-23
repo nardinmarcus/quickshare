@@ -321,8 +321,98 @@ class PostgresPageRepository {
   }
 
   /**
-   * Single bounded snapshot read for owner history (#31). The revision value
-   * is validated as an exact decimal revision BEFORE any query runs.
+   * Key history API (#38): read the Share current pointer and bounded metadata
+   * page under the same PostgreSQL statement snapshot; no body/policy columns.
+   */
+  async listContentRevisionCursorPage(shareId, { limit = 20, beforeRevision = null } = {}) {
+    const parsedLimit = Math.trunc(Number(limit));
+    const safeLimit = Math.min(Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20, 101);
+    if (beforeRevision !== null && beforeRevision !== undefined && !isContentRevision(String(beforeRevision))) {
+      throw contentError(400, 'content revision cursor must be a positive decimal string');
+    }
+    const result = await this.pool.query(
+      `
+        WITH api_revision_history_page AS MATERIALIZED (
+          SELECT p.id, p.current_revision
+          FROM pages p
+          WHERE p.id = $1
+        )
+        SELECT page.id AS page_id, page.current_revision,
+               revision.share_id, revision.revision, revision.created_at, revision.source,
+               revision.restored_from, revision.purged_at
+        FROM api_revision_history_page page
+        LEFT JOIN LATERAL (
+          SELECT share_id, revision, created_at, source, restored_from, purged_at
+          FROM share_revisions
+          WHERE share_id = page.id AND ($2::bigint IS NULL OR revision < $2::bigint)
+          ORDER BY revision DESC
+          LIMIT $3
+        ) revision ON TRUE
+        ORDER BY revision.revision DESC NULLS LAST
+      `,
+      [shareId, beforeRevision === null || beforeRevision === undefined ? null : String(beforeRevision), safeLimit]
+    );
+    if (result.rowCount === 0) return { page: null, items: [] };
+    const page = { id: result.rows[0].page_id, current_revision: result.rows[0].current_revision };
+    const items = result.rows.filter(row => row.revision !== null).map(row => ({
+      share_id: row.share_id,
+      revision: row.revision,
+      created_at: row.created_at,
+      source: row.source,
+      restored_from: row.restored_from,
+      purged_at: row.purged_at
+    }));
+    return { page, items };
+  }
+
+  /**
+   * Key single-revision API (#38): current pointer and requested bounded
+   * snapshot are read in one statement snapshot, without loading the live page.
+   */
+  async getContentRevisionWithCurrent(shareId, revision) {
+    if (!isContentRevision(revision)) {
+      throw contentError(400, 'content revision must be a positive decimal string');
+    }
+    const result = await this.pool.query(
+      `
+        WITH api_revision_single_page AS MATERIALIZED (
+          SELECT p.id, p.current_revision
+          FROM pages p
+          WHERE p.id = $1
+        )
+        SELECT page.id AS page_id, page.current_revision,
+               revision.share_id, revision.revision, revision.html_content, revision.code_type,
+               revision.title, revision.description, revision.markdown_theme, revision.created_at,
+               revision.source, revision.restored_from, revision.purged_at
+        FROM api_revision_single_page page
+        LEFT JOIN share_revisions revision
+          ON revision.share_id = page.id AND revision.revision = $2::bigint
+      `,
+      [shareId, String(revision)]
+    );
+    if (result.rowCount === 0) return null;
+    const row = result.rows[0];
+    return {
+      page: { id: row.page_id, current_revision: row.current_revision },
+      revision: row.revision === null ? null : {
+        share_id: row.share_id,
+        revision: row.revision,
+        html_content: row.html_content,
+        code_type: row.code_type,
+        title: row.title,
+        description: row.description,
+        markdown_theme: row.markdown_theme,
+        created_at: row.created_at,
+        source: row.source,
+        restored_from: row.restored_from,
+        purged_at: row.purged_at
+      }
+    };
+  }
+
+  /**
+   * Single bounded snapshot read for owner and Key history (#31/#38).
+   * The revision is validated exactly before any query runs.
    */
   async getContentRevision(shareId, revision) {
     if (!isContentRevision(revision)) {

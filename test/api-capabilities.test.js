@@ -32,7 +32,10 @@ test('Key discovery truthfully reports scopes, catalog and configured request by
     { id: 'share:list', method: 'GET', path: '/api/v1/shares' },
     { id: 'share:content:read', method: 'GET', path: '/api/v1/shares/:id/content' },
     { id: 'share:state:read', method: 'GET', path: '/api/v1/shares/:id/state' },
-    { id: 'share:content:update', method: 'PUT', path: '/api/v1/shares/:id/content' }
+    { id: 'share:content:update', method: 'PUT', path: '/api/v1/shares/:id/content' },
+    { id: 'share:revisions:read', method: 'GET', path: '/api/v1/shares/:id/revisions' },
+    { id: 'share:revision:read', method: 'GET', path: '/api/v1/shares/:id/revisions/:revision' },
+    { id: 'share:restore', method: 'POST', path: '/api/v1/shares/:id/restore' }
   ]);
   assert.deepEqual(capabilities.body.scopes, {
     implemented: ['share:create', 'share:read', 'share:update'],
@@ -41,7 +44,7 @@ test('Key discovery truthfully reports scopes, catalog and configured request by
   assert.deepEqual(capabilities.body.idempotency, {
     header: 'Idempotency-Key',
     pattern: '^[A-Za-z0-9_-]{16,128}$',
-    appliesTo: ['share:create', 'share:content:update'],
+    appliesTo: ['share:create', 'share:content:update', 'share:restore'],
     conflictStatus: 409,
     replayRequiresSameInput: true
   });

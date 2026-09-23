@@ -332,14 +332,14 @@ test('native restore rebuilds the database and passes full verification', async 
       'snapshot_hash', 'source', 'actor', 'restored_from', ...(hasPurgeColumns ? ['purged_at'] : [])
     ]);
     if (hasPurgeColumns) {
-      assert.ok(revisionsCheck.details.snapshotCount >= 8, 'baselines + v2 + big-pointer + #34 tombstone snapshots restored');
+      assert.ok(revisionsCheck.details.snapshotCount >= 9, 'baselines + API edit + Dashboard restore + big-pointer + #34 tombstone snapshots restored');
       assert.equal(revisionsCheck.details.tombstoneCount, 1,
         '#34: exactly one purge tombstone is inventoried, compared on identity/provenance only');
       const operationsCheck34 = report.checks.find(check => check.name === 'publishOperations');
       assert.equal(operationsCheck34.details.receiptPurgedCount, 1,
         '#34: the receipt-scrubbed operation is inventoried');
     } else {
-      assert.ok(revisionsCheck.details.snapshotCount >= 7, 'baselines + v2 + big-pointer snapshots restored');
+      assert.ok(revisionsCheck.details.snapshotCount >= 8, 'baselines + API edit + Dashboard restore + big-pointer snapshots restored');
     }
     const pointerCheck = report.checks.find(check => check.name === 'revisionCurrentPointer');
     assert.equal(pointerCheck.ok, true, `pointer issues: ${JSON.stringify(pointerCheck.issues)}`);
@@ -366,15 +366,25 @@ test('native restore rebuilds the database and passes full verification', async 
         'SELECT title, current_revision FROM pages WHERE id = $1',
         [FIXTURE.pages.markdownThemed]
       );
-      assert.equal(restoredV2.rows[0].current_revision, '2', 'moved pointer restores exactly');
+      assert.equal(restoredV2.rows[0].title, 'QS27 drill markdown', 'the current materialized content is the restored source snapshot');
+      assert.equal(restoredV2.rows[0].current_revision, '3', 'Dashboard restore advances the exact content pointer');
       const restoredV2Row = await restorePool.query(
         'SELECT snapshot_hash, source, actor, restored_from FROM share_revisions WHERE share_id = $1 AND revision = 2',
         [FIXTURE.pages.markdownThemed]
       );
-      assert.equal(restoredV2Row.rows[0].source, 'dashboard-edit');
-      assert.equal(restoredV2Row.rows[0].actor, 'owner-dashboard');
-      assert.equal(restoredV2Row.rows[0].restored_from, '1', 'synthetic non-null restore origin survives byte-exact (BIGINT as decimal string)');
+      assert.equal(restoredV2Row.rows[0].source, 'api-content-update');
+      assert.equal(restoredV2Row.rows[0].actor, `api-key:${FIXTURE.apiKey.id}`);
+      assert.equal(restoredV2Row.rows[0].restored_from, null);
       assert.match(restoredV2Row.rows[0].snapshot_hash, /^[0-9a-f]{64}$/);
+      const restoredV3Row = await restorePool.query(
+        'SELECT html_content, title, snapshot_hash, source, actor, restored_from FROM share_revisions WHERE share_id = $1 AND revision = 3',
+        [FIXTURE.pages.markdownThemed]
+      );
+      assert.equal(restoredV3Row.rows[0].html_content, '# QS27 drill markdown');
+      assert.equal(restoredV3Row.rows[0].source, 'dashboard-restore');
+      assert.equal(restoredV3Row.rows[0].actor, 'owner-dashboard');
+      assert.equal(restoredV3Row.rows[0].restored_from, '1', 'restore origin remains exact decimal BIGINT provenance');
+      assert.match(restoredV3Row.rows[0].snapshot_hash, /^[0-9a-f]{64}$/);
       const restoredPublished = await restorePool.query(
         'SELECT published, access_revision FROM pages WHERE id = $1',
         [FIXTURE.pages.markdownThemed]
@@ -449,8 +459,8 @@ test('native restore rebuilds the database and passes full verification', async 
     const operationsCheck = report.checks.find(check => check.name === 'publishOperations');
     assert.ok(operationsCheck, 'the publishOperations check is always reported when the table exists');
     assert.equal(operationsCheck.ok, true, `operation issues: ${JSON.stringify(operationsCheck.issues)}`);
-    assert.equal(operationsCheck.details.operationCount, hasPurgeColumns ? 7 : 6,
-      'committed creation + tombstone + #33 restore/dashboard update + #37 managed update (+ #34 receipt-purged) + #35 unpublish restored');
+    assert.equal(operationsCheck.details.operationCount, hasPurgeColumns ? 8 : 7,
+      'create+tombstone, Dashboard and managed-Key restore, dashboard/API update, unpublish, and #34 receipt purge restore');
     assert.equal(operationsCheck.details.tombstoneCount, 1, 'the deletion tombstone restores as a tombstone');
     if (hasPurgeColumns) {
       assert.equal(operationsCheck.details.receiptPurgedCount, 1,
@@ -465,17 +475,40 @@ test('native restore rebuilds the database and passes full verification', async 
     const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
     try {
       const restoredOps = await restorePool.query(
-        'SELECT request_id, receipt_encrypted, deleted_at FROM publish_operations ORDER BY request_id ASC');
+        'SELECT actor_namespace, request_id, action, result_revision, receipt_encrypted, created_at, deleted_at, purged_at FROM publish_operations ORDER BY request_id ASC');
       assert.equal(restoredOps.rows[0].receipt_encrypted !== null, true, 'the encrypted receipt travels byte-identically');
       assert.equal(restoredOps.rows[1].receipt_encrypted, null, 'the tombstone carries no receipt');
       assert.notEqual(restoredOps.rows[1].deleted_at, null);
-      // #33 rows restore with their non-secret receipts and provenance.
+      // #33 dashboard and #38 managed-Key restore receipts retain only
+      // bounded source identity and changed status (never snapshot payload).
+      const { decodeOperationReceipt } = require('../../utils/publishingOperation');
       const restoreRow = restoredOps.rows.find(row => row.request_id === OPERATION_FIXTURE.restoreRequestId);
+      const apiRestoreRow = restoredOps.rows.find(row => row.request_id === OPERATION_FIXTURE.apiRestoreRequestId);
       const updateRow = restoredOps.rows.find(row => row.request_id === OPERATION_FIXTURE.contentUpdateRequestId);
-      assert.ok(restoreRow && restoreRow.receipt_encrypted, 'the #33 restore row carries its encrypted receipt');
+      assert.ok(restoreRow && restoreRow.receipt_encrypted, 'the #33 Dashboard restore row carries its encrypted receipt');
+      assert.equal(restoreRow.actor_namespace, 'dashboard-session:issue27-drill-session');
+      assert.deepEqual(decodeOperationReceipt(restoreRow.receipt_encrypted), {
+        changed: true, sourceRevision: '1', isProtected: false, expiresAt: null
+      });
+      assert.ok(apiRestoreRow && apiRestoreRow.receipt_encrypted, 'the #38 managed-Key restore row carries its encrypted receipt');
+      assert.equal(OPERATION_FIXTURE.namespace, `managed-key:${FIXTURE.apiKey.id}`);
+      assert.equal(apiRestoreRow.actor_namespace, `managed-key:${FIXTURE.apiKey.id}`);
+      assert.equal(apiRestoreRow.action, 'restore');
+      assert.equal(restoreRow.result_revision, '3');
+      assert.equal(apiRestoreRow.result_revision, '3');
+      assert.deepEqual(decodeOperationReceipt(apiRestoreRow.receipt_encrypted), { changed: false, sourceRevision: '1' });
       assert.ok(updateRow && updateRow.receipt_encrypted, 'the #33 content-update row carries its encrypted receipt');
       const apiUpdateRow = restoredOps.rows.find(row => row.request_id === OPERATION_FIXTURE.apiContentUpdateRequestId);
       assert.ok(apiUpdateRow && apiUpdateRow.receipt_encrypted, 'the #37 managed-Key update row carries its bounded receipt');
+      if (hasPurgeColumns) {
+        const restoreTombstone = restoredOps.rows.find(row => row.request_id === OPERATION_FIXTURE.purgedReceiptRequestId);
+        assert.ok(restoreTombstone, 'the #34 purge tombstone is an explicit restore operation');
+        assert.equal(restoreTombstone.action, 'restore');
+        assert.equal(restoreTombstone.result_revision, '2');
+        assert.equal(restoreTombstone.receipt_encrypted, null);
+        assert.equal(restoreTombstone.deleted_at, null);
+        assert.ok(Number(restoreTombstone.purged_at) > 0, 'the restore receipt tombstone retains its purge moment');
+      }
       // #35: the unpublish ledger row travels with its receipt, proving the
       // publish-action history is part of every trustworthy backup.
       const unpublishRow = restoredOps.rows.find(row => row.request_id === OPERATION_FIXTURE.unpublishRequestId);

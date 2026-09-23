@@ -10,6 +10,9 @@ const SHARE_LIST = Object.freeze({ id: 'share:list', method: 'GET', path: '/api/
 const SHARE_CONTENT_READ = Object.freeze({ id: 'share:content:read', method: 'GET', path: '/api/v1/shares/:id/content' });
 const SHARE_STATE_READ = Object.freeze({ id: 'share:state:read', method: 'GET', path: '/api/v1/shares/:id/state' });
 const SHARE_CONTENT_UPDATE = Object.freeze({ id: 'share:content:update', method: 'PUT', path: '/api/v1/shares/:id/content' });
+const SHARE_REVISIONS_READ = Object.freeze({ id: 'share:revisions:read', method: 'GET', path: '/api/v1/shares/:id/revisions' });
+const SHARE_REVISION_READ = Object.freeze({ id: 'share:revision:read', method: 'GET', path: '/api/v1/shares/:id/revisions/:revision' });
+const SHARE_RESTORE = Object.freeze({ id: 'share:restore', method: 'POST', path: '/api/v1/shares/:id/restore' });
 const IMPLEMENTED_SCOPES = Object.freeze(['share:create', 'share:read', 'share:update']);
 const NOT_IMPLEMENTED_SCOPES = Object.freeze(['share:publish']);
 
@@ -29,7 +32,8 @@ function apiCapabilities(config) {
     contentTypes: CONTENT_TYPES,
     markdownThemePresets: MARKDOWN_THEME_CATALOG.map(preset => preset.id),
     limits: { shareRequestBodyBytes, smallRequestBodyBytes, rawContentBytes: null },
-    operations: [CREATE_SHARE, SHARE_CREATE_STATUS, SHARE_LIST, SHARE_CONTENT_READ, SHARE_STATE_READ, SHARE_CONTENT_UPDATE],
+    operations: [CREATE_SHARE, SHARE_CREATE_STATUS, SHARE_LIST, SHARE_CONTENT_READ, SHARE_STATE_READ, SHARE_CONTENT_UPDATE,
+      SHARE_REVISIONS_READ, SHARE_REVISION_READ, SHARE_RESTORE],
     // Truthful scope surface: content update is live; publish-state writes
     // stay unadvertised until their ticket lands.
     scopes: Object.freeze({
@@ -39,7 +43,7 @@ function apiCapabilities(config) {
     idempotency: Object.freeze({
       header: 'Idempotency-Key',
       pattern: '^[A-Za-z0-9_-]{16,128}$',
-      appliesTo: ['share:create', 'share:content:update'],
+      appliesTo: ['share:create', 'share:content:update', 'share:restore'],
       conflictStatus: 409,
       replayRequiresSameInput: true
     })
@@ -54,6 +58,9 @@ module.exports = {
   SHARE_CONTENT_READ,
   SHARE_STATE_READ,
   SHARE_CONTENT_UPDATE,
+  SHARE_REVISIONS_READ,
+  SHARE_REVISION_READ,
+  SHARE_RESTORE,
   IMPLEMENTED_SCOPES,
   NOT_IMPLEMENTED_SCOPES,
   apiCapabilities

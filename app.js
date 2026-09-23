@@ -565,11 +565,35 @@ function sendApiContentUpdateError(req, res, status, code, error, retryable = fa
   });
 }
 
+function sendApiRevisionError(req, res, status, code, error, retryable = false, details = {}) {
+  return res.status(status).json({
+    success: false,
+    code,
+    requestId: isvalidRequestId(req.apiUpdateRequestId) ? req.apiUpdateRequestId : null,
+    retryable,
+    ...details,
+    error
+  });
+}
+
+function markApiRevisionEndpoint({ write = false } = {}) {
+  return (req, res, next) => {
+    req.apiRevisionEndpoint = true;
+    if (write) {
+      req.apiContentUpdateEndpoint = true;
+      req.apiUpdateRequestId = req.get('Idempotency-Key');
+    }
+    return next();
+  };
+}
+
 async function requireApiKey(req, res, next) {
   const key = req.get('x-api-key');
 
   if (!key) {
-    if (req.apiContentUpdateEndpoint) return sendApiContentUpdateError(req, res, 401, 'INVALID_API_KEY', 'Missing X-API-Key header');
+    if (req.apiContentUpdateEndpoint || req.apiRevisionEndpoint) {
+      return sendApiContentUpdateError(req, res, 401, 'INVALID_API_KEY', 'Missing X-API-Key header');
+    }
     return res.status(401).json({ success: false, error: 'Missing X-API-Key header' });
   }
 
@@ -588,7 +612,9 @@ async function requireApiKey(req, res, next) {
   const match = /^qs\.([A-Za-z0-9_-]{1,64})\.([A-Za-z0-9_-]{20,})$/.exec(key);
 
   if (!match) {
-    if (req.apiContentUpdateEndpoint) return sendApiContentUpdateError(req, res, 401, 'INVALID_API_KEY', 'Invalid API key');
+    if (req.apiContentUpdateEndpoint || req.apiRevisionEndpoint) {
+      return sendApiContentUpdateError(req, res, 401, 'INVALID_API_KEY', 'Invalid API key');
+    }
     return res.status(401).json({ success: false, error: 'Invalid API key' });
   }
 
@@ -599,7 +625,9 @@ async function requireApiKey(req, res, next) {
     const isValid = apiKey && await verifySecret(match[2], apiKey.key_hash);
 
     if (!isValid) {
-      if (req.apiContentUpdateEndpoint) return sendApiContentUpdateError(req, res, 401, 'INVALID_API_KEY', 'Invalid API key');
+      if (req.apiContentUpdateEndpoint || req.apiRevisionEndpoint) {
+        return sendApiContentUpdateError(req, res, 401, 'INVALID_API_KEY', 'Invalid API key');
+      }
       return res.status(401).json({ success: false, error: 'Invalid API key' });
     }
 
@@ -612,7 +640,9 @@ async function requireApiKey(req, res, next) {
     return next();
   } catch (error) {
     console.error('API key validation failed:', { name: error?.name || 'Error', code: safeErrorCode(error) });
-    if (req.apiContentUpdateEndpoint) return sendApiContentUpdateError(req, res, 503, 'PUBLISHING_UNAVAILABLE', 'API authentication unavailable', true);
+    if (req.apiContentUpdateEndpoint || req.apiRevisionEndpoint) {
+      return sendApiContentUpdateError(req, res, 503, 'PUBLISHING_UNAVAILABLE', 'API authentication unavailable', true);
+    }
     return res.status(503).json({ success: false, error: 'API authentication unavailable' });
   }
 }
@@ -637,6 +667,49 @@ function requireScope(scope) {
     }
     return next();
   };
+}
+
+function requireApiRevisionScopes(scopes) {
+  return (req, res, next) => {
+    const granted = req.apiKeyIdentity?.scopes || [];
+    const missing = scopes.find(scope => !granted.includes(scope));
+    if (missing) {
+      return sendApiRevisionError(req, res, 403, 'SCOPE_REQUIRED', `当前凭据缺少所需 scope: ${missing}`, false, { scope: missing });
+    }
+    return next();
+  };
+}
+
+function validateApiRestoreHeaders(req, res, next) {
+  const requestId = req.get('Idempotency-Key');
+  req.apiUpdateRequestId = requestId;
+  if (requestId === undefined || requestId === '') {
+    return sendApiRevisionError(req, res, 428, 'IDEMPOTENCY_KEY_REQUIRED', 'Idempotency-Key is required');
+  }
+  if (!isvalidRequestId(requestId)) {
+    return sendApiRevisionError(req, res, 400, 'INVALID_REQUEST_ID', INVALID_REQUEST_ID_MESSAGE);
+  }
+  try {
+    req.apiUpdateBaseline = requireContentBaselineFor(req.params.id, req.get('If-Match'));
+  } catch (error) {
+    return sendApiRevisionError(req, res, error.status || 400, error.code || 'INVALID_CONTENT_REVISION', error.message);
+  }
+  return next();
+}
+
+function parseApiRestoreInput(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)
+    || Object.keys(input).length !== 1 || !Object.prototype.hasOwnProperty.call(input, 'revision')) {
+    return { error: '恢复请求必须只包含 revision 字段' };
+  }
+  const raw = input.revision;
+  const revision = typeof raw === 'number' && Number.isSafeInteger(raw) && raw > 0
+    ? String(raw)
+    : raw;
+  if (!isContentRevision(revision)) {
+    return { error: '恢复来源版本必须是正整数或规范十进制字符串' };
+  }
+  return { revision };
 }
 
 function validateApiContentUpdateHeaders(req, res, next) {
@@ -672,6 +745,18 @@ function parseApiContentUpdateJson(req, res, next) {
     }
     if (error?.type === 'entity.parse.failed') {
       return sendApiContentUpdateError(req, res, 400, 'INVALID_JSON', 'Invalid JSON body');
+    }
+    return next(error);
+  });
+}
+
+function parseApiRestoreJson(req, res, next) {
+  return parseSmallJson(req, res, error => {
+    if (error?.type === 'entity.too.large') {
+      return sendApiRevisionError(req, res, 413, 'PAYLOAD_TOO_LARGE', '请求内容过大');
+    }
+    if (error?.type === 'entity.parse.failed') {
+      return sendApiRevisionError(req, res, 400, 'INVALID_JSON', 'Invalid JSON body');
     }
     return next(error);
   });
@@ -720,6 +805,42 @@ function parseShareListLimit(raw) {
   const value = Number.parseInt(String(raw), 10);
   if (value < 1 || value > 100) return { error: 'limit 必须是 1-100 的整数' };
   return value;
+}
+
+function parseRevisionHistoryCursor(raw) {
+  if (raw === undefined || raw === null || String(raw) === '') return { cursor: null };
+  const token = String(raw);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(token)) return { error: 'cursor 无效' };
+  try {
+    const decoded = Buffer.from(token, 'base64url').toString('utf8');
+    const value = JSON.parse(decoded);
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || Object.keys(value).length !== 1 || !isContentRevision(value.revision)
+      || Buffer.from(JSON.stringify({ revision: value.revision }), 'utf8').toString('base64url') !== token) {
+      return { error: 'cursor 无效' };
+    }
+    return { cursor: value.revision };
+  } catch {
+    return { error: 'cursor 无效' };
+  }
+}
+
+function encodeRevisionHistoryCursor(revision) {
+  return Buffer.from(JSON.stringify({ revision: String(revision) }), 'utf8').toString('base64url');
+}
+
+function apiRevisionMetadata(page, row) {
+  const revision = String(row.revision);
+  const purged = row.purged_at !== null && row.purged_at !== undefined;
+  return {
+    revision,
+    createdAt: Number(row.created_at),
+    source: row.source || null,
+    restoredFrom: row.restored_from === null || row.restored_from === undefined ? null : String(row.restored_from),
+    current: String(page.current_revision) === revision,
+    purged,
+    ...(purged ? { purgedAt: Number(row.purged_at) } : {})
+  };
 }
 
 /**
@@ -3350,6 +3471,238 @@ app.get('/api/v1/shares/:id/state', privateNoStore, requireApiKey, requireScope(
   }
 });
 
+app.get('/api/v1/shares/:id/revisions', privateNoStore, markApiRevisionEndpoint(), requireApiKey,
+  requireApiRevisionScopes([READ_SCOPE]), async (req, res) => {
+    const limit = parseShareListLimit(req.query.limit);
+    if (typeof limit !== 'number') {
+      return sendApiRevisionError(req, res, 400, 'INVALID_LIMIT', limit.error);
+    }
+    const parsedCursor = parseRevisionHistoryCursor(req.query.cursor);
+    if (parsedCursor.error) {
+      return sendApiRevisionError(req, res, 400, 'INVALID_CURSOR', parsedCursor.error);
+    }
+
+    try {
+      const identity = req.apiKeyIdentity;
+      const grant = await pageRepository.getShareGrant(identity.id, req.params.id);
+      if (!grant || grant.can_read !== true) {
+        return sendApiRevisionError(req, res, 404, 'SHARE_NOT_FOUND', 'Share 不存在或没有对它的授权');
+      }
+      const history = await pageRepository.listContentRevisionCursorPage(req.params.id, {
+        limit: limit + 1,
+        beforeRevision: parsedCursor.cursor
+      });
+      if (!history.page) return sendApiRevisionError(req, res, 404, 'SHARE_NOT_FOUND', 'Share 不存在或没有对它的授权');
+      const hasMore = history.items.length > limit;
+      const selected = hasMore ? history.items.slice(0, limit) : history.items;
+      const nextCursor = hasMore ? encodeRevisionHistoryCursor(selected[selected.length - 1].revision) : null;
+      return res.json({
+        success: true,
+        shareId: history.page.id,
+        revisions: selected.map(row => apiRevisionMetadata(history.page, row)),
+        ...(nextCursor ? { nextCursor } : {})
+      });
+    } catch (error) {
+      console.error('Managed-Key revision history failed:', { name: error?.name || 'Error', code: safeErrorCode(error) });
+      return sendApiRevisionError(req, res, 503, 'PUBLISHING_UNAVAILABLE', 'Share history is temporarily unavailable', true);
+    }
+  });
+
+app.get('/api/v1/shares/:id/revisions/:revision', privateNoStore, markApiRevisionEndpoint(), requireApiKey,
+  requireApiRevisionScopes([READ_SCOPE]), async (req, res) => {
+    try {
+      const identity = req.apiKeyIdentity;
+      const grant = await pageRepository.getShareGrant(identity.id, req.params.id);
+      if (!grant || grant.can_read !== true) {
+        return sendApiRevisionError(req, res, 404, 'SHARE_NOT_FOUND', 'Share 不存在或没有对它的授权');
+      }
+      if (!isContentRevision(req.params.revision)) {
+        return sendApiRevisionError(req, res, 400, 'INVALID_CONTENT_REVISION', 'Revision must be a positive decimal string');
+      }
+
+      const snapshot = await pageRepository.getContentRevisionWithCurrent(req.params.id, req.params.revision);
+      if (!snapshot) return sendApiRevisionError(req, res, 404, 'SHARE_NOT_FOUND', 'Share 不存在或没有对它的授权');
+      if (!snapshot.revision) return sendApiRevisionError(req, res, 404, 'REVISION_NOT_FOUND', 'Revision not found');
+      const { page, revision: row } = snapshot;
+      const metadata = apiRevisionMetadata(page, row);
+      if (metadata.purged) {
+        return res.status(410).json({
+          success: false,
+          code: 'REVISION_PURGED',
+          requestId: null,
+          retryable: false,
+          error: '该版本内容已被永久清除，仅保留墓碑',
+          revision: { shareId: req.params.id, ...metadata }
+        });
+      }
+      if (typeof row.html_content !== 'string') {
+        return sendApiRevisionError(req, res, 503, 'PUBLISHING_UNAVAILABLE', 'Revision payload is unavailable', true);
+      }
+      return res.json({
+        success: true,
+        revision: {
+          shareId: page.id,
+          ...metadata,
+          htmlContent: row.html_content,
+          codeType: row.code_type,
+          title: row.title,
+          description: row.description,
+          markdownTheme: row.markdown_theme
+        }
+      });
+    } catch (error) {
+      console.error('Managed-Key revision read failed:', { name: error?.name || 'Error', code: safeErrorCode(error) });
+      return sendApiRevisionError(req, res, 503, 'PUBLISHING_UNAVAILABLE', 'Share revision is temporarily unavailable', true);
+    }
+  });
+
+app.post('/api/v1/shares/:id/restore', privateNoStore, markApiRevisionEndpoint({ write: true }), requireApiKey,
+  requireApiRevisionScopes([READ_SCOPE, 'share:update']), validateApiRestoreHeaders, parseApiRestoreJson,
+  async (req, res) => {
+    const parsedInput = parseApiRestoreInput(req.body);
+    if (parsedInput.error) {
+      return sendApiRevisionError(req, res, 400, 'INVALID_RESTORE_INPUT', parsedInput.error);
+    }
+    const sourceRevision = parsedInput.revision;
+    const baseline = req.apiUpdateBaseline;
+    const digestInput = normalizeRestoreDigestInput({ expectedRevision: baseline.revision, sourceRevision });
+    const requestId = req.apiUpdateRequestId;
+    const identity = req.apiKeyIdentity;
+    const namespace = resolveApiNamespace(req);
+    const requestDigest = createRequestDigest(digestInput.fields, { action: 'restore', targetId: req.params.id });
+    const publishingOperation = {
+      actorNamespace: namespace,
+      requestId,
+      action: 'restore',
+      targetId: req.params.id,
+      requestDigest
+    };
+    const respondWithSnapshot = ({ revision, snapshot, changed, replayed = false }) => response => {
+      const baseUrl = config.shareBaseUrl || `${req.protocol}://${req.get('host')}`;
+      response.set('ETag', contentEtag(req.params.id, String(revision)));
+      return response.json({
+        success: true,
+        action: 'restore',
+        requestId,
+        changed,
+        ...(replayed ? { replayed: true } : {}),
+        url: `${baseUrl.replace(/\/+$/, '')}/view/${encodeURIComponent(req.params.id)}`,
+        page: {
+          id: req.params.id,
+          currentRevision: String(revision),
+          htmlContent: snapshot.htmlContent,
+          codeType: snapshot.codeType,
+          title: snapshot.title,
+          description: snapshot.description,
+          markdownTheme: snapshot.markdownTheme
+        }
+      });
+    };
+
+    try {
+      const respond = await publishing.run(async (repository, existingOperation) => {
+        // The Key lock and operation lock have already been acquired. Lock
+        // the Share+grant before either replay confirmation or a fresh CAS so
+        // a committed grant withdrawal blocks old requests and replays.
+        const authorization = await repository.getShareGrantForWrite(identity.id, req.params.id);
+        if (!authorization || authorization.grant?.can_read !== true || authorization.grant?.can_update !== true) {
+          return response => sendApiRevisionError(req, response, 404, 'SHARE_NOT_FOUND', 'Share 不存在或没有编辑授权');
+        }
+
+        if (existingOperation) {
+          const outcome = await classifyOperationReplay(repository, {
+            record: existingOperation,
+            requestDigest,
+            requireRestoreSource: true
+          });
+          if (outcome.kind === 'conflict') {
+            return response => sendApiRevisionError(req, response, 409, 'REQUEST_ID_CONFLICT', '同一请求标识对应了不同的请求内容');
+          }
+          if (outcome.kind === 'result-unavailable' || outcome.replayPurged) {
+            return response => sendApiRevisionError(req, response, 410, 'RESULT_UNAVAILABLE', '该操作已提交，但来源或结果版本已不可用');
+          }
+          const row = outcome.revisionRow;
+          return respondWithSnapshot({
+            revision: outcome.record.result_revision,
+            snapshot: {
+              htmlContent: row.html_content,
+              codeType: row.code_type,
+              title: row.title,
+              description: row.description,
+              markdownTheme: row.markdown_theme
+            },
+            changed: outcome.receipt?.changed === true,
+            replayed: true
+          });
+        }
+
+        const source = await repository.getContentRevision(req.params.id, sourceRevision);
+        if (!source) {
+          return response => sendApiRevisionError(req, response, 404, 'REVISION_NOT_FOUND', 'Restore source revision not found');
+        }
+        if (source.purged_at !== null && source.purged_at !== undefined || typeof source.html_content !== 'string') {
+          return response => sendApiRevisionError(req, response, 410, 'REVISION_PURGED', 'Restore source revision has been purged');
+        }
+
+        const restored = await repository.restorePageRevision(req.params.id, {
+          sourceRevision,
+          expectedContentRevision: baseline.revision,
+          actorSource: 'api-restore',
+          actorIdentity: `api-key:${identity.id}`,
+          returnUpdated: true
+        });
+        if (!restored?.page) {
+          return response => sendApiRevisionError(req, response, 404, 'SHARE_NOT_FOUND', 'Share 不存在或没有编辑授权');
+        }
+        const page = restored.page;
+        const revision = String(page.current_revision);
+        await repository.createAuditLog({
+          action: 'page.restore',
+          pageId: req.params.id,
+          details: JSON.stringify({ sourceRevision, revision, changed: restored.changed, source: 'api' }),
+          ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+        });
+        await repository.createPublishingOperation({
+          actor_namespace: namespace,
+          request_id: requestId,
+          action: 'restore',
+          request_digest: requestDigest,
+          target_id: req.params.id,
+          result_share_id: req.params.id,
+          result_revision: revision,
+          result_access_revision: String(page.access_revision),
+          receipt_encrypted: encodeOperationReceipt({ changed: restored.changed, sourceRevision }),
+          created_at: Date.now()
+        });
+        return respondWithSnapshot({
+          revision,
+          snapshot: {
+            htmlContent: page.html_content,
+            codeType: page.code_type || 'html',
+            title: page.title,
+            description: page.description,
+            markdownTheme: page.markdown_theme
+          },
+          changed: restored.changed
+        });
+      }, { apiKeyIdentity: identity, publishingOperation });
+      return respond(res);
+    } catch (error) {
+      if (error.code === 'INVALID_API_KEY') return sendApiRevisionError(req, res, 401, 'INVALID_API_KEY', 'Invalid API key');
+      if (error.code === 'PUBLISHING_MAINTENANCE') return sendApiRevisionError(req, res, 503, error.code, error.message, true);
+      if (['55P03', '40P01', '57014'].includes(error.code)) {
+        return sendApiRevisionError(req, res, 503, 'PUBLISHING_UNAVAILABLE', 'Share restore is temporarily unavailable', true);
+      }
+      if (error.code === 'CONTENT_PRECONDITION_REQUIRED' || error.code === 'INVALID_CONTENT_REVISION'
+        || error.code === 'CONTENT_REVISION_CONFLICT') {
+        return sendApiRevisionError(req, res, error.status || 400, error.code, error.message);
+      }
+      if (error.code === '23505') return sendApiRevisionError(req, res, 409, 'REQUEST_ID_CONFLICT', '同一请求标识对应了不同的请求内容');
+      console.error('Managed-Key restore failed:', { name: error?.name || 'Error', code: safeErrorCode(error) });
+      return sendApiRevisionError(req, res, 503, 'PUBLISHING_UNAVAILABLE', 'Share restore is temporarily unavailable', true);
+    }
+  });
+
 app.put(SHARE_CONTENT_UPDATE.path, privateNoStore, (req, res, next) => {
   req.apiContentUpdateEndpoint = true;
   req.apiUpdateRequestId = req.get('Idempotency-Key');
@@ -3514,10 +3867,14 @@ app.put(SHARE_CONTENT_UPDATE.path, privateNoStore, (req, res, next) => {
   }
 });
 
-app.get('/api/v1/operations/:requestId', privateNoStore, requireApiKey, async (req, res) => {
+app.get('/api/v1/operations/:requestId', privateNoStore, (req, res, next) => {
+  req.apiRevisionEndpoint = true;
+  req.apiUpdateRequestId = req.params.requestId;
+  return next();
+}, requireApiKey, async (req, res) => {
   const requestId = req.params.requestId;
   if (!isvalidRequestId(requestId)) {
-    return res.status(400).json({ success: false, code: 'INVALID_REQUEST_ID', retryable: false, error: INVALID_REQUEST_ID_MESSAGE });
+    return res.status(400).json({ success: false, code: 'INVALID_REQUEST_ID', requestId: null, retryable: false, error: INVALID_REQUEST_ID_MESSAGE });
   }
 
   try {
@@ -3526,7 +3883,7 @@ app.get('/api/v1/operations/:requestId', privateNoStore, requireApiKey, async (r
       if (!record) {
         return response => response.status(404).json({ success: false, code: 'OPERATION_NOT_FOUND', requestId, retryable: false, error: '未找到该请求标识对应的操作' });
       }
-      if (record.action === 'content-update') {
+      if (record.action === 'content-update' || record.action === 'restore') {
         const scopes = req.apiKeyIdentity?.scopes || [];
         const missing = [READ_SCOPE, 'share:update'].find(scope => !scopes.includes(scope));
         if (missing) {
@@ -3535,6 +3892,16 @@ app.get('/api/v1/operations/:requestId', privateNoStore, requireApiKey, async (r
         const authorization = await repository.getShareGrantForWrite(req.apiKeyIdentity.id, record.result_share_id);
         if (!authorization || authorization.grant?.can_read !== true || authorization.grant?.can_update !== true) {
           return response => response.status(404).json({ success: false, code: 'OPERATION_NOT_FOUND', requestId, retryable: false, error: '未找到该请求标识对应的操作' });
+        }
+        if (record.action === 'restore') {
+          const outcome = await classifyOperationReplay(repository, {
+            record,
+            requestDigest: record.request_digest,
+            requireRestoreSource: true
+          });
+          if (outcome.kind === 'result-unavailable' || outcome.replayPurged) {
+            return response => response.status(410).json({ success: false, code: 'RESULT_UNAVAILABLE', requestId, retryable: false, error: '该操作已提交，但来源或结果版本已不可用' });
+          }
         }
       }
       // Metadata only: no receipt, body, title/description or password.

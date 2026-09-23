@@ -262,8 +262,71 @@ class MemoryPageRepository {
   }
 
   /**
-   * Single bounded snapshot read for owner history (#31). The revision value
-   * is validated as an exact decimal revision BEFORE any lookup runs.
+   * Key history API (#38): capture the current pointer and metadata page
+   * synchronously from one in-memory state, with exact BIGINT cursor order.
+   */
+  async listContentRevisionCursorPage(shareId, { limit = 20, beforeRevision = null } = {}) {
+    const parsedLimit = Math.trunc(Number(limit));
+    const safeLimit = Math.min(Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20, 101);
+    if (beforeRevision !== null && beforeRevision !== undefined && !isContentRevision(String(beforeRevision))) {
+      throw contentError(400, 'content revision cursor must be a positive decimal string');
+    }
+    const pageRecord = this.pages.get(shareId);
+    if (!pageRecord) return { page: null, items: [] };
+    const page = { id: pageRecord.id, current_revision: String(pageRecord.current_revision) };
+    const revisions = this.revisions.get(shareId);
+    const all = revisions ? [...revisions.values()] : [];
+    const cursor = beforeRevision === null || beforeRevision === undefined ? null : BigInt(beforeRevision);
+    const items = all
+      .filter(row => cursor === null || BigInt(row.revision) < cursor)
+      .sort((left, right) => {
+        const leftValue = BigInt(left.revision);
+        const rightValue = BigInt(right.revision);
+        return rightValue > leftValue ? 1 : rightValue < leftValue ? -1 : 0;
+      })
+      .slice(0, safeLimit)
+      .map(row => ({
+        share_id: row.share_id,
+        revision: String(row.revision),
+        created_at: row.created_at,
+        source: row.source,
+        restored_from: row.restored_from === undefined ? null : row.restored_from,
+        purged_at: row.purged_at === undefined ? null : row.purged_at
+      }));
+    return { page, items };
+  }
+
+  /** Capture one historical snapshot and the current pointer without an await gap. */
+  async getContentRevisionWithCurrent(shareId, revision) {
+    if (!isContentRevision(revision)) {
+      throw contentError(400, 'content revision must be a positive decimal string');
+    }
+    const pageRecord = this.pages.get(shareId);
+    if (!pageRecord) return null;
+    const row = this.revisions.get(shareId)?.get(String(revision)) || null;
+    const page = { id: pageRecord.id, current_revision: String(pageRecord.current_revision) };
+    if (!row) return { page, revision: null };
+    return {
+      page,
+      revision: {
+        share_id: row.share_id,
+        revision: String(row.revision),
+        html_content: row.html_content,
+        code_type: row.code_type,
+        title: row.title,
+        description: row.description,
+        markdown_theme: row.markdown_theme,
+        created_at: row.created_at,
+        source: row.source,
+        restored_from: row.restored_from === undefined ? null : row.restored_from,
+        purged_at: row.purged_at === undefined ? null : row.purged_at
+      }
+    };
+  }
+
+  /**
+   * Single bounded snapshot read for owner and Key history. Revision is
+   * validated as an exact decimal before any lookup runs.
    */
   async getContentRevision(shareId, revision) {
     if (!isContentRevision(revision)) {

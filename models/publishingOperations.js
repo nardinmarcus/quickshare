@@ -25,6 +25,7 @@ const {
 } = require('../utils/security');
 const { CONTENT_TYPES } = require('../utils/apiCapabilities');
 const { isAccessRevision } = require('../utils/shareAccess');
+const { isContentRevision } = require('../utils/contentRevision');
 
 const VALID_CODE_TYPES = new Set(CONTENT_TYPES);
 // Kept identical to the original single expiry rejection message: callers
@@ -430,7 +431,7 @@ function buildCreationOperationRecord({
  * The access-policy re-check only decides whether the sensitive generated
  * password may be returned; it does not select which metadata is shown.
  */
-async function classifyOperationReplay(repository, { record, requestDigest }) {
+async function classifyOperationReplay(repository, { record, requestDigest, requireRestoreSource = false }) {
   if (record.request_digest !== requestDigest) {
     return { kind: 'conflict' };
   }
@@ -487,6 +488,20 @@ async function classifyOperationReplay(repository, { record, requestDigest }) {
     // Without the committed receipt the original result cannot be reproduced
     // faithfully — refuse instead of serving live-row metadata.
     return { kind: 'result-unavailable' };
+  }
+
+  if (requireRestoreSource && record.action === 'restore') {
+    // Key restore confirmations/status must not make a purged source
+    // reappear indirectly through the encrypted operation receipt. Dashboard
+    // replay retains its established owner-authorized contract.
+    if (!isContentRevision(receipt.sourceRevision)) {
+      return { kind: 'result-unavailable', restoreSourceUnavailable: true };
+    }
+    const source = await repository.getContentRevision(record.result_share_id, receipt.sourceRevision);
+    if (!source || typeof source.html_content !== 'string'
+      || (source.purged_at !== null && source.purged_at !== undefined)) {
+      return { kind: 'result-unavailable', restoreSourceUnavailable: true };
+    }
   }
 
   const accessUnchanged = String(page.access_revision) === String(record.result_access_revision);

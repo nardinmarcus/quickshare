@@ -2,14 +2,14 @@
 
 Scope: this document describes **what is implemented** — idempotent creation
 (web page, dashboard clone, Share API), managed-Key conditional content
-updates (#37), idempotent dashboard content updates and history restores
-(#33), operation status confirmation, and the deletion tombstone. Key-driven
-history restore and publish-state writes remain unavailable.
+updates (#37) and history restore (#38), idempotent dashboard content updates
+and history restores (#33), operation status confirmation, and the deletion
+tombstone. Key-driven publish-state writes remain unavailable.
 
 ## Request identity
 
-- `Idempotency-Key` (Share API creation/update, web creation, dashboard
-  content save and restore) / `requestId` form field (dashboard clone):
+- `Idempotency-Key` (Share API creation/update/restore, web creation,
+  dashboard content save and restore) / `requestId` form field (dashboard clone):
   16–128 ASCII letters,
   digits, hyphens or underscores. Invalid values are a
   `400 INVALID_REQUEST_ID`. Clients generate UUID v4 identifiers; the browser
@@ -71,6 +71,50 @@ managed API create reads the option after the Key lock and commits the page,
 read+update grant, scopes, audit and create operation together. Any failure
 rolls back the entire create transaction. Rotation preserves logical-key
 permissions; revocation/deletion prevents future updates and update replays.
+
+## Managed Key history reads and restore (#38)
+
+`GET /api/v1/shares/:id/revisions` requires `share:read` plus the current
+per-Share `can_read` grant. Its default page size is 20, maximum 100, and its
+opaque cursor is a keyset over the exact decimal `BIGINT` revision in
+descending order. The metadata-only projection contains revision, creation
+time, write source, restore origin and current/purged markers; it never
+aggregates snapshot bodies or returns title, hash, actor identity, credentials,
+grants or Favorite state. New higher revisions do not shift an existing
+cursor walk. `GET /api/v1/shares/:id/revisions/:revision` reads one authorized
+canonical snapshot. Unknown revisions are 404; a purged tombstone is 410 with
+non-content identity only. Both routes are private/no-store and ignore public
+visibility, password and expiry policy after grant authorization.
+
+`POST /api/v1/shares/:id/restore` requires a managed Key with both
+`share:read` and `share:update`, the current `can_read` + `can_update` grant,
+a concrete strong current-content `If-Match`, and a mandatory
+`Idempotency-Key`. The request uses `smallRequestBodyBytes` (16 KiB by default),
+returning 413 when exceeded; the 2 MiB Share-body parser remains in place for
+content updates and Dashboard restore. The only business field is `revision`,
+accepted as a positive safe JSON integer or canonical positive decimal string
+(use strings above `Number.MAX_SAFE_INTEGER`). Digest identity covers target,
+exact source revision and expected current revision. A missing source is 404; a purged
+source is 410; stale content is 412. No URL, protection/password, expiry,
+publication, grant, Favorite or view-count field is restored or changed.
+The existing publishing transaction rechecks the Key version, serializes on
+the operation id and Share row, performs the dashboard repository's locked
+CAS/no-op restore, and commits provenance, `page.restore` audit and operation
+record atomically. A changed restore creates a new content Revision with
+`source='api-restore'`, `actor='api-key:<id>'`, and `restored_from` set to the
+source revision; an identical snapshot returns `changed:false` without a new
+Revision.
+
+A matching retry is confirmed before stale CAS only after current Key and
+edit-grant checks. Its response is reconstructed from the committed result
+Revision, never the current projection. The encrypted receipt stores only
+`changed` and the source revision. If either the source or result Revision is
+later purged, replay returns 410 without content or receipt bytes. A deleted
+Share or withdrawn grant fails the current authorization check as 404 before
+replay. `GET /api/v1/operations/:requestId` is namespace-bound and
+metadata-only; for restore it rechecks the current edit grant and source/result
+availability, returning 404 for a missing/unauthorized operation and 410 when
+its result is unavailable. This does not add a Key purge endpoint.
 
 ## Dashboard content saves and restores (#33)
 

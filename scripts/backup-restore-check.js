@@ -78,7 +78,8 @@ const REVISION_DRILL_VALUE = '9007199254740993';
 // Publish-operation fixture (#32 migration 008): one committed creation with
 // an encrypted receipt and one deletion tombstone (receipt cleared). #33 adds
 // dashboard restore/content-update rows; #37 adds a managed-Key content
-// update receipt. The full-row verifier covers every operation byte by name.
+// update receipt; #38 adds a Key-driven restore receipt. The full-row verifier
+// covers every operation byte by name.
 const OPERATION_FIXTURE = {
   namespace: 'managed-key:issue27key00001',
   requestId: 'issue32-op-000000000001',
@@ -87,6 +88,7 @@ const OPERATION_FIXTURE = {
   contentUpdateRequestId: 'issue33-op-000000000004',
   apiContentUpdateRequestId: 'issue37-op-000000000007',
   purgedReceiptRequestId: 'issue34-op-000000000005',
+  apiRestoreRequestId: 'issue38-op-000000000008',
   unpublishRequestId: 'issue35-op-000000000006'
 };
 
@@ -299,11 +301,9 @@ async function seedFixture(pool) {
          snapshot.description, snapshot.markdown_theme, snapshot.created_at, hashOf(snapshot)]
       );
     }
-    // A second revision on the themed Share proves multi-revision restore and
-    // pointer movement; the materialized projection moves with it exactly as
-    // a real content save would commit them together. Its restored_from is a
-    // SYNTHETIC non-null value (there is no restore entry point in this
-    // milestone); restore must preserve it exactly.
+    // Revision 2 models a managed-Key content update. Revision 3 then models
+    // the real dashboard restore contract: it copies revision 1 byte-for-byte,
+    // records restored_from=1 and becomes the materialized current pointer.
     const v2 = {
       share_id: pages.markdownThemed,
       html_content: '# QS27 drill markdown v2',
@@ -318,15 +318,31 @@ async function seedFixture(pool) {
          share_id, revision, html_content, code_type, title, description, markdown_theme, created_at,
          snapshot_hash, source, actor, restored_from
        )
-       VALUES ($1, 2, $2, $3, $4, $5, $6, $7, $8, 'dashboard-edit', 'owner-dashboard', 1)`,
+       VALUES ($1, 2, $2, $3, $4, $5, $6, $7, $8, 'api-content-update', $9, NULL)`,
       [v2.share_id, v2.html_content, v2.code_type, v2.title, v2.description,
-       v2.markdown_theme, v2.created_at, hashOf({ ...v2, revision: 2 })]
+       v2.markdown_theme, v2.created_at, hashOf({ ...v2, revision: 2 }), `api-key:${FIXTURE.apiKey.id}`]
+    );
+    const restoreSource = (await pool.query(
+      `SELECT html_content, code_type, title, description, markdown_theme, created_at
+       FROM share_revisions WHERE share_id = $1 AND revision = 1`,
+      [pages.markdownThemed]
+    )).rows[0];
+    const restoredV3 = { ...restoreSource, revision: 3, created_at: base + 1600 };
+    await pool.query(
+      `INSERT INTO share_revisions (
+         share_id, revision, html_content, code_type, title, description, markdown_theme, created_at,
+         snapshot_hash, source, actor, restored_from
+       )
+       VALUES ($1, 3, $2, $3, $4, $5, $6, $7, $8, 'dashboard-restore', 'owner-dashboard', 1)`,
+      [pages.markdownThemed, restoredV3.html_content, restoredV3.code_type, restoredV3.title,
+       restoredV3.description, restoredV3.markdown_theme, restoredV3.created_at, hashOf(restoredV3)]
     );
     await pool.query(
-      `UPDATE pages SET current_revision = 2, html_content = '# QS27 drill markdown v2',
-         title = 'QS27 drill markdown v2', description = 'themed fixture v2'
+      `UPDATE pages SET current_revision = 3, html_content = $2, code_type = $3,
+         title = $4, description = $5, markdown_theme = $6
        WHERE id = $1`,
-      [pages.markdownThemed]
+      [pages.markdownThemed, restoredV3.html_content, restoredV3.code_type, restoredV3.title,
+        restoredV3.description, restoredV3.markdown_theme]
     );
     // #35 publication-state fixture: the themed Share carries the exact end
     // state of a real owner unpublish — published FALSE and the bumped
@@ -373,6 +389,7 @@ async function seedFixture(pool) {
     // #33 restore/content-update receipts mirror the committed response
     // surface (no secrets): changed flag, source revision, policy display.
     const restoreReceipt = encryptSecret(JSON.stringify({ changed: true, sourceRevision: '1', isProtected: false, expiresAt: null }));
+    const apiRestoreReceipt = encryptSecret(JSON.stringify({ changed: false, sourceRevision: '1' }));
     const updateReceipt = encryptSecret(JSON.stringify({ changed: true, isProtected: true, expiresAt: null }));
     // A Key-driven content-update receipt is intentionally bounded to the
     // changed result flag; it never persists content or policy metadata.
@@ -383,9 +400,10 @@ async function seedFixture(pool) {
        )
        VALUES ($1, $2, 'create', $3, NULL, $4, '1', $5, $6, $7, NULL),
               ($1, $8, 'create', $9, NULL, $10, '1', $5, NULL, $7, $11),
-              ($1, $12, 'restore', $13, $14, $14, '2', $5, $15, $7, NULL),
-              ($1, $16, 'content-update', $17, $18, $18, '2', $5, $19, $7, NULL),
-              ($1, $20, 'unpublish', $21, $18, $18, '2', $22, $23, $7, NULL)`,
+              ($24, $12, 'restore', $13, $14, $14, '3', '1', $15, $7, NULL),
+              ($1, $16, 'content-update', $17, $18, $18, '2', '1', $19, $7, NULL),
+              ($1, $20, 'unpublish', $21, $18, $18, '3', $22, $23, $7, NULL),
+              ($28, $25, 'restore', $26, $14, $14, '3', $22, $27, $7, NULL)`,
       [
         OPERATION_FIXTURE.namespace,
         OPERATION_FIXTURE.requestId,
@@ -409,7 +427,12 @@ async function seedFixture(pool) {
         OPERATION_FIXTURE.unpublishRequestId,
         '3'.repeat(64),
         UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE,
-        encryptSecret(JSON.stringify({ changed: true, published: false }))
+        encryptSecret(JSON.stringify({ changed: true, published: false })),
+        'dashboard-session:issue27-drill-session',
+        OPERATION_FIXTURE.apiRestoreRequestId,
+        '8'.repeat(64),
+        apiRestoreReceipt,
+        `managed-key:${FIXTURE.apiKey.id}`
       ]
     );
     await pool.query(
@@ -417,9 +440,9 @@ async function seedFixture(pool) {
          actor_namespace, request_id, action, request_digest, target_id,
          result_share_id, result_revision, result_access_revision, receipt_encrypted, created_at, deleted_at
        )
-       VALUES ($1, $2, 'content-update', $3, $4, $4, '2', $5, $6, $7, NULL)`,
+       VALUES ($1, $2, 'content-update', $3, $4, $4, '2', '1', $5, $6, NULL)`,
       [OPERATION_FIXTURE.namespace, OPERATION_FIXTURE.apiContentUpdateRequestId,
-        '7'.repeat(64), pages.markdownThemed, UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE,
+        '7'.repeat(64), pages.markdownThemed,
         encryptSecret(JSON.stringify({ changed: true })), base + 80]
     );
   }
