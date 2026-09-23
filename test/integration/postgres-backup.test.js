@@ -39,7 +39,11 @@ const {
 
 const poolEnv = { POSTGRES_SSL: 'false' };
 const expectedKeyComparedColumns = [
-  'id', 'name', 'key_hash', 'key_prefix', 'created_at', 'last_used_at', 'credential_version'
+  'id', 'name', 'key_hash', 'key_prefix', 'created_at', 'last_used_at', 'credential_version',
+  'scopes', 'auto_grant_new_share_edit'
+];
+const expectedGrantComparedColumns = [
+  'api_key_id', 'share_id', 'can_read', 'can_update', 'can_publish', 'created_at'
 ];
 const srcDocker = process.env.QS27_BACKUP_DOCKER_SRC || null;
 const restoreDocker = process.env.QS27_BACKUP_DOCKER_RESTORE || null;
@@ -56,6 +60,9 @@ let hasRevisions = false;
 let hasOperations = false;
 // #34 purge fixture gate: false on a 001–008 base (no purged_at columns).
 let hasPurgeColumns = false;
+// #36 scope/grant fixture gates: false on a 001–009 base (migration 010).
+let hasScopes = false;
+let hasGrants = false;
 
 const childEnv = sanitizeChildEnv(process.env, { SESSION_SECRET: FIXTURE.sessionSecret });
 
@@ -105,6 +112,8 @@ test.before(async () => {
     hasRevisions = seedResult.revisionsSeeded === true;
     hasOperations = seedResult.operationsSeeded === true;
     hasPurgeColumns = seedResult.purgeSeeded === true;
+    hasScopes = seedResult.scopesSeeded === true;
+    hasGrants = seedResult.grantsSeeded === true;
 
     // Recreate the restore database from scratch so the drill proves a full restore.
     const quotedDatabase = `"${restoreDatabase.replace(/"/g, '""')}"`;
@@ -265,6 +274,8 @@ test('native restore rebuilds the database and passes full verification', async 
     'password-verify-and-decrypt',
     'expiry',
     'managed-api-keys',
+    'api-key-scopes',
+    'share-grants',
     'audit-logs',
     'publish-operations',
     'operation-receipt-purges',
@@ -391,6 +402,46 @@ test('native restore rebuilds the database and passes full verification', async 
   assert.deepEqual(passwordCheck.details, { protectedPages: 1, fixtureCovered: 1 });
   const keyCheck = report.checks.find(check => check.name === 'managedApiKeys');
   assert.deepEqual(keyCheck.details, { keys: 1, fixtureCovered: 1, comparedColumns: expectedKeyComparedColumns });
+
+  // #36: scope columns and the per-Share grant restore with explicit named
+  // coverage; the grant binds the logical key id whose credential_version
+  // is far past rotation, so this IS the rotation-survival evidence.
+  if (hasScopes || hasGrants) {
+    const grantsCheck = report.checks.find(check => check.name === 'shareGrants');
+    assert.ok(grantsCheck, 'the shareGrants check is reported');
+    assert.equal(grantsCheck.ok, true, `grant issues: ${JSON.stringify(grantsCheck.issues)}`);
+    assert.deepEqual(grantsCheck.details.comparedColumns, expectedGrantComparedColumns);
+    assert.equal(grantsCheck.details.grants >= 1, true, 'at least the fixture grant is inventoried');
+    const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+    try {
+      const restoredKey = await restorePool.query(
+        'SELECT scopes, auto_grant_new_share_edit, credential_version FROM api_keys WHERE id = $1',
+        [FIXTURE.apiKey.id]
+      );
+      if (hasScopes) {
+        assert.deepEqual(restoredKey.rows[0].scopes, ['share:create', 'share:read'],
+          'the non-default scope set travels exactly');
+        assert.equal(restoredKey.rows[0].auto_grant_new_share_edit, true,
+          'the non-default auto-grant flag survives');
+      }
+      const restoredGrant = await restorePool.query(
+        'SELECT api_key_id, share_id, can_read FROM share_grants WHERE api_key_id = $1',
+        [FIXTURE.apiKey.id]
+      );
+      if (hasGrants) {
+        assert.equal(restoredGrant.rows.length, 1);
+        assert.equal(restoredGrant.rows[0].share_id, FIXTURE.pages.markdownThemed);
+        assert.equal(restoredGrant.rows[0].can_read, true, 'the read grant survives restore');
+        assert.equal(restoredKey.rows[0].credential_version, '9007199254740993',
+          'grants bind a key whose version is far past rotation');
+      }
+    } finally {
+      await restorePool.end();
+    }
+  } else {
+    assert.equal(report.checks.some(check => check.name === 'shareGrants'), false,
+      'on a 001–009 base the grants check must not be claimed');
+  }
 
   // #32/#33: publish-operation coverage in the main verification report.
   if (hasOperations) {
@@ -681,6 +732,59 @@ test('credential_version drift alone fails native backup verification', async ()
   } finally {
     await restorePool.query("UPDATE api_keys SET credential_version = '9007199254740993' WHERE id = $1", [FIXTURE.apiKey.id]);
     await restorePool.end();
+  }
+});
+
+// #36: tampering with the granted permission bits or the scope column in the
+// restored copy must fail verification naming the exact field, and a revert
+// (re-restore from the same manifest) returns the drill to green.
+test('grant and scope tampers fail verification by name (#36)', async () => {
+  if (!hasGrants && !hasScopes) return;
+  const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
+  const verify = (output) => runStep(process.execPath, [
+    'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+    '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+    '--session-secret', FIXTURE.sessionSecret, '--reconciled', '--output', output
+  ]);
+
+  if (hasGrants) {
+    const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+    try {
+      // Constraint-legal tamper: read flips OFF while publish flips ON — a
+      // real authorization change the verifier must catch by column name.
+      await restorePool.query('UPDATE share_grants SET can_read = FALSE, can_publish = TRUE WHERE api_key_id = $1', [FIXTURE.apiKey.id]);
+      const result = await verify(path.join(tmpDir, 'verification-grant-tamper.json'));
+      assert.equal(result.code, 1, 'flipping the granted bit must fail verification');
+      const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-grant-tamper.json')));
+      const grantsCheck = report.checks.find(check => check.name === 'shareGrants');
+      assert.equal(grantsCheck.ok, false);
+      assert.ok(grantsCheck.issues.some(issue =>
+        issue.key === `${FIXTURE.apiKey.id}\u0000${FIXTURE.pages.markdownThemed}` && issue.column === 'can_read'),
+        'the tampered grant fails by its (api_key_id, share_id) and column name');
+      assert.ok(grantsCheck.issues.some(issue => issue.column === 'can_publish'),
+        'the smuggled publish bit is named too');
+    } finally {
+      await restorePool.query('UPDATE share_grants SET can_read = TRUE, can_publish = FALSE WHERE api_key_id = $1', [FIXTURE.apiKey.id]);
+      await restorePool.end();
+    }
+  }
+
+  if (hasScopes) {
+    const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+    try {
+      await restorePool.query('UPDATE api_keys SET scopes = $2::jsonb WHERE id = $1', [FIXTURE.apiKey.id, JSON.stringify(['share:create'])]);
+      const result = await verify(path.join(tmpDir, 'verification-scopes-tamper.json'));
+      assert.equal(result.code, 1, 'dropping the read scope must fail verification');
+      const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-scopes-tamper.json')));
+      const keyCheck = report.checks.find(check => check.name === 'managedApiKeys');
+      assert.equal(keyCheck.ok, false);
+      assert.ok(keyCheck.issues.some(issue =>
+        issue.column === 'scopes' || issue.message.includes('scopes')),
+        'the scope drift fails naming the scopes column');
+    } finally {
+      await restorePool.query('UPDATE api_keys SET scopes = $2::jsonb WHERE id = $1', [FIXTURE.apiKey.id, JSON.stringify(['share:create', 'share:read'])]);
+      await restorePool.end();
+    }
   }
 });
 
@@ -1075,4 +1179,198 @@ test('operation receipt resurrection on a purged revision fails the operations c
     issue.field === 'publish_operations'
     && issue.requestId === OPERATION_FIXTURE.purgedReceiptRequestId
     && /receipt_encrypted/.test(issue.message)), `issues: ${JSON.stringify(operationsCheck.issues)}`);
+});
+
+// St1: restoring an older backup must not silently resurrect a revoked
+// read grant — the verifier names api_key.revoke as a hard revocation.
+test('post-snapshot api_key.revoke is a named hard revocation, not generic review (St1)', async () => {
+  if (!hasGrants) return;
+  const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
+  const sourcePool = createPostgresPool(sourceUrl, { env: poolEnv, max: 1 });
+  try {
+    // Revoke for real (exactly what app.js emits: page_id = shareId).
+    const grantRow = (await sourcePool.query('SELECT can_read, created_at FROM share_grants WHERE api_key_id = $1 AND share_id = $2', [FIXTURE.apiKey.id, FIXTURE.pages.markdownThemed])).rows[0];
+    await sourcePool.query('DELETE FROM share_grants WHERE api_key_id = $1 AND share_id = $2', [FIXTURE.apiKey.id, FIXTURE.pages.markdownThemed]);
+    await sourcePool.query(
+      'INSERT INTO audit_logs (action, page_id, details, ip, created_at) VALUES ($1, $2, $3, $4, $5)',
+      ['api_key.revoke', FIXTURE.pages.markdownThemed,
+        JSON.stringify({ apiKeyId: FIXTURE.apiKey.id, shareId: FIXTURE.pages.markdownThemed, grants: ['read'] }), '127.0.0.1', Date.now()]
+    );
+
+    const result = await runStep(process.execPath, [
+      'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+      '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+      '--session-secret', FIXTURE.sessionSecret,
+      '--output', path.join(tmpDir, 'verification-revoke-event.json')
+    ]);
+    assert.equal(result.code, 1, 'parity (resurrected grant) plus named revocation fail closed');
+    const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-revoke-event.json'), 'utf8'));
+    assert.equal(report.reconciliation.status, 'unreconciled');
+    const revokeEvent = report.postSnapshotRevocations.find(event => event.action === 'api_key.revoke');
+    assert.ok(revokeEvent, 'api_key.revoke is listed by name, not lost in generic review');
+    assert.equal(revokeEvent.pageId, FIXTURE.pages.markdownThemed);
+    const grantsCheck = report.checks.find(check => check.name === 'shareGrants');
+    assert.equal(grantsCheck.ok, false, 'the resurrected grant fails parity by name');
+    assert.match(JSON.stringify(grantsCheck.issues), new RegExp(FIXTURE.apiKey.id));
+
+    // Cleanup: restore the fixture grant; keep the audit row (real history).
+    await sourcePool.query('INSERT INTO share_grants (api_key_id, share_id, can_read, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
+      [FIXTURE.apiKey.id, FIXTURE.pages.markdownThemed, grantRow?.can_read ?? true, grantRow?.created_at ?? Date.now()]);
+  } finally {
+    await sourcePool.end();
+  }
+});
+
+// St2: the verifier compares key_hash but never persists credential material.
+test('credential material never reaches the persisted verification report (St2)', async () => {
+  const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
+  const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+  let sourceHash;
+  try {
+    sourceHash = (await restorePool.query('SELECT key_hash FROM api_keys WHERE id = $1', [FIXTURE.apiKey.id])).rows[0].key_hash;
+    await restorePool.query('UPDATE api_keys SET key_hash = $2 WHERE id = $1', [FIXTURE.apiKey.id, 'scrypt$St2$tampered$digest']);
+
+    const result = await runStep(process.execPath, [
+      'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+      '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+      '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+      '--output', path.join(tmpDir, 'verification-key-hash-tamper.json')
+    ]);
+    assert.equal(result.code, 1, 'key hash drift fails verification');
+    const reportText = fs.readFileSync(path.join(tmpDir, 'verification-key-hash-tamper.json'), 'utf8');
+    const report = JSON.parse(reportText);
+    const keyCheck = report.checks.find(check => check.name === 'managedApiKeys');
+    assert.equal(keyCheck.ok, false);
+    assert.ok(keyCheck.issues.some(issue => issue.column === 'key_hash'), 'the drift is named by column');
+
+    // No verifier value may leak in raw, URL-encoded or JSON-escaped form.
+    for (const secretValue of [sourceHash, 'scrypt$St2$tampered$digest']) {
+      for (const form of [secretValue, encodeURIComponent(secretValue), JSON.stringify(secretValue).slice(1, -1)]) {
+        assert.ok(!reportText.includes(form), `report must not contain hash material (${form.slice(0, 20)}...)`);
+      }
+    }
+    assert.ok(!result.stdout.includes('scrypt$') || !result.stdout.includes('$tampered'), 'stdout stays clean too');
+  } finally {
+    await restorePool.query('UPDATE api_keys SET key_hash = $2 WHERE id = $1', [FIXTURE.apiKey.id, sourceHash]);
+    await restorePool.end();
+  }
+});
+
+// St3: a restore that lost the whole share_grants table (ledger still 010)
+// must FAIL, never quietly skip the covered object.
+test('restored database missing the whole share_grants table fails with ledger at 010 (St3)', async (t) => {
+  if (!hasGrants) return t.skip('share_grants absent on a 001-009 base');
+  const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
+  const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+  try {
+    await restorePool.query('DROP TABLE share_grants');
+  } finally {
+    await restorePool.end();
+  }
+
+  const result = await runStep(process.execPath, [
+    'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+    '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+    '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+    '--output', path.join(tmpDir, 'verification-missing-grants-table.json')
+  ]);
+  assert.equal(result.code, 1, 'a dropped grants table fails even with --reconciled');
+  const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-missing-grants-table.json'), 'utf8'));
+  const grantsCheck = report.checks.find(check => check.name === 'shareGrants');
+  assert.equal(grantsCheck.ok, false, 'the grants check fails, not a silent skip');
+  assert.match(JSON.stringify(grantsCheck.issues), /share_grants/);
+  assert.ok(report.coveredObjects.includes('share-grants'), 'a failed covered object is never removed from coverage');
+  assert.equal(report.checks.find(check => check.name === 'migrationLedger').ok, true, 'ledger itself is intact; the table absence is the failure');
+
+  // Cleanup: full re-restore brings the table and fixture grant back.
+  const cleanup = await runStep(process.execPath, [
+    'scripts/restore-db.js', '--manifest', manifestPath, '--target-url', restoreUrl,
+    ...(restoreDocker ? ['--docker', restoreDocker] : [])
+  ]);
+  assert.equal(cleanup.code, 0, cleanup.stderr);
+});
+
+// St4: a 001–009-shaped pair (no scopes columns, no grants table, no 010
+// ledger row) produces a STRUCTURED failure report — never a SQL crash.
+// Runs last, then explicitly repairs BOTH synthetic databases back to 010.
+test('a 001-009-shaped database pair yields a structured report, never a SQL crash (St4)', async () => {
+  const reshape = async (databaseUrl) => {
+    const pool = createPostgresPool(databaseUrl, { env: poolEnv, max: 1 });
+    try {
+      await pool.query('ALTER TABLE api_keys DROP COLUMN IF EXISTS scopes');
+      await pool.query('ALTER TABLE api_keys DROP COLUMN IF EXISTS auto_grant_new_share_edit');
+      await pool.query('DROP TABLE IF EXISTS share_grants');
+      await pool.query("DELETE FROM quickshare_schema_migrations WHERE version = '010'");
+    } finally {
+      await pool.end();
+    }
+  };
+  const restore010Fixture = async () => {
+    const sourcePool = createPostgresPool(sourceUrl, { env: poolEnv, max: 1 });
+    const restorePool = createPostgresPool(restoreUrl, { env: poolEnv, max: 1 });
+    try {
+      await runMigrations(sourcePool, { logger: { info() {} } });
+      const migration = (await sourcePool.query(
+        "SELECT version, name, checksum, applied_at FROM quickshare_schema_migrations WHERE version = '010'"
+      )).rows[0];
+      await runMigrations(restorePool, { logger: { info() {} } });
+      // Align the ledger timestamp exactly: the restore is a copy of source,
+      // not an independently migrated database.
+      await restorePool.query(
+        `UPDATE quickshare_schema_migrations SET applied_at = $2
+         WHERE version = $1`, [migration.version, migration.applied_at]
+      );
+      const base = Number((await sourcePool.query('SELECT created_at FROM pages WHERE id = $1', [FIXTURE.pages.publicHtml])).rows[0].created_at);
+      for (const pool of [sourcePool, restorePool]) {
+        await pool.query(
+          'UPDATE api_keys SET scopes = $2::jsonb, auto_grant_new_share_edit = TRUE WHERE id = $1',
+          [FIXTURE.apiKey.id, JSON.stringify(['share:create', 'share:read'])]
+        );
+        await pool.query(
+          `INSERT INTO share_grants (api_key_id, share_id, can_read, created_at)
+           VALUES ($1, $2, TRUE, $3) ON CONFLICT (api_key_id, share_id) DO UPDATE
+           SET can_read = TRUE, can_update = FALSE, can_publish = FALSE, created_at = EXCLUDED.created_at`,
+          [FIXTURE.apiKey.id, FIXTURE.pages.markdownThemed, base + 110]
+        );
+      }
+    } finally {
+      await Promise.allSettled([sourcePool.end(), restorePool.end()]);
+    }
+  };
+
+  await reshape(sourceUrl);
+  await reshape(restoreUrl);
+  const manifestPath = path.join(tmpDir, fs.readdirSync(tmpDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
+  try {
+    const result = await runStep(process.execPath, [
+      'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+      '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+      '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+      '--output', path.join(tmpDir, 'verification-pre010.json')
+    ]);
+    assert.equal(result.code, 1, 'missing migration 010 fails structurally');
+    assert.ok(!/does not exist/i.test(result.stdout + result.stderr), 'no raw SQL exception escapes');
+
+    const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'verification-pre010.json'), 'utf8'));
+    assert.equal(report.ok, false);
+    const ledgerCheck = report.checks.find(check => check.name === 'migrationLedger');
+    assert.equal(ledgerCheck.ok, false, 'the missing 010 migration is the named failure');
+    assert.match(JSON.stringify(ledgerCheck.issues), /010/);
+    assert.ok(!report.coveredObjects.includes('api-key-scopes'), 'scopes coverage is not claimed on a pre-010 pair');
+    assert.ok(!report.coveredObjects.includes('share-grants'), 'grants coverage is not claimed on a pre-010 pair');
+    const keyCheck = report.checks.find(check => check.name === 'managedApiKeys');
+    assert.ok(!keyCheck.details.comparedColumns.includes('scopes'), 'column selection adapts to the schema actually present');
+  } finally {
+    await restore010Fixture();
+  }
+
+  // The destructive compatibility fixture has been reverted, and the
+  // restored pair is back on the same 010 schema/data as the snapshot.
+  const repaired = await runStep(process.execPath, [
+    'scripts/verify-backup.js', '--source-url', sourceUrl, '--restore-url', restoreUrl,
+    '--manifest', manifestPath, '--fixture', path.join(tmpDir, 'fixture.json'),
+    '--session-secret', FIXTURE.sessionSecret, '--reconciled',
+    '--output', path.join(tmpDir, 'verification-post010-repair.json')
+  ]);
+  assert.equal(repaired.code, 0, `010 schema/data repair must restore source/restore parity: ${repaired.stderr}`);
 });

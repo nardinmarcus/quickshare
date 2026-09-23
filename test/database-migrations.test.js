@@ -57,7 +57,8 @@ test('migrations contain every runtime table, column, index, and site setting', 
     '006_api_key_credential_version.sql',
     '007_share_revisions.sql',
     '008_publish_operations.sql',
-    '009_share_revision_purge.sql'
+    '009_share_revision_purge.sql',
+    '010_share_grants.sql'
   ]);
   assert.match(migrations[0].sql, /CREATE TABLE IF NOT EXISTS public\.pages/i);
   assert.match(migrations[0].sql, /ADD COLUMN IF NOT EXISTS password_hash/i);
@@ -113,6 +114,30 @@ test('migrations contain every runtime table, column, index, and site setting', 
   assert.match(migrations[8].sql, /ADD COLUMN purged_at BIGINT/i);
   assert.doesNotMatch(migrations[8].sql, /DROP COLUMN|DROP TABLE|ADD CONSTRAINT|SET NOT NULL/i,
     'purge migration stays additive: no payload drop at migration time, no backfill lock');
+  // #36: Key scopes and per-Share read grants. Scopes are the global
+  // operation vocabulary (parent #24 §6); grants bind one logical Key to one
+  // Share with the read/update/publish permission bits (only `read` is ever
+  // written by this milestone). Grants reference the Key's logical identity,
+  // so rotation (which keeps the row) never breaks them, while deleting the
+  // Key or the Share cascades the grant away. No grant ever cascades into
+  // content: only pages/api_keys rows are referenced, and revisions carry no
+  // grant columns.
+  assert.match(migrations[9].sql, /ALTER TABLE public\.api_keys/i);
+  assert.match(migrations[9].sql, /ADD COLUMN scopes JSONB NOT NULL DEFAULT '\[\]'::jsonb/i);
+  assert.match(migrations[9].sql, /ADD COLUMN auto_grant_new_share_edit BOOLEAN NOT NULL DEFAULT FALSE/i);
+  assert.match(migrations[9].sql, /UPDATE public\.api_keys[\s\S]*share:create/i,
+    'existing managed keys migrate to create-only scope');
+  assert.match(migrations[9].sql, /CREATE TABLE IF NOT EXISTS public\.share_grants/i);
+  assert.match(migrations[9].sql, /api_key_id TEXT NOT NULL REFERENCES public\.api_keys\(id\) ON DELETE CASCADE/i);
+  assert.match(migrations[9].sql, /share_id TEXT NOT NULL REFERENCES public\.pages\(id\) ON DELETE CASCADE/i);
+  assert.match(migrations[9].sql, /PRIMARY KEY \(api_key_id, share_id\)/i);
+  assert.match(migrations[9].sql, /can_read BOOLEAN NOT NULL DEFAULT FALSE/i);
+  assert.match(migrations[9].sql, /can_update BOOLEAN NOT NULL DEFAULT FALSE/i);
+  assert.match(migrations[9].sql, /can_publish BOOLEAN NOT NULL DEFAULT FALSE/i);
+  assert.match(migrations[9].sql, /can_update OR can_read/i,
+    'a grant that can update must also be able to read (parent #24 §6)');
+  assert.doesNotMatch(migrations[9].sql, /DROP COLUMN|DROP TABLE|ALTER COLUMN/i,
+    'grants migration stays additive: existing keys keep their identity');
 });
 
 // #32 boundary: migrations 001-007 are accepted history; this ticket may
@@ -155,8 +180,8 @@ test('migration runner applies pending files once and releases its client', asyn
   const second = await runMigrations(fake.pool, { logger: { info() {} } });
   const migrationSql = loadMigrations().map(migration => migration.sql.trim());
 
-  assert.deepEqual(first, { applied: ['001', '002', '003', '004', '005', '006', '007', '008', '009'], skipped: [] });
-  assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007', '008', '009'] });
+  assert.deepEqual(first, { applied: ['001', '002', '003', '004', '005', '006', '007', '008', '009', '010'], skipped: [] });
+  assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007', '008', '009', '010'] });
   for (const sql of migrationSql) {
     assert.equal(fake.queries.filter(query => query.sql === sql).length, 1);
   }

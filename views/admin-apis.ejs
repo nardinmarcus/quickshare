@@ -63,6 +63,8 @@
           <tr>
             <th scope="col">名称</th>
             <th scope="col">前缀</th>
+            <th scope="col">Scopes</th>
+            <th scope="col">已授权 Share</th>
             <th scope="col">创建时间</th>
             <th scope="col">最近使用</th>
             <th scope="col" class="admin-actions-col">操作</th>
@@ -71,13 +73,31 @@
         <tbody id="api-keys-body">
           <% if (apiKeys.length === 0) { %>
             <tr id="api-keys-empty">
-              <td colspan="5" class="api-key-empty">尚未创建托管密钥。</td>
+              <td colspan="7" class="api-key-empty">尚未创建托管密钥。</td>
             </tr>
           <% } %>
-          <% apiKeys.forEach((apiKey) => { %>
+          <% apiKeys.forEach((apiKey) => {
+               const grants = grantsByApiKey.get(apiKey.id) || [];
+               const readGrants = grants.filter(grant => grant.can_read);
+               const scopes = Array.isArray(apiKey.scopes) ? apiKey.scopes : [];
+          %>
             <tr data-api-key-id="<%= apiKey.id %>">
               <td><strong><%= apiKey.name %></strong></td>
               <td><code class="api-key-prefix"><%= apiKey.key_prefix %></code></td>
+              <td>
+                <div class="api-key-scope-list" data-api-key-scopes="<%= apiKey.id %>" aria-label="密钥 <%= apiKey.name %> 的 scopes">
+                  <% if (scopes.length === 0) { %>
+                    <span class="admin-muted">无</span>
+                  <% } else { %>
+                    <% scopes.forEach((scope) => { %>
+                      <code class="api-key-scope"><%= scope %></code>
+                    <% }) %>
+                  <% } %>
+                </div>
+              </td>
+              <td>
+                <span data-read-grant-count="<%= apiKey.id %>"><%= readGrants.length %></span>
+              </td>
               <td><time datetime="<%= new Date(Number(apiKey.created_at)).toISOString() %>"><%= formatManagementDateTime(apiKey.created_at) %></time></td>
               <td>
                 <% if (apiKey.last_used_at) { %>
@@ -87,6 +107,10 @@
                 <% } %>
               </td>
               <td class="admin-actions-col">
+                <button type="button" class="admin-icon-link api-key-grants-btn" data-api-key-id="<%= apiKey.id %>" data-api-key-name="<%= apiKey.name %>" aria-expanded="false" aria-controls="grants-<%= apiKey.id %>" aria-label="管理读取授权 <%= apiKey.name %>">
+                  <i class="fas fa-user-check" aria-hidden="true"></i>
+                  <span class="sr-only">读取授权</span>
+                </button>
                 <button type="button" class="admin-icon-link api-key-rotate-btn" data-api-key-id="<%= apiKey.id %>" data-api-key-name="<%= apiKey.name %>" aria-label="轮换 API 密钥 <%= apiKey.name %>">
                   <i class="fas fa-sync-alt" aria-hidden="true"></i>
                   <span class="sr-only">轮换</span>
@@ -95,6 +119,34 @@
                   <i class="fas fa-trash-alt" aria-hidden="true"></i>
                   <span class="sr-only">删除</span>
                 </button>
+              </td>
+            </tr>
+            <tr id="grants-<%= apiKey.id %>" class="api-key-grants-row" hidden>
+              <td colspan="7">
+                <div class="api-key-grants-panel" data-grants-panel="<%= apiKey.id %>">
+                  <h3>读取授权 · <%= apiKey.name %></h3>
+                  <p class="admin-muted">为该密钥授权读取指定 Share；授权后可用 <code>GET /api/v1/shares</code> 系列接口读取。撤回全部授权后该密钥立即失去读取能力（scope 自动收回）。</p>
+                  <ul class="api-key-grant-list" data-grant-list="<%= apiKey.id %>">
+                    <% if (readGrants.length === 0) { %>
+                      <li class="api-key-grant-empty" data-grant-empty>尚未授权任何 Share。</li>
+                    <% } %>
+                    <% readGrants.forEach((grant) => { %>
+                      <li data-grant-item="<%= grant.share_id %>">
+                        <code><%= grant.share_id %></code>
+                        <span class="admin-muted"><%= grant.share_title || '（无标题）' %></span>
+                        <button type="button" class="admin-delete-btn api-key-revoke-btn" data-api-key-id="<%= apiKey.id %>" data-share-id="<%= grant.share_id %>" aria-label="撤回 <%= apiKey.name %> 对 <%= grant.share_id %> 的读取授权">撤回</button>
+                      </li>
+                    <% }) %>
+                  </ul>
+                  <form class="api-key-grant-form" data-grant-form="<%= apiKey.id %>">
+                    <label for="grant-share-id-<%= apiKey.id %>">Share ID</label>
+                    <div class="api-key-grant-form-row">
+                      <input id="grant-share-id-<%= apiKey.id %>" name="shareId" class="cyber-input" autocomplete="off" required placeholder="例如：xS_9ngJnG9NX" aria-describedby="grant-help-<%= apiKey.id %>">
+                      <button class="cyber-btn cyber-btn-secondary" type="submit">授予读取</button>
+                    </div>
+                    <p id="grant-help-<%= apiKey.id %>" class="admin-muted">仅授予读取；编辑与上下架能力随后续票提供，不在此展示。</p>
+                  </form>
+                </div>
               </td>
             </tr>
           <% }) %>
@@ -115,9 +167,17 @@
         <code><%= capabilities.operations[1].path %></code>
       </div>
       <p><code>GET /api/v1/operations/:requestId</code> 按<strong>当前凭据命名空间</strong>查询已提交的创建操作，只返回状态与 Share/版本标识元信息；不返回正文、标题、简介或密码。该查询属于创建能力的一部分，不构成 Share 管理权。</p>
+      <h3>只读资源接口（按 Share 授权）</h3>
+      <p>在后台为具名密钥授权读取指定 Share 后，该密钥可用 <code>X-API-Key</code> 调用：</p>
+      <ul>
+        <li><code><%= capabilities.operations[2].method %> <%= capabilities.operations[2].path %></code>：已授权 Share 分页清单（默认 20、上限 100，稳定游标，仅元信息）；</li>
+        <li><code><%= capabilities.operations[3].method %> <%= capabilities.operations[3].path %></code>：当前版本完整快照（强 ETag，<code>If-None-Match</code> 命中返回 304）；</li>
+        <li><code><%= capabilities.operations[4].method %> <%= capabilities.operations[4].path %></code>：发布状态（独立强 ETag；不含标题、简介或正文）。</li>
+      </ul>
+      <p>已下架、带密码或已过期的 Share 仍可按管理授权读取——管理可见性与公开可见性分别判断。无凭据 401；缺少 <code>share:read</code> scope 403；目标未授权 404（与不存在不可区分）。响应不含密码、加密密码、授权表或 Favorite 状态。Cookie 与公开查看权永不授权管理接口。</p>
       <h3>身份与能力核验</h3>
-      <p><code>GET /api/v1/me</code> 返回实例 origin 与当前凭据身份；<code>GET /api/v1/capabilities</code> 返回真实能力。两者均要求 <code>X-API-Key</code>，维护期间仍可读取。</p>
-      <p>托管密钥与旧版密钥当前均只能创建 Share 并确认自身创建结果，不提供读取源内容或更新既有 Share 的管理权限。轮换保持 Key ID 与命名空间，旧密钥立即失效；请同步更新自动化任务。</p>
+      <p><code>GET /api/v1/me</code> 返回实例 origin、凭据身份与 scopes；<code>GET /api/v1/capabilities</code> 返回真实能力。两者均要求 <code>X-API-Key</code>，维护期间仍可读取。</p>
+      <p>托管密钥默认只能创建 Share 并确认自身创建结果；读取能力仅来自后台授予的逐 Share 授权，轮换后保持。旧版 <code>SHARE_API_KEY</code> 永远只能创建。更新与上下架协议随后续票交付，本页不提供也宜告不存在的开关。</p>
       <p>协议 <%= capabilities.protocolVersion %>；可用操作：<%= capabilities.operations.map(operation => operation.id).join('、') %>。</p>
       <h3>身份验证</h3>
       <p>在 <code>X-API-Key</code> 请求头中传入托管密钥。已配置的旧版 <code>SHARE_API_KEY</code> 仍然受支持。</p>

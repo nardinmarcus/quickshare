@@ -36,7 +36,17 @@ const {
 } = require('./backup-db');
 
 const API_KEY_COMPARED_COLUMNS = Object.freeze([
-  'id', 'name', 'key_hash', 'key_prefix', 'created_at', 'last_used_at', 'credential_version'
+  'id', 'name', 'key_hash', 'key_prefix', 'created_at', 'last_used_at', 'credential_version',
+  // #36: scopes and the auto-grant flag are part of a credential's meaning;
+  // restoring a database that silently drops or widens them is unacceptable.
+  'scopes', 'auto_grant_new_share_edit'
+]);
+
+// #36 per-Share grants: full-row parity keyed by (api_key_id, share_id).
+// A grant row that vanishes, appears or flips a permission bit in restore
+// must fail by name.
+const SHARE_GRANT_COMPARED_COLUMNS = Object.freeze([
+  'api_key_id', 'share_id', 'can_read', 'can_update', 'can_publish', 'created_at'
 ]);
 
 const HARD_REVOCATION_AUDIT_ACTIONS = new Set([
@@ -51,7 +61,11 @@ const HARD_REVOCATION_AUDIT_ACTIONS = new Set([
   'page.unpublish',
   'page.republish',
   'api_key.delete',
-  'api_key.rotate'
+  'api_key.rotate',
+  // #36 rework (St1): a post-snapshot read-grant revocation replayed from an
+  // older backup would resurrect an authorization the owner withdrew. It is
+  // a hard revocation by name, never generic owner-review noise.
+  'api_key.revoke'
 ]);
 
 // Policy-relevant field names emitted in page.update audit details as
@@ -78,6 +92,8 @@ const COVERED_OBJECTS = [
   'password-verify-and-decrypt',
   'expiry',
   'managed-api-keys',
+  'api-key-scopes',
+  'share-grants',
   'audit-logs',
   'publish-operations',
   'operation-receipt-purges',
@@ -107,6 +123,58 @@ const OPERATION_COMPARED_COLUMNS = Object.freeze([
 
 function sha256Hex(value) {
   return require('crypto').createHash('sha256').update(String(value), 'utf8').digest('hex');
+}
+
+// Credential material must never reach a persisted verification report
+// (#36 rework, St2): key_hash is compared column-by-column, but issue
+// messages for these columns redact BOTH sides' values. Verification
+// reports are long-lived operator artifacts.
+const REDACTED_KEY_COLUMNS = new Set(['key_hash']);
+
+/**
+ * Row-level managed-key comparison used by runVerification and unit tests:
+ * named-column drift per key id, structural comparison for JSONB scopes,
+ * and redacted messages for credential-material columns.
+ */
+function compareApiKeyRows(sourceRows, restoreRows, comparedColumns = API_KEY_COMPARED_COLUMNS) {
+  const issues = [];
+  const sourceKeysById = new Map(sourceRows.map(row => [row.id, row]));
+  const restoreKeysById = new Map(restoreRows.map(row => [row.id, row]));
+  for (const [id, sourceRow] of sourceKeysById) {
+    const restoreRow = restoreKeysById.get(id);
+    if (!restoreRow) {
+      issues.push({ field: 'api_keys', keyId: id, message: `managed key ${id} is missing from the restored database` });
+      continue;
+    }
+    for (const column of comparedColumns) {
+      const left = sourceRow[column];
+      const right = restoreRow[column];
+      // JSONB columns (scopes) arrive as fresh arrays per query: compare
+      // structurally, never by reference.
+      const equal = (left === right)
+        || (left === null && right === null)
+        || (typeof left === 'object' && typeof right === 'object'
+          && left !== null && right !== null
+          && JSON.stringify(left) === JSON.stringify(right));
+      if (!equal) {
+        const redacted = REDACTED_KEY_COLUMNS.has(column);
+        issues.push({
+          field: 'api_keys',
+          keyId: id,
+          column,
+          message: redacted
+            ? `managed key ${id} column ${column} differs (both verifier values redacted)`
+            : `managed key ${id} column ${column} differs: ${JSON.stringify(left)} vs ${JSON.stringify(right)}`
+        });
+      }
+    }
+  }
+  for (const id of restoreKeysById.keys()) {
+    if (!sourceKeysById.has(id)) {
+      issues.push({ field: 'api_keys', keyId: id, message: `restored database contains managed key ${id} absent from the source snapshot` });
+    }
+  }
+  return { ok: issues.length === 0, issues };
 }
 
 function valuesEqual(left, right) {
@@ -406,7 +474,8 @@ function buildVerificationReport({
   durationsMs,
   postSnapshotRevocations,
   manifest,
-  target
+  target,
+  coveredObjects
 }) {
   const revocations = postSnapshotRevocations || [];
   const allChecksOk = (checks || []).every(check => check.ok === true);
@@ -422,7 +491,7 @@ function buildVerificationReport({
     checks: checks || [],
     durationsMs: durationsMs || {},
     postSnapshotRevocations: revocations,
-    coveredObjects: COVERED_OBJECTS,
+    coveredObjects: coveredObjects || COVERED_OBJECTS,
     manifest: {
       snapshotAt: manifest?.snapshotAt ?? null,
       snapshotWalLsn: manifest?.snapshotWalLsn ?? null,
@@ -526,8 +595,7 @@ async function planCredentialVerification({ restoredPages, fixture, verifyHash, 
  * API-key counterpart of planCredentialVerification: every restored managed
  * key must either be exercised against fixture material or reported as an
  * explicit coverage gap.
- */
-async function planApiKeyVerification({ restoredKeys, fixture, verifyHash }) {
+ */async function planApiKeyVerification({ restoredKeys, fixture, verifyHash }) {
   const issues = [];
   const entriesById = new Map((fixture.apiKeys || []).map(entry => [entry.id, entry]));
   let fixtureCovered = 0;
@@ -580,6 +648,33 @@ async function runVerification({
   const started = Date.now();
 
   try {
+    // #36 rework (St3/St4): probe BOTH sides' schema before selecting
+    // columns or tables. Every mismatch is reported structurally — a
+    // restore that lost the grants table FAILS; a genuine pre-#36 pair is
+    // an honest not-covered report. Never a silent skip, never a SQL crash.
+    const grantsTablePresent = async (pool) => (await pool.query(
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name = 'share_grants'
+       ) AS present`
+    )).rows[0].present === true;
+    const scopesColumnsPresent = async (pool) => (await pool.query(
+      `SELECT COUNT(*)::int AS count FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'api_keys'
+         AND column_name IN ('scopes', 'auto_grant_new_share_edit')`
+    )).rows[0].count === 2;
+
+    const [sourceGrantsPresent, restoreGrantsPresent, sourceScopesPresent, restoreScopesPresent] = await Promise.all([
+      grantsTablePresent(sourcePool), grantsTablePresent(restorePool), scopesColumnsPresent(sourcePool), scopesColumnsPresent(restorePool)
+    ]);
+    // Column selection adapts to the schema actually present (St4): a
+    // 001-009 pair selects without the #36 columns instead of crashing.
+    const bothSidesHaveScopes = sourceScopesPresent && restoreScopesPresent;
+    const apiKeyColumns = bothSidesHaveScopes
+      ? API_KEY_COMPARED_COLUMNS
+      : API_KEY_COMPARED_COLUMNS.filter(column => column !== 'scopes' && column !== 'auto_grant_new_share_edit');
+    const grantsComparable = sourceGrantsPresent && restoreGrantsPresent;
+
     // Two independent connections, queried concurrently.
     const [sourcePages, restorePages, sourceRevisions, restoreRevisions, sourceAudit, restoreAudit, sourceKeys, restoreKeys, sourceOperations, restoreOperations, sourceSettings, restoreSettings, sourceLedger, restoreLedger] =
       await Promise.all([
@@ -589,8 +684,8 @@ async function runVerification({
         restorePool.query(`SELECT ${REVISION_COMPARED_COLUMNS.join(', ')} FROM share_revisions ORDER BY share_id ASC, revision ASC`),
         sourcePool.query('SELECT action, page_id, details, ip, created_at FROM audit_logs ORDER BY id ASC'),
         restorePool.query('SELECT action, page_id, details, ip, created_at FROM audit_logs ORDER BY id ASC'),
-        sourcePool.query(`SELECT ${API_KEY_COMPARED_COLUMNS.join(', ')} FROM api_keys ORDER BY id ASC`),
-        restorePool.query(`SELECT ${API_KEY_COMPARED_COLUMNS.join(', ')} FROM api_keys ORDER BY id ASC`),
+        sourcePool.query(`SELECT ${apiKeyColumns.join(', ')} FROM api_keys ORDER BY id ASC`),
+        restorePool.query(`SELECT ${apiKeyColumns.join(', ')} FROM api_keys ORDER BY id ASC`),
         sourcePool.query(`SELECT ${OPERATION_COMPARED_COLUMNS.join(', ')} FROM publish_operations ORDER BY actor_namespace ASC, request_id ASC`),
         restorePool.query(`SELECT ${OPERATION_COMPARED_COLUMNS.join(', ')} FROM publish_operations ORDER BY actor_namespace ASC, request_id ASC`),
         sourcePool.query('SELECT * FROM site_settings ORDER BY id ASC'),
@@ -598,6 +693,13 @@ async function runVerification({
         sourcePool.query('SELECT version, name, checksum, applied_at FROM quickshare_schema_migrations ORDER BY version ASC'),
         restorePool.query('SELECT version, name, checksum, applied_at FROM quickshare_schema_migrations ORDER BY version ASC')
       ]);
+
+    const [sourceGrants, restoreGrants] = grantsComparable
+      ? await Promise.all([
+          sourcePool.query(`SELECT ${SHARE_GRANT_COMPARED_COLUMNS.join(', ')} FROM share_grants ORDER BY api_key_id ASC, share_id ASC`),
+          restorePool.query(`SELECT ${SHARE_GRANT_COMPARED_COLUMNS.join(', ')} FROM share_grants ORDER BY api_key_id ASC, share_id ASC`)
+        ])
+      : [{ rows: [] }, { rows: [] }];
 
     const inventory = comparePageInventory(sourcePages.rows, restorePages.rows);
     checks.push({
@@ -642,6 +744,8 @@ async function runVerification({
     const ledgerParityIssues = rowsEqual(sourceLedger.rows, restoreLedger.rows)
       ? []
       : [{ field: 'ledger', message: 'migration ledger differs between source and restored databases' }];
+    const sourceLedgerHas010 = sourceLedger.rows.some(row => String(row.version) === '010');
+    const restoreLedgerHas010 = restoreLedger.rows.some(row => String(row.version) === '010');
     checks.push({
       name: 'migrationLedger',
       ok: ledger.ok && ledgerParityIssues.length === 0,
@@ -672,9 +776,26 @@ async function runVerification({
       details: { entries: restoreAudit.rows.length }
     });
 
-    const keyRowIssues = rowsEqual(sourceKeys.rows, restoreKeys.rows)
-      ? []
-      : [{ field: 'api_keys', message: 'managed key rows differ between source and restored databases' }];
+    // #36: managed key drift names the exact column (e.g. scopes) so an
+    // authorization-relevant restore divergence is actionable evidence.
+    // Credential-material columns (key_hash) are compared but their values
+    // stay out of the persisted report (St2).
+    const keyCompare = compareApiKeyRows(sourceKeys.rows, restoreKeys.rows, apiKeyColumns);
+    const keyRowIssues = [...keyCompare.issues];
+    if (sourceScopesPresent !== restoreScopesPresent) {
+      keyRowIssues.push({
+        field: 'api_keys',
+        message: sourceScopesPresent
+          ? 'source snapshot has the #36 scopes columns but the restored database does not; migration 010 is missing on restore'
+          : 'restored database has the #36 scopes columns but the source snapshot does not'
+      });
+    }
+    if (sourceLedgerHas010 && !sourceScopesPresent) {
+      keyRowIssues.push({ field: 'api_keys', message: 'source ledger records migration 010 but its api_keys scopes columns are missing' });
+    }
+    if (restoreLedgerHas010 && !restoreScopesPresent) {
+      keyRowIssues.push({ field: 'api_keys', message: 'restored ledger records migration 010 but its api_keys scopes columns are missing' });
+    }
     const keyPlan = await planApiKeyVerification({
       restoredKeys: restoreKeys.rows,
       fixture,
@@ -684,7 +805,72 @@ async function runVerification({
       name: 'managedApiKeys',
       ok: keyRowIssues.length === 0 && keyPlan.ok,
       issues: [...keyRowIssues, ...keyPlan.issues],
-      details: { ...keyPlan.details, comparedColumns: API_KEY_COMPARED_COLUMNS }
+      details: { ...keyPlan.details, comparedColumns: apiKeyColumns }
+    });
+
+    // Per-Share grants (#36): full-row parity including the permission bits,
+    // each side reported per (api_key_id, share_id) so a missing or altered
+    // grant names its exact row. This is the rotation-survival proof: the
+    // fixture key's credential_version is far past 1, and the grant still
+    // binds the same logical id after restore.
+    //
+    // #36 rework (St3): the check ALWAYS reports. A restore that lost the
+    // whole table — including with migration 010 still in its ledger — is a
+    // named failure, not a skipped check.
+    const grantIssues = [];
+    const grantsSchemaIssues = [];
+    if (sourceGrantsPresent && !restoreGrantsPresent) {
+      grantsSchemaIssues.push({ field: 'share_grants', message: 'share_grants table is missing from the restored database while the source snapshot has it' });
+    } else if (!sourceGrantsPresent && restoreGrantsPresent) {
+      grantsSchemaIssues.push({ field: 'share_grants', message: 'restored database has a share_grants table absent from the source snapshot schema' });
+    }
+    if (sourceLedgerHas010 && !sourceGrantsPresent) {
+      grantsSchemaIssues.push({ field: 'share_grants', message: 'migration 010 is recorded as applied in the source ledger but the share_grants table is missing' });
+    }
+    if (restoreLedgerHas010 && !restoreGrantsPresent) {
+      grantsSchemaIssues.push({ field: 'share_grants', message: 'migration 010 is recorded as applied in the restored ledger but the share_grants table is missing' });
+    }
+    if (grantsComparable) {
+      const sourceGrantsByKey = new Map(
+        sourceGrants.rows.map(row => [`${row.api_key_id}\u0000${row.share_id}`, row])
+      );
+      const restoreGrantsByKey = new Map(
+        restoreGrants.rows.map(row => [`${row.api_key_id}\u0000${row.share_id}`, row])
+      );
+      for (const [key, sourceRow] of sourceGrantsByKey) {
+        const restoreRow = restoreGrantsByKey.get(key);
+        if (!restoreRow) {
+          grantIssues.push({ field: 'share_grants', key, message: `share grant ${key} is missing from the restored database` });
+          continue;
+        }
+        for (const column of SHARE_GRANT_COMPARED_COLUMNS) {
+          if (!valuesEqual(sourceRow[column], restoreRow[column])) {
+            grantIssues.push({
+              field: 'share_grants',
+              key,
+              column,
+              message: `share grant ${key} column ${column} differs: ${JSON.stringify(sourceRow[column])} vs ${JSON.stringify(restoreRow[column])}`
+            });
+          }
+        }
+      }
+      for (const key of restoreGrantsByKey.keys()) {
+        if (!sourceGrantsByKey.has(key)) {
+          grantIssues.push({ field: 'share_grants', key, message: `restored database contains share grant ${key} absent from the source snapshot` });
+        }
+      }
+    }
+    checks.push({
+      name: 'shareGrants',
+      ok: grantsSchemaIssues.length === 0 && grantIssues.length === 0,
+      issues: [...grantsSchemaIssues, ...grantIssues],
+      details: {
+        grants: restoreGrants.rows.length,
+        comparedColumns: SHARE_GRANT_COMPARED_COLUMNS,
+        // Honest coverage state per side: a pre-#36 source never claims it.
+        sourceTablePresent: sourceGrantsPresent,
+        restoreTablePresent: restoreGrantsPresent
+      }
     });
 
     // Publish operation records and deletion tombstones (#32): full-row
@@ -773,6 +959,15 @@ async function runVerification({
     const durationsMs = { verifyMs: Date.now() - started };
     const postSnapshotRevocations = findPostSnapshotRevocations(sourceAuditAfterSnapshot, snapshotAt);
 
+    // An absent grants table on BOTH sides with no 010 ledger row is a
+    // genuine pre-#36 snapshot pair: coverage is honestly not claimed.
+    // Every other combination keeps coverage — a covered object that fails
+    // is evidence, not something to drop from the report (#36 rework, St3).
+    const pre010Pair = !sourceGrantsPresent && !restoreGrantsPresent
+      && !sourceLedgerHas010 && !restoreLedgerHas010 && !bothSidesHaveScopes;
+    const covered = pre010Pair
+      ? COVERED_OBJECTS.filter(name => name !== 'share-grants' && name !== 'api-key-scopes')
+      : COVERED_OBJECTS;
     return buildVerificationReport({
       checks,
       durationsMs,
@@ -781,7 +976,8 @@ async function runVerification({
       target: {
         database: new URL(restoreUrl).pathname.replace(/^\//, ''),
         host: new URL(restoreUrl).hostname
-      }
+      },
+      coveredObjects: covered
     });
   } finally {
     await Promise.allSettled([sourcePool.end(), restorePool.end()]);
@@ -846,8 +1042,11 @@ module.exports = {
   POLICY_FIELD_NAMES,
   REVISION_COMPARED_COLUMNS,
   POINTER_CONTENT_COLUMNS,
+  SHARE_GRANT_COMPARED_COLUMNS,
+  API_KEY_COMPARED_COLUMNS,
   buildVerificationReport,
   classifyRevocationCoverage,
+  compareApiKeyRows,
   comparePageInventory,
   compareRevisionInventory,
   findPostSnapshotRevocations,

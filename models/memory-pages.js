@@ -68,6 +68,7 @@ class MemoryPageRepository {
     this.auditLogs = [];
     this.auditIdCounter = 0;
     this.apiKeys = new Map();
+    this.shareGrants = new Map();
     this.homepagePasswordRequired = true;
     this.publishingWritesPaused = false;
     this.publishingQueue = Promise.resolve();
@@ -107,6 +108,9 @@ class MemoryPageRepository {
       // creation must leave no dedupe record behind.
       transaction.publishOperations = structuredClone(this.publishOperations);
       transaction.apiKeys = structuredClone(this.apiKeys);
+      // Grants stage too: a failed grant/revoke must leave no half-written
+      // authorization behind (#24 §8 atomicity, #36).
+      transaction.shareGrants = structuredClone(this.shareGrants);
       transaction.auditLogs = [];
       transaction.auditIdCounter = 0;
       transaction.homepagePasswordRequired = this.homepagePasswordRequired;
@@ -116,6 +120,7 @@ class MemoryPageRepository {
       this.revisions = transaction.revisions;
       this.publishOperations = transaction.publishOperations;
       this.apiKeys = transaction.apiKeys;
+      this.shareGrants = transaction.shareGrants;
       this.homepagePasswordRequired = transaction.homepagePasswordRequired;
       // Login audit events may arrive independently of publishing transactions.
       for (const log of [...transaction.auditLogs].reverse()) {
@@ -345,7 +350,9 @@ class MemoryPageRepository {
       credential_version: '1',
       key_prefix: apiKey.keyPrefix,
       created_at: apiKey.createdAt,
-      last_used_at: null
+      last_used_at: null,
+      scopes: Array.isArray(apiKey.scopes) && apiKey.scopes.length > 0 ? [...apiKey.scopes] : ['share:create'],
+      auto_grant_new_share_edit: apiKey.autoGrantNewShareEdit === true
     };
 
     this.apiKeys.set(record.id, record);
@@ -355,7 +362,9 @@ class MemoryPageRepository {
       key_prefix: record.key_prefix,
       credential_version: record.credential_version,
       created_at: record.created_at,
-      last_used_at: record.last_used_at
+      last_used_at: record.last_used_at,
+      scopes: [...record.scopes],
+      auto_grant_new_share_edit: record.auto_grant_new_share_edit
     };
   }
 
@@ -379,11 +388,128 @@ class MemoryPageRepository {
     record.key_hash = keyHash;
     record.credential_version = (BigInt(record.credential_version) + 1n).toString();
     const { key_hash, ...receipt } = record;
-    return receipt;
+    return { ...receipt, scopes: [...receipt.scopes] };
   }
 
   async deleteApiKey(id) {
-    return this.apiKeys.delete(id);
+    const deleted = this.apiKeys.delete(id);
+    if (deleted) {
+      for (const [grantKey, grant] of this.shareGrants) {
+        if (grant.api_key_id === id) this.shareGrants.delete(grantKey);
+      }
+    }
+    return deleted;
+  }
+
+  // Per-Share read grants (#36, parent #24 §6/§8). Same Key-then-Share lock
+  // order as the PostgreSQL adapter; inside a publishing transaction the
+  // writes stage on the cloned Map and commit atomically. The key's
+  // `share:read` scope follows its grants: first grant adds it, last revoke
+  // removes it, so the scope column never advertises an unusable family.
+  async grantShareRead({ apiKeyId, shareId }) {
+    const key = this.apiKeys.get(apiKeyId);
+    if (!key) return { status: 'key-not-found' };
+    if (!this.pages.has(shareId)) return { status: 'share-not-found' };
+
+    const mapKey = `${apiKeyId}\u0000${shareId}`;
+    const existing = this.shareGrants.get(mapKey);
+    if (existing) {
+      if (existing.can_read) return { status: 'unchanged' };
+      existing.can_read = true;
+    } else {
+      this.shareGrants.set(mapKey, {
+        api_key_id: apiKeyId,
+        share_id: shareId,
+        can_read: true,
+        can_update: false,
+        can_publish: false,
+        created_at: Date.now()
+      });
+    }
+
+    if (!Array.isArray(key.scopes)) key.scopes = ['share:create'];
+    if (!key.scopes.includes('share:read')) key.scopes.push('share:read');
+    return { status: 'granted' };
+  }
+
+  async revokeShareRead({ apiKeyId, shareId }) {
+    const key = this.apiKeys.get(apiKeyId);
+    if (!key) return { status: 'key-not-found' };
+
+    const mapKey = `${apiKeyId}\u0000${shareId}`;
+    const existing = this.shareGrants.get(mapKey);
+    if (!existing || existing.can_read !== true) return { status: 'unchanged' };
+
+    if (existing.can_update === true) return { status: 'dependent-grant' };
+
+    if (existing.can_publish === true) {
+      existing.can_read = false;
+    } else {
+      this.shareGrants.delete(mapKey);
+    }
+
+    const stillHasRead = Array.from(this.shareGrants.values())
+      .some(grant => grant.api_key_id === apiKeyId && grant.can_read === true);
+    if (!stillHasRead && Array.isArray(key.scopes)) {
+      key.scopes = key.scopes.filter(scope => scope !== 'share:read');
+    }
+    return { status: 'revoked' };
+  }
+
+  async getShareGrant(apiKeyId, shareId) {
+    const grant = this.shareGrants.get(`${apiKeyId}\u0000${shareId}`);
+    return grant ? { ...grant } : null;
+  }
+
+  async listShareGrantsForKey(apiKeyId) {
+    return Array.from(this.shareGrants.values())
+      .filter(grant => grant.api_key_id === apiKeyId)
+      .sort((left, right) =>
+        Number(left.created_at) - Number(right.created_at) || left.share_id.localeCompare(right.share_id))
+      .map(grant => ({
+        share_id: grant.share_id,
+        can_read: grant.can_read,
+        can_update: grant.can_update,
+        can_publish: grant.can_publish,
+        created_at: grant.created_at,
+        share_title: this.pages.get(grant.share_id)?.title ?? null
+      }));
+  }
+
+  async listGrantedSharePage({ apiKeyId, limit, cursorCreatedAt = null, cursorId = null }) {
+    // The cursor-after comparison and the ORDER BY must be the SAME
+    // deterministic order (S1, #36 rework): JS code-unit comparison on both
+    // sides, mirroring the PostgreSQL adapter where SQL `>` and ORDER BY
+    // share one collation. localeCompare here ordered case-variant IDs
+    // differently than the filter and silently dropped granted Shares.
+    const byIdCodeUnit = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
+    const rows = [];
+    for (const grant of this.shareGrants.values()) {
+      if (grant.api_key_id !== apiKeyId || grant.can_read !== true) continue;
+      const page = this.pages.get(grant.share_id);
+      if (!page) continue;
+      if (cursorCreatedAt !== null) {
+        const after = Number(page.created_at) > Number(cursorCreatedAt)
+          || (Number(page.created_at) === Number(cursorCreatedAt) && byIdCodeUnit(page.id, cursorId) > 0);
+        if (!after) continue;
+      }
+      rows.push(page);
+    }
+    rows.sort((left, right) =>
+      Number(left.created_at) - Number(right.created_at) || byIdCodeUnit(left.id, right.id));
+    return rows.slice(0, limit).map(page => ({
+      id: page.id,
+      created_at: page.created_at,
+      code_type: page.code_type,
+      title: page.title,
+      description: page.description,
+      markdown_theme: page.markdown_theme,
+      current_revision: page.current_revision,
+      access_revision: page.access_revision,
+      published: page.published !== false,
+      is_protected: page.is_protected,
+      expires_at: page.expires_at
+    }));
   }
 
   async touchApiKey(id, usedAt = Date.now()) {
@@ -778,6 +904,11 @@ class MemoryPageRepository {
   async deletePage(id) {
     const deleted = this.pages.delete(id);
     this.revisions.delete(id);
+    if (deleted) {
+      for (const [grantKey, grant] of this.shareGrants) {
+        if (grant.share_id === id) this.shareGrants.delete(grantKey);
+      }
+    }
     return deleted;
   }
 
@@ -846,6 +977,10 @@ class MemoryPageRepository {
       if (this.pages.delete(id)) count += 1;
       this.revisions.delete(id);
     });
+    const deletedIds = new Set(ids);
+    for (const [grantKey, grant] of this.shareGrants) {
+      if (deletedIds.has(grant.share_id)) this.shareGrants.delete(grantKey);
+    }
     return count;
   }
 

@@ -11,11 +11,11 @@ const cookieParser = require('cookie-parser');
 const { performance } = require('node:perf_hooks');
 
 const config = require('./config');
-const { managedIdentity } = require('./utils/apiKeyIdentity');
+const { managedIdentity, CREATE_ONLY_SCOPES, READ_SCOPE } = require('./utils/apiKeyIdentity');
 const { CONTENT_TYPES, CREATE_SHARE, apiCapabilities } = require('./utils/apiCapabilities');
 const capabilities = apiCapabilities(config);
 const { isAccessRevision, requireAccessRevision } = require('./utils/shareAccess');
-const { contentEtag, requireContentBaselineFor, isContentRevision } = require('./utils/contentRevision');
+const { contentEtag, accessEtag, ifNoneMatchMatches, requireContentBaselineFor, isContentRevision } = require('./utils/contentRevision');
 const { publicShareProjection } = require('./utils/publicShareProjection');
 const { createPageRepository } = require('./models/pageRepository');
 const { createPublishing, sendPublishingError } = require('./models/publishing');
@@ -566,7 +566,9 @@ async function requireApiKey(req, res, next) {
     const provided = Buffer.from(key);
 
     if (expected.length === provided.length && timingSafeEqual(expected, provided)) {
-      req.apiKeyIdentity = Object.freeze({ credentialKind: 'legacy' });
+      // Legacy keys stay create-only forever (#24 §6); scopes make that
+      // contract explicit to the resource APIs and discovery.
+      req.apiKeyIdentity = Object.freeze({ credentialKind: 'legacy', scopes: CREATE_ONLY_SCOPES });
       return next();
     }
   }
@@ -598,6 +600,94 @@ async function requireApiKey(req, res, next) {
     console.error('API key validation failed:', error);
     return res.status(503).json({ success: false, error: 'API authentication unavailable' });
   }
+}
+
+/**
+ * Scope gate for the read-only resource APIs (#36). Authenticated credential
+ * without the required scope is 403 — the key exists but may not even ask
+ * for this operation family. Legacy keys carry create-only scopes, so they
+ * are refused here without ever reaching grant checks.
+ */
+function requireScope(scope) {
+  return (req, res, next) => {
+    const identity = req.apiKeyIdentity || {};
+    if (!Array.isArray(identity.scopes) || !identity.scopes.includes(scope)) {
+      return res.status(403).json({
+        success: false,
+        code: 'SCOPE_REQUIRED',
+        scope,
+        retryable: false,
+        error: '当前凭据缺少所需 scope'
+      });
+    }
+    return next();
+  };
+}
+
+/**
+ * Grant-missing and Share-missing answer identically (#24 §6): a 404 that
+ * never reveals whether the instance holds the target Share.
+ */
+function sendShareNotFound(res) {
+  return res.status(404).json({
+    success: false,
+    code: 'SHARE_NOT_FOUND',
+    retryable: false,
+    error: 'Share 不存在或没有对它的授权'
+  });
+}
+
+/**
+ * List cursor (#36): base64url(JSON {t: created_at ms, i: share id}) of the
+ * previous page's last row. Carries no secret and no sort fragment; any
+ * malformed input is a 400 instead of a degraded scan.
+ */
+function parseShareListCursor(raw) {
+  if (raw === undefined || raw === null || String(raw) === '') return { cursor: null };
+  let decoded;
+  try {
+    decoded = JSON.parse(Buffer.from(String(raw), 'base64url').toString('utf8'));
+  } catch {
+    return { error: 'cursor 无效' };
+  }
+  if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) return { error: 'cursor 无效' };
+  const { t, i } = decoded;
+  if (typeof t !== 'string' || !/^[0-9]{1,15}$/.test(t)) return { error: 'cursor 无效' };
+  if (typeof i !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(i)) return { error: 'cursor 无效' };
+  return { cursor: { cursorCreatedAt: t, cursorId: i } };
+}
+
+function encodeShareListCursor(row) {
+  return Buffer.from(JSON.stringify({ t: String(row.created_at), i: row.id }), 'utf8').toString('base64url');
+}
+
+function parseShareListLimit(raw) {
+  if (raw === undefined || raw === null || String(raw) === '') return 20;
+  if (!/^[0-9]{1,4}$/.test(String(raw))) return { error: 'limit 必须是 1-100 的整数' };
+  const value = Number.parseInt(String(raw), 10);
+  if (value < 1 || value > 100) return { error: 'limit 必须是 1-100 的整数' };
+  return value;
+}
+
+/**
+ * Metadata projection of a granted Share (#36). Allow-list by field: never
+ * password/encrypted_password, never grant tables, never Favorite state,
+ * never view counts. Revisions travel as decimal strings (BIGINT safety).
+ */
+function grantedShareProjection(row) {
+  return {
+    id: row.id,
+    createdAt: Number(row.created_at),
+    codeType: row.code_type,
+    title: row.title,
+    description: row.description,
+    markdownTheme: row.markdown_theme,
+    currentRevision: String(row.current_revision),
+    accessRevision: String(row.access_revision),
+    published: row.published !== false,
+    isProtected: row.is_protected === 1,
+    expiresAt: row.expires_at === null || row.expires_at === undefined ? null : Number(row.expires_at)
+  };
 }
 
 async function verifyAdminPassword(password) {
@@ -1190,12 +1280,19 @@ app.get('/admin', (req, res) => {
 app.get('/admin/apis', requireDashboardAdmin, async (req, res) => {
   try {
     const apiKeys = await pageRepository.listApiKeys();
+    // Grants travel with the page render (#36): each key row renders its own
+    // read-grant controls without an extra discovery endpoint.
+    const grantsByApiKey = new Map();
+    for (const apiKey of apiKeys) {
+      grantsByApiKey.set(apiKey.id, await pageRepository.listShareGrantsForKey(apiKey.id));
+    }
     const sessionToken = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE] || '';
 
     return res.render('admin-apis', {
       title: 'QuickShare | API 管理',
       page: 'admin-apis',
       apiKeys,
+      grantsByApiKey,
       capabilities,
       legacyApiKeyConfigured: Boolean(config.shareApiKey),
       csrfToken: config.authEnabled ? createCsrfToken(sessionToken) : ''
@@ -1229,7 +1326,11 @@ app.post('/admin/apis/keys', requireDashboardAdmin, parseSmallJson, requireDashb
         name,
         keyHash: await hashSecret(secret),
         keyPrefix: `qs.${id.slice(0, 8)}…`,
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        // New keys start create-only (#36): read access comes exclusively
+        // from explicit per-Share grants the owner grants afterwards.
+        scopes: ['share:create'],
+        autoGrantNewShareEdit: false
       });
 
       await repository.createAuditLog({
@@ -1248,6 +1349,7 @@ app.post('/admin/apis/keys', requireDashboardAdmin, parseSmallJson, requireDashb
           created_at: apiKey.created_at,
           last_used_at: apiKey.last_used_at,
           credential_version: apiKey.credential_version,
+          scopes: apiKey.scopes,
           secret: `qs.${id}.${secret}`
         }
       });
@@ -1281,6 +1383,97 @@ app.post('/admin/apis/keys/:id/rotate', privateNoStore, requireDashboardAdmin, p
     if (sendPublishingError(res, error)) return;
     console.error('Rotate API key failed:', { name: error?.name, code: safeErrorCode(error) });
     return res.status(500).json({ success: false, error: 'Failed to rotate API key' });
+  }
+});
+
+// Per-Share read grant (#36): owner grants a specific Key read access to a
+// specific Share over Cookie + CSRF. Missing Key OR Share is 404; a duplicate
+// grant is a no-op (changed:false), not a new audit event. The §8 lock order
+// (Key row → Share row) lives inside the repository method.
+app.post('/admin/apis/keys/:id/grants', privateNoStore, requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
+  try {
+    const respond = await publishing.run(async (repository) => {
+      const shareId = String(req.body?.shareId || '').trim();
+
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(shareId)) {
+        return (res) => res.status(400).json({ success: false, error: 'shareId 无效' });
+      }
+
+      const outcome = await repository.grantShareRead({ apiKeyId: req.params.id, shareId });
+
+      if (outcome.status === 'key-not-found') {
+        return (res) => res.status(404).json({ success: false, error: 'API key not found' });
+      }
+      if (outcome.status === 'share-not-found') {
+        return (res) => sendShareNotFound(res);
+      }
+
+      if (outcome.status === 'granted') {
+        await repository.createAuditLog({
+          action: 'api_key.grant',
+          pageId: shareId,
+          details: JSON.stringify({ apiKeyId: req.params.id, shareId, grants: ['read'] }),
+          ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+        });
+      }
+
+      // Authoritative scope list so the UI badges mirror the server (#36).
+      const scopes = (await repository.getApiKeyById(req.params.id))?.scopes || [];
+      const changed = outcome.status === 'granted';
+      return (res) => res.status(changed ? 201 : 200).json({
+        success: true,
+        changed,
+        grant: { apiKeyId: req.params.id, shareId, canRead: true },
+        scopes
+      });
+    });
+    return respond(res);
+  } catch (error) {
+    if (sendPublishingError(res, error)) return;
+    console.error('Grant share read failed:', { name: error?.name, code: safeErrorCode(error) });
+    return res.status(500).json({ success: false, error: '授权失败' });
+  }
+});
+
+// Revoke is idempotent (#36): an absent grant — including one already
+// removed by a Share deletion cascade — is a 200 no-op.
+//
+// Explicit boundary (rework-r1 review observation): a revocation commits
+// and governs every request authorized AFTER it; a read that already passed
+// its grant check is not cancelled mid-flight. Later tickets needing
+// revoke-cancels-in-flight semantics must introduce that serialization
+// explicitly — it is deliberately out of #36 scope.
+app.delete('/admin/apis/keys/:id/grants/:shareId', privateNoStore, requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
+  try {
+    const respond = await publishing.run(async (repository) => {
+      const outcome = await repository.revokeShareRead({ apiKeyId: req.params.id, shareId: req.params.shareId });
+
+      if (outcome.status === 'key-not-found') {
+        return (res) => res.status(404).json({ success: false, error: 'API key not found' });
+      }
+
+      if (outcome.status === 'revoked') {
+        await repository.createAuditLog({
+          action: 'api_key.revoke',
+          pageId: req.params.shareId,
+          details: JSON.stringify({ apiKeyId: req.params.id, shareId: req.params.shareId, grants: ['read'] }),
+          ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+        });
+      }
+
+      if (outcome.status === 'dependent-grant') {
+        return (res) => res.status(409).json({ success: false, error: '编辑授权依赖读取授权，不能单独撤回' });
+      }
+
+      // Authoritative scope list so the UI badges mirror the server (#36).
+      const scopes = (await repository.getApiKeyById(req.params.id))?.scopes || [];
+      return (res) => res.json({ success: true, changed: outcome.status === 'revoked', scopes });
+    });
+    return respond(res);
+  } catch (error) {
+    if (sendPublishingError(res, error)) return;
+    console.error('Revoke share read failed:', { name: error?.name, code: safeErrorCode(error) });
+    return res.status(500).json({ success: false, error: '撤回授权失败' });
   }
 });
 
@@ -2887,6 +3080,114 @@ app.get('/api/v1/me', privateNoStore, requireApiKey, (req, res) => {
 
 app.get('/api/v1/capabilities', privateNoStore, requireApiKey, (req, res) => {
   return res.json({ success: true, ...capabilities });
+});
+
+// ---- Read-only resource APIs (#36, X-API-Key + scope + per-Share grant) ----
+// Every response below is management data: private/no-store via the
+// privateNoStore middleware, no password/encrypted_password, no grant
+// tables, no Favorite state. Grant-missing answers 404 identically to
+// Share-missing; unpublished/locked/expired Shares stay readable because
+// management authorization is independent of public visibility (#24 §6).
+app.get('/api/v1/shares', privateNoStore, requireApiKey, requireScope(READ_SCOPE), async (req, res) => {
+  const limit = parseShareListLimit(req.query.limit);
+  if (limit.error) {
+    return res.status(400).json({ success: false, code: 'INVALID_LIMIT', retryable: false, error: limit.error });
+  }
+  const cursor = parseShareListCursor(req.query.cursor);
+  if (cursor.error) {
+    return res.status(400).json({ success: false, code: 'INVALID_CURSOR', retryable: false, error: cursor.error });
+  }
+
+  try {
+    const rows = await pageRepository.listGrantedSharePage({
+      apiKeyId: req.apiKeyIdentity.id,
+      limit,
+      ...(cursor.cursor || {})
+    });
+
+    // A full page hints at a next one; the cursor names the last row so the
+    // next read continues exactly after it even if new Shares were granted
+    // in between (stable under insertion, #36 AC).
+    const nextCursor = rows.length === limit ? encodeShareListCursor(rows[rows.length - 1]) : null;
+
+    return res.json({
+      success: true,
+      shares: rows.map(grantedShareProjection),
+      ...(nextCursor ? { nextCursor } : {})
+    });
+  } catch (error) {
+    console.error('Granted share list failed:', error);
+    return res.status(500).json({ success: false, error: '服务器错误' });
+  }
+});
+
+app.get('/api/v1/shares/:id/content', privateNoStore, requireApiKey, requireScope(READ_SCOPE), async (req, res) => {
+  try {
+    const identity = req.apiKeyIdentity;
+    const grant = await pageRepository.getShareGrant(identity.id, req.params.id);
+    if (!grant || grant.can_read !== true) return sendShareNotFound(res);
+
+    const page = await pageRepository.getById(req.params.id);
+    if (!page) return sendShareNotFound(res);
+
+    const revision = String(page.current_revision);
+    const etag = contentEtag(page.id, revision);
+
+    if (ifNoneMatchMatches(req.get('if-none-match'), etag)) {
+      res.set('ETag', etag);
+      return res.status(304).end();
+    }
+
+    res.set('ETag', etag);
+    // Full snapshot of the CURRENT revision; the materialized projection is
+    // transactionally identical to that snapshot, so no history is scanned.
+    return res.json({
+      success: true,
+      id: page.id,
+      revision,
+      htmlContent: page.html_content,
+      codeType: page.code_type,
+      title: page.title,
+      description: page.description,
+      markdownTheme: page.markdown_theme
+    });
+  } catch (error) {
+    console.error('Granted share content failed:', error);
+    return res.status(500).json({ success: false, error: '服务器错误' });
+  }
+});
+
+app.get('/api/v1/shares/:id/state', privateNoStore, requireApiKey, requireScope(READ_SCOPE), async (req, res) => {
+  try {
+    const identity = req.apiKeyIdentity;
+    const grant = await pageRepository.getShareGrant(identity.id, req.params.id);
+    // State-only model (#24 §6): a future publish grant also unlocks this
+    // read, but the response stays title/description/body-free either way.
+    if (!grant || (grant.can_read !== true && grant.can_publish !== true)) return sendShareNotFound(res);
+
+    const page = await pageRepository.getById(req.params.id);
+    if (!page) return sendShareNotFound(res);
+
+    const etag = accessEtag(page.id, String(page.access_revision));
+
+    if (ifNoneMatchMatches(req.get('if-none-match'), etag)) {
+      res.set('ETag', etag);
+      return res.status(304).end();
+    }
+
+    res.set('ETag', etag);
+    return res.json({
+      success: true,
+      id: page.id,
+      published: page.published !== false,
+      isProtected: page.is_protected === 1,
+      expiresAt: page.expires_at === null || page.expires_at === undefined ? null : Number(page.expires_at),
+      accessRevision: String(page.access_revision)
+    });
+  } catch (error) {
+    console.error('Granted share state failed:', error);
+    return res.status(500).json({ success: false, error: '服务器错误' });
+  }
 });
 
 app.get('/api/v1/operations/:requestId', privateNoStore, requireApiKey, async (req, res) => {

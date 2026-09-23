@@ -17,18 +17,26 @@ async function get(path, key = 'issue29-legacy') {
   const text = await response.text();
   return { status: response.status, headers: response.headers, body: response.headers.get('content-type')?.includes('json') ? JSON.parse(text) : text };
 }
-test('Key discovery truthfully reports create-only identity, catalog and configured request bytes during maintenance', async () => {
+test('Key discovery truthfully reports scopes, catalog and configured request bytes during maintenance', async () => {
   const me = await get('/api/v1/me');
   assert.equal(me.status, 200);
-  assert.deepEqual(me.body, { success: true, origin: 'https://example.test', credentialKind: 'legacy' });
+  // #36: discovery exposes the credential's scopes; legacy stays create-only.
+  assert.deepEqual(me.body, { success: true, origin: 'https://example.test', credentialKind: 'legacy', scopes: ['share:create'] });
   const capabilities = await get('/api/v1/capabilities');
   assert.equal(capabilities.status, 200);
   assert.deepEqual(capabilities.body.contentTypes, ['html', 'markdown', 'svg', 'mermaid']);
   assert.deepEqual(capabilities.body.markdownThemePresets, ['bytedance', 'github', 'apple', 'notion', 'claude', 'raycast', 'google', 'tesla', 'airbnb', 'bugatti', 'linear', 'playstation']);
   assert.deepEqual(capabilities.body.operations, [
     { id: 'share:create', method: 'POST', path: '/api/v1/share' },
-    { id: 'share:create:status', method: 'GET', path: '/api/v1/operations/:requestId' }
+    { id: 'share:create:status', method: 'GET', path: '/api/v1/operations/:requestId' },
+    { id: 'share:list', method: 'GET', path: '/api/v1/shares' },
+    { id: 'share:content:read', method: 'GET', path: '/api/v1/shares/:id/content' },
+    { id: 'share:state:read', method: 'GET', path: '/api/v1/shares/:id/state' }
   ]);
+  assert.deepEqual(capabilities.body.scopes, {
+    implemented: ['share:create', 'share:read'],
+    notImplemented: ['share:update', 'share:publish']
+  });
   assert.deepEqual(capabilities.body.idempotency, {
     header: 'Idempotency-Key',
     pattern: '^[A-Za-z0-9_-]{16,128}$',
@@ -48,7 +56,9 @@ test('Key discovery truthfully reports create-only identity, catalog and configu
 test('managed discovery exposes only necessary identity; cookies and absent/invalid Keys never authorize discovery', async () => {
   const created = await fetch(base + '/admin/apis/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Identity fixture' }) }).then(r => r.json());
   const { id, secret } = created.apiKey;
-  assert.deepEqual((await get('/api/v1/me', secret)).body, { success: true, origin: 'https://example.test', credentialKind: 'managed', id, name: 'Identity fixture', credentialVersion: '1' });
+  // A fresh managed key starts create-only (#36): read access comes only
+  // from explicit per-Share grants, never from discovery itself.
+  assert.deepEqual((await get('/api/v1/me', secret)).body, { success: true, origin: 'https://example.test', credentialKind: 'managed', id, name: 'Identity fixture', credentialVersion: '1', scopes: ['share:create'] });
   assert.deepEqual((await get('/api/v1/capabilities', secret)).body, (await get('/api/v1/capabilities')).body);
   for (const path of ['/api/v1/me', '/api/v1/capabilities']) {
     assert.equal((await get(path, '')).status, 401);

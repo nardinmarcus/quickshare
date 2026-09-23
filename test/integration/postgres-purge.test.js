@@ -312,7 +312,7 @@ test('unrelated receipts and other revisions are untouched by a purge', async ()
 test('legacy 001-006 schema has no purge columns and 009 upgrades it additively; repeat is idempotent', async () => {
   // The suite's own database already ran 001-009 above; the repeat check:
   const repeat = await runMigrations(repository.pool, { logger: { info() {} } });
-  assert.deepEqual(repeat, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007', '008', '009'] },
+  assert.deepEqual(repeat, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007', '008', '009', '010'] },
     'migration 009 repeats as skipped');
 
   const snapshotColumns = await repository.pool.query(`

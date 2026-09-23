@@ -153,6 +153,36 @@ async function probePurgeColumns(pool) {
   return result.rows[0].present === 2;
 }
 
+// #36 Key-scope fixture gate: true only when migration 010 added the scope
+// columns. On a 001–009 base the scope branch is skipped and reported
+// honestly, never claimed.
+async function probeApiKeyScopesColumn(pool) {
+  const result = await pool.query(
+    `SELECT COUNT(*)::int AS present
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'api_keys'
+       AND column_name IN ('scopes', 'auto_grant_new_share_edit')`
+  );
+
+  return result.rows[0].present === 2;
+}
+
+// #36 share-grants fixture gate: true only when migration 010 created the
+// table.
+async function probeShareGrantsTable(pool) {
+  const result = await pool.query(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM information_schema.tables
+       WHERE table_schema = 'public'
+         AND table_name = 'share_grants'
+     ) AS present`
+  );
+
+  return result.rows[0].present === true;
+}
+
 function sourceUrlFor() {
   return `postgresql://postgres:${FIXTURE.password}@127.0.0.1:${FIXTURE.srcPort}/${FIXTURE.sourceDatabase}`;
 }
@@ -430,7 +460,29 @@ async function seedFixture(pool) {
     );
   }
 
-  return { accessRevisionSeeded, revisionsSeeded, operationsSeeded, purgeSeeded };
+  // #36 grants fixture: one REAL read grant from the fixture Key to the
+  // themed Share. This is also the rotation-survival fixture — the Key row
+  // carries credential_version 9007199254740993 (rotated far past float
+  // safety) while the grant still binds the SAME logical key id, proving
+  // grants reference identity that outlives secret rotation.
+  const scopesSeeded = await probeApiKeyScopesColumn(pool);
+  if (scopesSeeded) {
+    await pool.query(
+      'UPDATE api_keys SET scopes = $2::jsonb, auto_grant_new_share_edit = TRUE WHERE id = $1',
+      [FIXTURE.apiKey.id, JSON.stringify(['share:create', 'share:read'])]
+    );
+  }
+
+  const grantsSeeded = await probeShareGrantsTable(pool);
+  if (grantsSeeded) {
+    await pool.query(
+      `INSERT INTO share_grants (api_key_id, share_id, can_read, created_at)
+       VALUES ($1, $2, TRUE, $3)`,
+      [FIXTURE.apiKey.id, pages.markdownThemed, base + 110]
+    );
+  }
+
+  return { accessRevisionSeeded, revisionsSeeded, operationsSeeded, purgeSeeded, scopesSeeded, grantsSeeded };
 }
 
 async function ensureContainerRunning(name, port, image) {
@@ -617,6 +669,12 @@ async function runDrill({ keepContainers = false, skipContainerSetup = false, ou
       publicationState: seedResult.revisionsSeeded ? 'unpublished-exercised' : 'absent-schema001-006',
       publicationStateAccessRevision: seedResult.revisionsSeeded ? UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE : null,
       publishedFixture: seedResult.revisionsSeeded ? 'non-default-false-with-bumped-access' : 'absent-schema001-006',
+      // #36 scope/grant coverage (migration 010): the fixture key carries a
+      // non-default scope set + auto-grant flag, and one real read grant
+      // bound to its logical id at credential_version 9007199254740993 —
+      // the rotation-survival proof travels through dump → restore.
+      apiKeyScopes: seedResult.scopesSeeded ? 'exercised' : 'absent-schema001-009',
+      shareGrants: seedResult.grantsSeeded ? 'exercised-with-rotation-survival' : 'absent-schema001-009',
       reconciliation: verification ? verification.reconciliation.status : 'not-available',
       safeToServe: false,
       durationsMs: {

@@ -1095,13 +1095,15 @@ class PostgresPageRepository {
   }
 
   async createApiKey(apiKey) {
+    const scopes = Array.isArray(apiKey.scopes) && apiKey.scopes.length > 0 ? apiKey.scopes : ['share:create'];
     const result = await this.pool.query(
       `
-        INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, name, key_prefix, created_at, last_used_at, credential_version
+        INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at, scopes, auto_grant_new_share_edit)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+        RETURNING id, name, key_prefix, created_at, last_used_at, credential_version, scopes, auto_grant_new_share_edit
       `,
-      [apiKey.id, apiKey.name, apiKey.keyHash, apiKey.keyPrefix, apiKey.createdAt]
+      [apiKey.id, apiKey.name, apiKey.keyHash, apiKey.keyPrefix, apiKey.createdAt,
+        JSON.stringify(scopes), apiKey.autoGrantNewShareEdit === true]
     );
 
     return result.rows[0];
@@ -1110,7 +1112,7 @@ class PostgresPageRepository {
   async listApiKeys() {
     const result = await this.pool.query(
       `
-        SELECT id, name, key_prefix, created_at, last_used_at, credential_version
+        SELECT id, name, key_prefix, created_at, last_used_at, credential_version, scopes, auto_grant_new_share_edit
         FROM api_keys
         ORDER BY created_at DESC
       `
@@ -1121,7 +1123,7 @@ class PostgresPageRepository {
 
   async getApiKeyById(id) {
     const result = await this.pool.query(
-      'SELECT id, name, key_hash, key_prefix, created_at, last_used_at, credential_version FROM api_keys WHERE id = $1 LIMIT 1',
+      'SELECT id, name, key_hash, key_prefix, created_at, last_used_at, credential_version, scopes, auto_grant_new_share_edit FROM api_keys WHERE id = $1 LIMIT 1',
       [id]
     );
 
@@ -1138,7 +1140,7 @@ class PostgresPageRepository {
     const result = await this.pool.query(
       `UPDATE api_keys SET key_hash = $2, credential_version = credential_version + 1
        WHERE id = $1
-       RETURNING id, name, key_prefix, created_at, last_used_at, credential_version`,
+       RETURNING id, name, key_prefix, created_at, last_used_at, credential_version, scopes, auto_grant_new_share_edit`,
       [id, keyHash]
     );
     return result.rows[0] || null;
@@ -1151,6 +1153,165 @@ class PostgresPageRepository {
 
   async touchApiKey(id, usedAt = Date.now()) {
     await this.pool.query('UPDATE api_keys SET last_used_at = $2 WHERE id = $1 AND EXISTS (SELECT 1 FROM site_settings WHERE id = 1 AND publishing_writes_paused = FALSE)', [id, usedAt]);
+  }
+
+  // Per-Share read grants (#36, parent #24 §6/§8). Grant and revoke take the
+  // Key row lock FIRST and the Share row lock second — the §8 order — so a
+  // concurrent rotation serializes before any grant decision, and a grant
+  // never interleaves with a Share deletion mid-flight. Both run inside the
+  // caller's publishing transaction; a missing Key or Share is reported by
+  // status, never by throwing past the audit boundary.
+  //
+  // The Key's `share:read` scope follows its grants (#36): the first read
+  // grant unlocks the read API family for this credential, revoking the last
+  // one closes it again. The column therefore never advertises a capability
+  // the key cannot actually use, and migrated create-only keys stay
+  // create-only until the owner explicitly grants a Share.
+  async grantShareRead({ apiKeyId, shareId }) {
+    if (!this.transactionClient) throw new Error('Grant writes require a publishing transaction');
+
+    const keyRow = await this.pool.query('SELECT id, scopes FROM api_keys WHERE id = $1 FOR UPDATE', [apiKeyId]);
+    if (keyRow.rowCount === 0) return { status: 'key-not-found' };
+
+    const shareRow = await this.pool.query('SELECT id FROM pages WHERE id = $1 FOR UPDATE', [shareId]);
+    if (shareRow.rowCount === 0) return { status: 'share-not-found' };
+
+    const existing = await this.pool.query(
+      'SELECT can_read FROM share_grants WHERE api_key_id = $1 AND share_id = $2 FOR UPDATE',
+      [apiKeyId, shareId]
+    );
+
+    let status;
+    if (existing.rowCount > 0) {
+      if (existing.rows[0].can_read === true) return { status: 'unchanged' };
+      await this.pool.query(
+        'UPDATE share_grants SET can_read = TRUE WHERE api_key_id = $1 AND share_id = $2',
+        [apiKeyId, shareId]
+      );
+      status = 'granted';
+    } else {
+      await this.pool.query(
+        'INSERT INTO share_grants (api_key_id, share_id, can_read, created_at) VALUES ($1, $2, TRUE, $3)',
+        [apiKeyId, shareId, Date.now()]
+      );
+      status = 'granted';
+    }
+
+    await this.ensureApiKeyScope(apiKeyId, 'share:read', keyRow.rows[0].scopes);
+    return { status };
+  }
+
+  async ensureApiKeyScope(apiKeyId, scope, currentScopes) {
+    const scopes = Array.isArray(currentScopes) ? currentScopes : [];
+    if (scopes.includes(scope)) return;
+    await this.pool.query(
+      'UPDATE api_keys SET scopes = $2::jsonb WHERE id = $1',
+      [apiKeyId, JSON.stringify([...scopes, scope])]
+    );
+  }
+
+  async dropApiKeyScopeIfUnused(apiKeyId, scope) {
+    const remaining = await this.pool.query(
+      'SELECT EXISTS (SELECT 1 FROM share_grants WHERE api_key_id = $1 AND can_read = TRUE) AS kept',
+      [apiKeyId]
+    );
+    if (remaining.rows[0]?.kept === true) return;
+    await this.pool.query(
+      `UPDATE api_keys
+         SET scopes = COALESCE((
+           SELECT jsonb_agg(s.value)
+             FROM jsonb_array_elements(scopes) s
+            WHERE s.value <> to_jsonb($2::text)
+         ), '[]'::jsonb)
+       WHERE id = $1`,
+      [apiKeyId, scope]
+    );
+  }
+
+  async revokeShareRead({ apiKeyId, shareId }) {
+    if (!this.transactionClient) throw new Error('Grant writes require a publishing transaction');
+
+    const keyRow = await this.pool.query('SELECT id FROM api_keys WHERE id = $1 FOR UPDATE', [apiKeyId]);
+    if (keyRow.rowCount === 0) return { status: 'key-not-found' };
+
+    // Preserve Key → Share lock order, including idempotent revocations.
+    // A deleted Share has already cascaded its grants away.
+    const shareRow = await this.pool.query('SELECT id FROM pages WHERE id = $1 FOR UPDATE', [shareId]);
+    if (shareRow.rowCount === 0) return { status: 'unchanged' };
+
+    const existing = await this.pool.query(
+      'SELECT can_read, can_update, can_publish FROM share_grants WHERE api_key_id = $1 AND share_id = $2 FOR UPDATE',
+      [apiKeyId, shareId]
+    );
+    if (existing.rowCount === 0) return { status: 'unchanged' };
+
+    const grant = existing.rows[0];
+    if (grant.can_read !== true) return { status: 'unchanged' };
+
+    // The schema requires update ⇒ read. Do not silently discard a future
+    // edit grant or violate the constraint when its read bit is revoked.
+    if (grant.can_update === true) return { status: 'dependent-grant' };
+
+    if (grant.can_publish === true) {
+      await this.pool.query(
+        'UPDATE share_grants SET can_read = FALSE WHERE api_key_id = $1 AND share_id = $2',
+        [apiKeyId, shareId]
+      );
+    } else {
+      await this.pool.query(
+        'DELETE FROM share_grants WHERE api_key_id = $1 AND share_id = $2',
+        [apiKeyId, shareId]
+      );
+    }
+
+    await this.dropApiKeyScopeIfUnused(apiKeyId, 'share:read');
+    return { status: 'revoked' };
+  }
+
+  async getShareGrant(apiKeyId, shareId) {
+    const result = await this.pool.query(
+      'SELECT api_key_id, share_id, can_read, can_update, can_publish, created_at FROM share_grants WHERE api_key_id = $1 AND share_id = $2 LIMIT 1',
+      [apiKeyId, shareId]
+    );
+    return result.rows[0] || null;
+  }
+
+  async listShareGrantsForKey(apiKeyId) {
+    const result = await this.pool.query(
+      `
+        SELECT g.share_id, g.can_read, g.can_update, g.can_publish, g.created_at, p.title AS share_title
+        FROM share_grants g
+        LEFT JOIN pages p ON p.id = g.share_id
+        WHERE g.api_key_id = $1
+        ORDER BY g.created_at ASC, g.share_id ASC
+      `,
+      [apiKeyId]
+    );
+    return result.rows;
+  }
+
+  /**
+   * Stable-cursor page of Shares a Key may read (#36): ordered by
+   * (created_at, id) ASC, cursor strictly after the previous page's last
+   * row, so inserts between pages never skip or duplicate entries. Rows
+   * carry NO secret, grant, password or Favorite state — list is metadata
+   * only and never leaks beyond granted Shares.
+   */
+  async listGrantedSharePage({ apiKeyId, limit, cursorCreatedAt = null, cursorId = null }) {
+    const result = await this.pool.query(
+      `
+        SELECT p.id, p.created_at, p.code_type, p.title, p.description, p.markdown_theme,
+               p.current_revision, p.access_revision, p.published, p.is_protected, p.expires_at
+        FROM share_grants g
+        JOIN pages p ON p.id = g.share_id
+        WHERE g.api_key_id = $1 AND g.can_read = TRUE
+          AND ($2::bigint IS NULL OR (p.created_at, p.id) > ($2::bigint, $3::text))
+        ORDER BY p.created_at ASC, p.id ASC
+        LIMIT $4
+      `,
+      [apiKeyId, cursorCreatedAt, cursorId, limit]
+    );
+    return result.rows;
   }
 
   async createAuditLog({ action, pageId, details, ip }) {

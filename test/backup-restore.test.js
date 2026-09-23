@@ -352,6 +352,9 @@ test('post-snapshot revocation detection uses the audit vocabulary the app actua
     { action: 'api_key.rotate', page_id: null, details: '{"apiKeyId":"k1","credentialVersion":"2"}', created_at: String(snapshotAt + 2400) },
     // Key revocation.
     { action: 'api_key.delete', page_id: null, details: '{"apiKeyId":"k1"}', created_at: String(snapshotAt + 2500) },
+    // #36 read-grant revocation restores a dead authorization if replayed:
+    // it must be named explicitly, not lost in generic owner review.
+    { action: 'api_key.revoke', page_id: 'issue36share01', details: '{"apiKeyId":"k1","shareId":"issue36share01","grants":["read"]}', created_at: String(snapshotAt + 2600) },
     // Hard purges.
     { action: 'page.delete', page_id: 'gone2', details: null, created_at: String(snapshotAt + 3000) },
     { action: 'page.delete.batch', page_id: null, details: '{"ids":["x"]}', created_at: String(snapshotAt + 3500) },
@@ -368,6 +371,7 @@ test('post-snapshot revocation detection uses the audit vocabulary the app actua
     'page.update:b',
     'api_key.rotate:null',
     'api_key.delete:null',
+    'api_key.revoke:issue36share01',
     'page.delete:gone2',
     'page.delete.batch:null'
   ]);
@@ -378,6 +382,30 @@ test('post-snapshot revocation detection uses the audit vocabulary the app actua
 
   // Empty audit history must NOT be reported as proof that nothing happened.
   assert.deepEqual(verifyBackup.findPostSnapshotRevocations([], snapshotAt), []);
+
+  // St1: the revoke action is a hard revocation by name.
+  assert.ok(verifyBackup.HARD_REVOCATION_AUDIT_ACTIONS.has('api_key.revoke'), 'api_key.revoke is in the hard revocation vocabulary');
+});
+
+test('managed key row comparison redacts credential material while naming the drift column (St2)', () => {
+  const sourceHash = 'scrypt$N=16384$r=8$p=1$srcSalt$srcDigest';
+  const restoreHash = 'scrypt$N=16384$r=8$p=1$restSalt$restDigest';
+  const sourceRows = [{ id: 'k1', name: 'K', key_hash: sourceHash, key_prefix: 'qs.a', created_at: 1, last_used_at: null, credential_version: '1', scopes: ['share:create'], auto_grant_new_share_edit: false }];
+  const restoreRows = [{ ...sourceRows[0], key_hash: restoreHash, name: 'K-renamed' }];
+
+  const report = verifyBackup.compareApiKeyRows(sourceRows, restoreRows);
+  assert.equal(report.ok, false);
+  assert.ok(report.issues.some(issue => issue.column === 'key_hash'), 'the tampered column is named');
+  assert.ok(report.issues.some(issue => issue.column === 'name'), 'ordinary columns keep their evidence');
+
+  const serialized = JSON.stringify(report);
+  const forms = [sourceHash, restoreHash,
+    encodeURIComponent(sourceHash), encodeURIComponent(restoreHash),
+    JSON.stringify(sourceHash).slice(1, -1), JSON.stringify(restoreHash).slice(1, -1)];
+  for (const form of forms) {
+    assert.ok(!serialized.includes(form), `no hash material leaks (${form.slice(0, 24)}...)`);
+  }
+  assert.match(report.issues.find(issue => issue.column === 'key_hash').message, /redacted/i);
 });
 
 test('credential verification plans fail when fixture material does not cover restored rows', async () => {
@@ -488,10 +516,24 @@ test('verification reports never claim reconciliation is not required', () => {
     'password-verify-and-decrypt',
     'expiry',
     'managed-api-keys',
+    'api-key-scopes',
+    'share-grants',
     'audit-logs',
     'publish-operations',
     'operation-receipt-purges',
     'site-settings',
     'migration-ledger'
   ]);
+});
+
+// #36: scope columns and per-Share grants are part of every trustworthy
+// backup's explicit coverage; a verifier that cannot name them cannot be
+// trusted to notice their loss.
+test('backup coverage names the #36 scope and grant objects explicitly', () => {
+  assert.ok(verifyBackup.COVERED_OBJECTS.includes('api-key-scopes'));
+  assert.ok(verifyBackup.COVERED_OBJECTS.includes('share-grants'));
+  assert.deepEqual(verifyBackup.SHARE_GRANT_COMPARED_COLUMNS, [
+    'api_key_id', 'share_id', 'can_read', 'can_update', 'can_publish', 'created_at'
+  ]);
+  assert.deepEqual(verifyBackup.API_KEY_COMPARED_COLUMNS.slice(-2), ['scopes', 'auto_grant_new_share_edit']);
 });

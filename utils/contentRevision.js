@@ -39,6 +39,50 @@ function contentEtag(shareId, revision) {
 }
 
 /**
+ * Access-state entity-tag (#24 §4, served by GET /api/v1/shares/:id/state):
+ * a strong tag from the SAME quoted convention as contentEtag, covering
+ * published/isProtected/expiresAt/accessRevision and nothing else.
+ */
+function accessEtag(shareId, accessRevision) {
+  return `"access:${shareId}:${accessRevision}"`;
+}
+
+/**
+ * If-None-Match evaluation for the read-only resource GETs (#36). RFC 9110
+ * §13.1.2: GET/HEAD If-None-Match uses WEAK comparison — an opaque tag
+ * matches when its value equals the current tag's value, regardless of the
+ * weakness indicator, and a comma-separated list matches when ANY member
+ * does; `*` always matches. The tags this service GENERATES stay strong
+ * (the #36 guarantee); only the request-side comparison is weak. The write
+ * path (If-Match via parseContentEtag) keeps strict STRONG comparison.
+ */
+function ifNoneMatchMatches(rawHeader, etag) {
+  if (typeof rawHeader !== 'string') return false;
+  const value = rawHeader.trim();
+  if (value === '') return false;
+  if (value === '*') return true;
+  const weakValue = opaqueTagValue(etag);
+  if (weakValue === null) return false;
+  return value.split(',')
+    .map(tag => opaqueTagValue(tag.trim()))
+    .some(tagValue => tagValue !== null && tagValue === weakValue);
+}
+
+/**
+ * Extracts the opaque value between the final pair of double quotes,
+ * ignoring an optional leading weakness indicator. Returns null for
+ * malformed tags (unquoted, unclosed, empty) so they never match.
+ */
+function opaqueTagValue(tag) {
+  if (typeof tag !== 'string' || tag.length < 2) return null;
+  const withoutWeakness = /^[Ww]\//.test(tag) ? tag.slice(2) : tag;
+  if (!withoutWeakness.startsWith('"') || !withoutWeakness.endsWith('"') || withoutWeakness.length < 2) {
+    return null;
+  }
+  return withoutWeakness.slice(1, -1);
+}
+
+/**
  * Parses the dashboard content If-Match value. HTTP strong comparison only:
  * exactly one double-quoted strong tag of the "content:<Share ID>:<Revision>"
  * family. Missing values are a 428; weak tags, wildcards, tag lists, bare
@@ -98,6 +142,8 @@ module.exports = {
   isContentRevision,
   contentError,
   contentEtag,
+  accessEtag,
+  ifNoneMatchMatches,
   parseContentEtag,
   requireContentBaselineFor,
   assertContentRevision
