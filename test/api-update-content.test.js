@@ -291,6 +291,7 @@ test('conditional update preserves body bytes, original URL, no-op and replay se
   assert.equal((await grantEdit(key, otherGrantShare.urlId)).status, 201);
   const path = `/api/v1/shares/${share.urlId}/content`;
   const initial = await request(path, { headers: { 'X-API-Key': key.secret } });
+  assert.equal('url' in initial.body, false, 'content endpoint remains a content-only snapshot');
   const originalUrl = share.url;
   const requestId = 'issue37-content-update-1001';
   const rawBody = '<main>line one\r\n  line two\n漢字</main>';

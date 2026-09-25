@@ -110,7 +110,7 @@ test('managed Key reads bounded metadata pages and one tombstone-safe snapshot',
     assert.equal(typeof row.source, 'string');
     assert.equal(typeof row.current, 'boolean');
     assert.equal(row.current, row.revision === '3');
-    for (const forbidden of ['htmlContent', 'title', 'description', 'snapshotHash', 'actor', 'password', 'favorite', 'grants']) {
+    for (const forbidden of ['htmlContent', 'title', 'description', 'snapshotHash', 'actor', 'password', 'favorite', 'grants', 'url']) {
       assert.equal(forbidden in row, false, `history metadata excludes ${forbidden}`);
     }
   }
@@ -130,6 +130,7 @@ test('managed Key reads bounded metadata pages and one tombstone-safe snapshot',
   assert.equal(single.body.revision.title, 'History target');
   assert.equal(single.body.revision.revision, '1');
   assert.equal(single.body.revision.current, false);
+  assert.equal('url' in single.body.revision, false, 'history snapshots do not add a public URL field');
   assert.equal((await request(`${path}/999`, { headers: keyHeader(readKey.secret) })).status, 404);
   assert.equal((await request(`${path}/01`, { headers: keyHeader(readKey.secret) })).status, 400);
 
@@ -349,7 +350,7 @@ test('managed Key restore is conditional, replayable, no-op safe and keeps acces
   assert.equal(status.status, 200);
   assert.equal(status.body.operations[0].action, 'restore');
   assert.equal(status.body.operations[0].revision, '3');
-  for (const forbidden of ['htmlContent', 'exact v1', 'title', 'description', 'receipt', 'sourceRevision']) {
+  for (const forbidden of ['htmlContent', 'exact v1', 'title', 'description', 'receipt', 'sourceRevision', 'url']) {
     assert.equal(status.text.includes(forbidden), false, `operation status excludes ${forbidden}`);
   }
   const unrelatedKey = await createKey('issue38 unrelated key');

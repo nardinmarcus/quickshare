@@ -3626,11 +3626,10 @@ app.get('/api/v1/shares/:id/state', privateNoStore, markApiResourceReadEndpoint,
 
     const etag = accessEtag(page.id, String(page.access_revision));
 
-    if (ifNoneMatchMatches(req.get('if-none-match'), etag)) {
-      res.set('ETag', etag);
-      return res.status(304).end();
-    }
-
+    // The access ETag remains the write/CAS validator. Always return the body
+    // (even when If-None-Match matches) because the canonical public URL is
+    // resolved from current server configuration and must not be hidden by a
+    // validator that only tracks access policy.
     res.set('ETag', etag);
     return res.json({
       success: true,
@@ -3638,7 +3637,8 @@ app.get('/api/v1/shares/:id/state', privateNoStore, markApiResourceReadEndpoint,
       published: page.published !== false,
       isProtected: page.is_protected === 1,
       expiresAt: page.expires_at === null || page.expires_at === undefined ? null : Number(page.expires_at),
-      accessRevision: String(page.access_revision)
+      accessRevision: String(page.access_revision),
+      url: publicPageUrl(req, page.id)
     });
   } catch (error) {
     console.error('Granted share state failed:', { name: error?.name || 'Error', code: safeErrorCode(error) });
@@ -3646,18 +3646,19 @@ app.get('/api/v1/shares/:id/state', privateNoStore, markApiResourceReadEndpoint,
   }
 });
 
-function apiPublishStateProjection(page) {
+function apiPublishStateProjection(req, page) {
   return {
     id: page.id,
     published: page.published !== false,
     isProtected: page.is_protected === 1,
     expiresAt: page.expires_at === null || page.expires_at === undefined ? null : Number(page.expires_at),
-    accessRevision: String(page.access_revision)
+    accessRevision: String(page.access_revision),
+    url: publicPageUrl(req, page.id)
   };
 }
 
-function sendApiPublishStateResult(res, page, { action, requestId, changed, replayed = false }) {
-  const state = apiPublishStateProjection(page);
+function sendApiPublishStateResult(res, req, page, { action, requestId, changed, replayed = false }) {
+  const state = apiPublishStateProjection(req, page);
   res.set('ETag', accessEtag(page.id, state.accessRevision));
   return res.json({ success: true, action, requestId, changed, ...(replayed ? { replayed: true } : {}), ...state });
 }
@@ -3702,16 +3703,19 @@ async function handleApiPublishStateRequest(req, res, action) {
         if (!outcome.accessUnchanged) {
           // Confirm the operation, but never present its once-current state as
           // if it were the Share's current state after a later access change.
+          // The URL is independently generated from the current public URL
+          // policy; it does not claim the historical state is still current.
           return response => response.json({
             success: true,
             action,
             requestId,
             changed: outcome.receipt.changed === true,
             replayed: true,
-            stateChangedSinceCommit: true
+            stateChangedSinceCommit: true,
+            url: publicPageUrl(req, outcome.page.id)
           });
         }
-        return response => sendApiPublishStateResult(response, outcome.page, {
+        return response => sendApiPublishStateResult(response, req, outcome.page, {
           action, requestId, changed: outcome.receipt.changed === true, replayed: true
         });
       }
@@ -3747,7 +3751,7 @@ async function handleApiPublishStateRequest(req, res, action) {
         receipt_encrypted: encodeOperationReceipt({ changed: result.changed, published: action === 'republish' }),
         created_at: Date.now()
       });
-      return response => sendApiPublishStateResult(response, page, { action, requestId, changed: result.changed });
+      return response => sendApiPublishStateResult(response, req, page, { action, requestId, changed: result.changed });
     }, { apiKeyIdentity: identity, publishingOperation });
     return respond(res);
   } catch (error) {
@@ -4225,7 +4229,12 @@ app.get('/api/v1/operations/:requestId', privateNoStore, (req, res, next) => {
         if (outcome.kind === 'result-unavailable') {
           return response => response.status(410).json({ success: false, code: 'RESULT_UNAVAILABLE', requestId, retryable: false, error: '该操作已提交，但其结果不可用' });
         }
-        const projection = operationStatusProjection(record);
+        const projection = {
+          ...operationStatusProjection(record),
+          // This is the currently canonical public URL, not a URL persisted in
+          // the operation receipt and not a historical access-state claim.
+          url: publicPageUrl(req, outcome.page.id)
+        };
         if (!outcome.accessUnchanged) {
           delete projection.accessRevision;
           projection.stateChangedSinceCommit = true;

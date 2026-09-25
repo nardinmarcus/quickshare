@@ -9,6 +9,8 @@ process.env.AUTH_PASSWORD = 'owner39-front';
 process.env.ADMIN_DASHBOARD_PASSWORD = 'owner39-dashboard';
 process.env.SHARE_API_KEY = 'issue39-legacy-key';
 process.env.SESSION_SECRET = 'issue39-publish-state-session-secret';
+process.env.BASE_URL = 'https://api.quickshare.test';
+process.env.SHARE_BASE_URL = 'https://public.quickshare.test';
 process.env.DATABASE_URL = '';
 process.env.POSTGRES_URL = '';
 
@@ -107,6 +109,8 @@ test('editor scope is not publish permission; a separate owner grant enables the
 
   const stateBefore = await request(`/api/v1/shares/${share.urlId}/state`, { headers: { 'X-API-Key': key.secret } });
   assert.equal(stateBefore.status, 200, 'editor can read authorized minimal state');
+  assert.equal(stateBefore.body.url, `${process.env.SHARE_BASE_URL}/view/${encodeURIComponent(share.urlId)}`,
+    'read-scope/can_read receives the same canonical URL projection as publish-only');
   const denied = await transition(key.secret, share.urlId, 'unpublish', stateBefore.headers.get('etag'), 'issue39-editor-denied-0001');
   assert.equal(denied.status, 403);
   assert.equal(denied.body.code, 'SCOPE_REQUIRED');
@@ -131,6 +135,7 @@ test('editor scope is not publish permission; a separate owner grant enables the
   assert.equal(result.body.changed, true);
   assert.equal(result.body.published, false);
   assert.equal(result.body.accessRevision, '2');
+  assert.equal(result.body.url, `${process.env.SHARE_BASE_URL}/view/${encodeURIComponent(share.urlId)}`);
   assert.match(result.headers.get('etag'), new RegExp(`^"access:${share.urlId}:2"$`));
 
   const after = await app.locals.pageRepository.getById(share.urlId);
@@ -158,10 +163,15 @@ test('publish-only sees minimal state but never enters readable list/content/his
   assert.equal(state.status, 200);
   assert.match(state.headers.get('cache-control'), /no-store/);
   assert.match(state.headers.get('etag'), new RegExp(`^"access:${publishOnly.urlId}:1"$`));
-  assert.deepEqual(Object.keys(state.body).sort(), ['accessRevision', 'expiresAt', 'id', 'isProtected', 'published', 'success'].sort());
+  assert.deepEqual(Object.keys(state.body).sort(), ['accessRevision', 'expiresAt', 'id', 'isProtected', 'published', 'success', 'url'].sort());
   assert.deepEqual(state.body, {
-    success: true, id: publishOnly.urlId, published: true, isProtected: true, expiresAt: null, accessRevision: '1'
+    success: true, id: publishOnly.urlId, published: true, isProtected: true, expiresAt: null, accessRevision: '1',
+    url: `${process.env.SHARE_BASE_URL}/view/${encodeURIComponent(publishOnly.urlId)}`
   });
+  const identity = await request('/api/v1/me', { headers: { 'X-API-Key': key.secret } });
+  assert.equal(identity.body.origin, new URL(process.env.BASE_URL).origin);
+  assert.notEqual(state.body.url, `${identity.body.origin}/view/${encodeURIComponent(publishOnly.urlId)}`,
+    'URL comes from the configured public host, not /me origin');
   assert.equal(state.text.includes('PUBLISH_ONLY_PRIVATE_TITLE'), false);
   assert.equal(state.text.includes('PRIVATE_BODY_39'), false);
 
@@ -219,14 +229,17 @@ test('state preconditions are access-family strong tags; replay is idempotent an
   assert.equal(replay.body.replayed, true);
   assert.equal(replay.body.published, false);
   assert.equal(replay.body.accessRevision, '2');
+  assert.equal(replay.body.url, `${process.env.SHARE_BASE_URL}/view/${encodeURIComponent(share.urlId)}`);
 
   const status = await request('/api/v1/operations/issue39-publish-replay-000001', { headers: { 'X-API-Key': key.secret } });
   assert.equal(status.status, 200);
   assert.equal(status.body.operations[0].action, 'unpublish');
   assert.equal(status.body.operations[0].accessRevision, '2');
+  assert.equal(status.body.operations[0].url, `${process.env.SHARE_BASE_URL}/view/${encodeURIComponent(share.urlId)}`);
 
   const stale = await transition(key.secret, share.urlId, 'republish', etag1, 'issue39-publish-stale-000001');
   assert.equal(stale.status, 412, 'different intent with stale access ETag is rejected');
+  assert.equal('url' in stale.body, false, 'a stale CAS error does not act as an existence oracle');
   const differentActionSameRequest = await transition(key.secret, share.urlId, 'republish', etag1, 'issue39-publish-replay-000001');
   assert.equal(differentActionSameRequest.status, 409, 'same id cannot cross transition actions');
 
@@ -240,10 +253,13 @@ test('state preconditions are access-family strong tags; replay is idempotent an
   assert.equal(staleReplay.body.stateChangedSinceCommit, true);
   assert.equal('published' in staleReplay.body, false);
   assert.equal('accessRevision' in staleReplay.body, false);
+  assert.equal(staleReplay.body.url, `${process.env.SHARE_BASE_URL}/view/${encodeURIComponent(share.urlId)}`,
+    'a stale replay names only the current canonical URL, not historical state');
   const staleStatus = await request('/api/v1/operations/issue39-publish-replay-000001', { headers: { 'X-API-Key': key.secret } });
   assert.equal(staleStatus.status, 200);
   assert.equal(staleStatus.body.operations[0].stateChangedSinceCommit, true);
   assert.equal('accessRevision' in staleStatus.body.operations[0], false);
+  assert.equal(staleStatus.body.operations[0].url, `${process.env.SHARE_BASE_URL}/view/${encodeURIComponent(share.urlId)}`);
 
   const apiKey = await app.locals.pageRepository.getApiKeyById(key.id);
   const audits = await app.locals.pageRepository.listAuditLogs({ limit: 1000 });
@@ -291,6 +307,8 @@ test('content purge preserves publish-state receipts and replay hides stale stat
     assert.equal(replay.body.changed, committed.body.changed);
     assert.equal(replay.body.published, committedPublished);
     assert.equal(replay.body.accessRevision, committedAccessRevision);
+    assert.equal(replay.body.url, `${process.env.SHARE_BASE_URL}/view/${encodeURIComponent(share.urlId)}`,
+      'publish receipt remains URL-bearing even after its old content Revision is purged');
     const afterReplay = await repository.getById(share.urlId);
     assert.equal(String(afterReplay.access_revision), String(beforeReplay.access_revision), 'replay does not bump access revision');
     assert.equal(afterReplay.published, beforeReplay.published, 'replay does not change publication state');
@@ -304,6 +322,7 @@ test('content purge preserves publish-state receipts and replay hides stale stat
     assert.equal(status.body.operations[0].status, 'succeeded');
     assert.equal(status.body.operations[0].revision, '1');
     assert.equal(status.body.operations[0].accessRevision, committedAccessRevision);
+    assert.equal(status.body.operations[0].url, `${process.env.SHARE_BASE_URL}/view/${encodeURIComponent(share.urlId)}`);
     assert.equal(await auditCount(`page.${action}`), committedAuditCount, 'replay and status add no audit effects');
 
     const changedState = await request(`/api/v1/shares/${share.urlId}/state`, { headers: { 'X-API-Key': key.secret } });
@@ -327,6 +346,42 @@ test('content purge preserves publish-state receipts and replay hides stale stat
     assert.equal(await auditCount(`page.${laterAction}`), afterLaterAuditCount, 'stale replay and status do not repeat the later transition');
     assert.equal(String((await repository.getById(share.urlId)).access_revision), laterAccessRevision);
   }
+});
+
+test('unavailable or deleted publish results never expose a URL or stale state', async () => {
+  const key = await createKey('unavailable publication result');
+  const repository = app.locals.pageRepository;
+  const unavailableShare = await createShare('Unavailable result');
+  await grant(key, unavailableShare.urlId, { canPublish: true });
+  const unavailableState = await request(`/api/v1/shares/${unavailableShare.urlId}/state`, { headers: { 'X-API-Key': key.secret } });
+  const unavailableRequestId = 'issue39-unavailable-result-0001';
+  const unavailableCommit = await transition(key.secret, unavailableShare.urlId, 'unpublish', unavailableState.headers.get('etag'), unavailableRequestId);
+  assert.equal(unavailableCommit.status, 200);
+  const unavailableRecord = await repository.findPublishingOperation(`managed-key:${key.id}`, unavailableRequestId);
+  unavailableRecord.receipt_encrypted = null;
+
+  const unavailableStatus = await request(`/api/v1/operations/${unavailableRequestId}`, { headers: { 'X-API-Key': key.secret } });
+  assert.equal(unavailableStatus.status, 410);
+  assert.equal(unavailableStatus.body.code, 'RESULT_UNAVAILABLE');
+  assert.equal('url' in unavailableStatus.body, false);
+  assert.equal('operations' in unavailableStatus.body, false);
+  const unavailableReplay = await transition(key.secret, unavailableShare.urlId, 'unpublish', unavailableState.headers.get('etag'), unavailableRequestId);
+  assert.equal(unavailableReplay.status, 410);
+  assert.equal('url' in unavailableReplay.body, false);
+  assert.equal('published' in unavailableReplay.body, false);
+
+  const deletedShare = await createShare('Deleted publish result');
+  await grant(key, deletedShare.urlId, { canPublish: true });
+  const deletedState = await request(`/api/v1/shares/${deletedShare.urlId}/state`, { headers: { 'X-API-Key': key.secret } });
+  const deletedRequestId = 'issue39-deleted-result-0001';
+  assert.equal((await transition(key.secret, deletedShare.urlId, 'unpublish', deletedState.headers.get('etag'), deletedRequestId)).status, 200);
+  assert.equal(await repository.deletePage(deletedShare.urlId), true);
+  const deletedStatus = await request(`/api/v1/operations/${deletedRequestId}`, { headers: { 'X-API-Key': key.secret } });
+  assert.equal(deletedStatus.status, 404, 'deleted Share and missing authorization remain non-enumerating');
+  assert.equal(deletedStatus.text.includes('url'), false);
+  const deletedReplay = await transition(key.secret, deletedShare.urlId, 'unpublish', deletedState.headers.get('etag'), deletedRequestId);
+  assert.equal(deletedReplay.status, 404);
+  assert.equal('url' in deletedReplay.body, false);
 });
 
 test('read API storage failures have a stable retryable private/no-store contract', async () => {
@@ -400,8 +455,13 @@ test('first/last publish grants control scope; revocation blocks replay/status a
   assert.equal(revokeOne.body.changed, true);
   assert.equal(revokeOne.body.grant, null, 'publish-only grant row is deleted when its final permission is removed');
   assert.ok(revokeOne.body.scopes.includes('share:publish'), 'another publish grant retains the scope');
+  const deniedState = await request(`/api/v1/shares/${one.urlId}/state`, { headers: { 'X-API-Key': key.secret } });
+  assert.equal(deniedState.status, 404);
+  assert.equal('url' in deniedState.body, false, 'missing grant does not reveal whether a Share URL exists');
   assert.equal((await transition(key.secret, one.urlId, 'unpublish', state.headers.get('etag'), 'issue39-revoke-status-00001')).status, 404);
-  assert.equal((await request('/api/v1/operations/issue39-revoke-status-00001', { headers: { 'X-API-Key': key.secret } })).status, 404);
+  const deniedStatus = await request('/api/v1/operations/issue39-revoke-status-00001', { headers: { 'X-API-Key': key.secret } });
+  assert.equal(deniedStatus.status, 404);
+  assert.equal(deniedStatus.text.includes('url'), false, 'revoked grant does not reveal an operation URL');
 
   const revokeTwo = await request(`/admin/apis/keys/${key.id}/grants/${two.urlId}`, {
     method: 'PUT', headers: ownerHeaders, body: { canPublish: false }
@@ -413,6 +473,12 @@ test('first/last publish grants control scope; revocation blocks replay/status a
   const rotated = await request(`/admin/apis/keys/${key.id}/rotate`, { method: 'POST', headers: ownerHeaders, body: {} });
   assert.equal(rotated.status, 200);
   assert.equal((await transition(key.secret, one.urlId, 'unpublish', state.headers.get('etag'), 'issue39-old-key-write-0001')).status, 401);
+  const revokedState = await request(`/api/v1/shares/${one.urlId}/state`, { headers: { 'X-API-Key': key.secret } });
+  assert.equal(revokedState.status, 401);
+  assert.equal('url' in revokedState.body, false);
+  const revokedStatus = await request('/api/v1/operations/issue39-revoke-status-00001', { headers: { 'X-API-Key': key.secret } });
+  assert.equal(revokedStatus.status, 401);
+  assert.equal(revokedStatus.text.includes('url'), false);
   assert.deepEqual(rotated.body.apiKey.scopes, ['share:create']);
 });
 
@@ -420,10 +486,11 @@ test('same-state no-op and public protected/expired projection retain #35 behavi
   const key = await createKey('publish noop and expiry');
   const protectedShare = await createShare('Already published protected', { isProtected: true });
   const expiredId = 'issue39-expired-share';
+  const expiredAt = Date.now() - 60_000;
   await app.locals.pageRepository.create({
     id: expiredId, htmlContent: '<h1>Expired</h1>', createdAt: Date.now(),
     isProtected: false, codeType: 'html', title: 'Expired Secret Title',
-    expiresAt: Date.now() - 60_000, markdownTheme: null
+    expiresAt: expiredAt, markdownTheme: null
   });
   await grant(key, protectedShare.urlId, { canPublish: true });
   await grant(key, expiredId, { canPublish: true });
@@ -435,15 +502,31 @@ test('same-state no-op and public protected/expired projection retain #35 behavi
   assert.equal(noop.body.changed, false);
   assert.equal(noop.body.isProtected, true);
   assert.equal(noop.body.accessRevision, '1');
-  assert.equal((await transition(key.secret, protectedShare.urlId, 'republish', state.headers.get('etag'), 'issue39-republish-noop-0001')).body.replayed, true);
+  assert.equal(noop.body.url, `${process.env.SHARE_BASE_URL}/view/${encodeURIComponent(protectedShare.urlId)}`);
+  const noOpReplay = await transition(key.secret, protectedShare.urlId, 'republish', state.headers.get('etag'), 'issue39-republish-noop-0001');
+  assert.equal(noOpReplay.body.replayed, true);
+  assert.equal(noOpReplay.body.url, `${process.env.SHARE_BASE_URL}/view/${encodeURIComponent(protectedShare.urlId)}`);
+  const noOpStatus = await request('/api/v1/operations/issue39-republish-noop-0001', { headers: { 'X-API-Key': key.secret } });
+  assert.equal(noOpStatus.status, 200);
+  assert.equal(noOpStatus.body.operations[0].action, 'republish');
+  assert.equal(noOpStatus.body.operations[0].url, noOpReplay.body.url);
   const auditsAfter = (await app.locals.pageRepository.listAuditLogs({ limit: 1000 })).filter(row => row.action === 'page.republish').length;
   assert.equal(auditsAfter, auditsBefore, 'same-state no-op has no audit side effect');
 
   const expiredState = await request(`/api/v1/shares/${expiredId}/state`, { headers: { 'X-API-Key': key.secret } });
+  assert.equal(expiredState.body.url, `${process.env.SHARE_BASE_URL}/view/${encodeURIComponent(expiredId)}`);
+  assert.equal(expiredState.body.expiresAt, expiredAt);
   const expiredTransition = await transition(key.secret, expiredId, 'unpublish', expiredState.headers.get('etag'), 'issue39-expired-unpublish-0001');
   assert.equal(expiredTransition.status, 200, 'expired Share remains manageable by an explicit grant');
+  assert.equal(expiredTransition.body.url, `${process.env.SHARE_BASE_URL}/view/${encodeURIComponent(expiredId)}`);
+  assert.equal(expiredTransition.body.isProtected, false);
+  assert.equal(expiredTransition.body.expiresAt, expiredAt);
   assert.equal((await request(`/view/${expiredId}`)).status, 404, 'unpublished precedes expired public classification');
   const protectedTransition = await transition(key.secret, protectedShare.urlId, 'unpublish', state.headers.get('etag'), 'issue39-protected-unpublish-0001');
   assert.equal(protectedTransition.status, 200);
+  assert.equal(protectedTransition.body.published, false);
+  assert.equal(protectedTransition.body.isProtected, true);
+  assert.equal(protectedTransition.body.expiresAt, null);
+  assert.equal(protectedTransition.body.url, `${process.env.SHARE_BASE_URL}/view/${encodeURIComponent(protectedShare.urlId)}`);
   assert.equal((await request(`/view/${protectedShare.urlId}`)).status, 404);
 });

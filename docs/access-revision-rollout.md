@@ -35,6 +35,38 @@ response replays the committed result from the operation ledger. See
 [publishing-operations](publishing-operations.md) for the full action
 contract.
 
+## Managed API canonical public URL receipts (#42)
+
+For an authorized managed Key, `GET /api/v1/shares/:id/state` now includes
+`url`. Publish/unpublish success returns the same field for a changed
+transition, a same-state no-op and an idempotent replay. Authorized
+`GET /api/v1/operations/:requestId` publication metadata includes `url` only
+while the Share and operation result remain available and current scope/grant
+checks still pass. These are metadata-only receipts: publish-only access still
+receives no title, description, body, password, or history.
+
+The response `url` is generated at request time by the server's existing
+`publicPageUrl` / `publicOrigin` policy: `SHARE_BASE_URL`, then `BASE_URL`, then
+the request origin. The Share ID is URL-encoded. It is the **current canonical
+public URL**, not a persisted creation-time/original URL; no URL history or
+schema change is introduced. This is why clients must not derive it from
+`GET /api/v1/me`'s API origin.
+
+State GET always returns the URL-bearing 200 representation, even when the
+request supplies a matching `If-None-Match`. Its `ETag` remains the strong
+`access:<id>:<accessRevision>` write/CAS precondition for unpublish/republish,
+not a conditional-GET validator. Content GET retains its separate content
+ETag and existing conditional GET behavior. State, transition and operation
+responses remain private/no-store.
+
+A replay whose access policy changed since commit confirms only the operation
+and its `stateChangedSinceCommit` marker; it omits committed `published` and
+`accessRevision` values, while `url` still names the current canonical URL.
+Deleted Shares remain non-enumerating 404s after their grants are removed;
+unavailable operation results answer 410 without a URL. Missing/revoked Share
+grants remain non-enumerating, and revoked credentials remain unauthorized.
+Protected, expired and unpublished state invariants are unchanged.
+
 These slices do **not** introduce content Revisions, grants or maintenance mode. Shared deployment/backup documentation is owned by #27.
 
 ## Separately authorized deployment procedure

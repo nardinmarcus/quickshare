@@ -49,6 +49,22 @@ test('publish-only state alternative and conditional endpoints are represented e
   assert.equal(staleReplay.additionalProperties, false, 'stale replay shape cannot leak the historical state or ETag identity');
 });
 
+test('operation-status schema conditionally requires URL only for publish actions', () => {
+  const statusOperation = document.paths['/api/v1/operations/{requestId}'].get;
+  const responseSchema = statusOperation.responses['200'].content['application/json'].schema;
+  assert.equal(responseSchema.$ref, '#/components/schemas/OperationStatusResponse');
+  const itemSchema = document.components.schemas.OperationStatusResponse.properties.operations.items;
+  assert.equal(itemSchema.$ref, '#/components/schemas/OperationStatus');
+
+  const operationStatus = document.components.schemas.OperationStatus;
+  assert.equal(operationStatus.properties.url.format, 'uri');
+  const publishOnlyUrl = operationStatus.allOf.find(condition => condition.if);
+  assert.ok(publishOnlyUrl, 'the JSON Schema has an explicit action-dependent condition');
+  assert.deepEqual(publishOnlyUrl.if.properties.action.enum, ['unpublish', 'republish']);
+  assert.deepEqual(publishOnlyUrl.then.required, ['url'], 'successful publish operation statuses require the current URL');
+  assert.deepEqual(publishOnlyUrl.else.not.required, ['url'], 'content/restore and other actions do not expose this publication URL');
+});
+
 test('list, content and state reads document their runtime retryable storage-error contract', () => {
   const unavailable = document.components.schemas.ReadUnavailable;
   assert.ok(unavailable, 'read-storage failures have a dedicated response schema');

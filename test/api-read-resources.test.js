@@ -112,7 +112,7 @@ test('cursor is stable under insertion: rows are never skipped or duplicated', a
   assert.deepEqual([...walked].sort(), [...seen, ...page2Ids.filter(id => !seen.includes(id)), latecomer].sort(), 'every granted Share is reached exactly once');
 });
 
-test('content and state carry separate strong ETags with honest 304 semantics', async () => {
+test('content ETag caches representations while state ETag remains a URL-bearing access CAS token', async () => {
   const key = await createKey('etag key');
   const shareId = await createShare('ETag Share');
   await request(`/admin/apis/keys/${key.id}/grants`, { method: 'POST', body: { shareId } });
@@ -136,7 +136,10 @@ test('content and state carry separate strong ETags with honest 304 semantics', 
   const revalidateState = await request(`/api/v1/shares/${shareId}/state`, {
     headers: { 'X-API-Key': key.secret, 'If-None-Match': stateEtag }
   });
-  assert.equal(revalidateState.status, 304);
+  assert.equal(revalidateState.status, 200, 'state always returns the current canonical URL even when access ETag matches');
+  assert.equal(typeof revalidateState.body.url, 'string');
+  assert.ok(revalidateState.body.url.endsWith(`/view/${encodeURIComponent(shareId)}`));
+  assert.equal(revalidateState.headers.get('etag'), stateEtag, 'ETag remains the access-state write precondition');
 
   // Cross-family and stale tags answer 200 again, never a false 304.
   assert.equal((await request(`/api/v1/shares/${shareId}/content`, {

@@ -127,11 +127,19 @@ when publish is toggled. A publish-only row is retained even with
 publish-only. Auto-edit for future creations never adds `share:publish`.
 
 `GET /api/v1/shares/:id/state` permits either `share:read` + `can_read`, or
-`share:publish` + `can_publish`. The allow-list is exactly `id`, `published`,
-`isProtected`, `expiresAt`, and decimal-string `accessRevision`, with the
-strong state ETag `"access:<id>:<accessRevision>"` and private/no-store. A
-publish-only Key cannot list Shares, read content or revision history, or see
-title/description metadata; the list adapter selects only `can_read` rows.
+`share:publish` + `can_publish`. The authorized allow-list is exactly `id`,
+`published`, `isProtected`, `expiresAt`, decimal-string `accessRevision`, and
+`url`. `url` is generated from the current canonical public URL policy
+(`SHARE_BASE_URL` → `BASE_URL` → request origin), with the Share ID URL-encoded;
+it is not a persisted creation-time URL. Both authorization paths receive the
+same URL field, but it adds no title, description, body, password, revision
+history or other content metadata. Missing/revoked grants remain non-enumerating.
+The response is private/no-store and always returns its URL-bearing 200 body,
+even with a matching `If-None-Match`; the strong state ETag
+`"access:<id>:<accessRevision>"` remains the write/CAS precondition, not a
+conditional-GET validator. A publish-only Key still cannot list Shares, read
+content or revision history, or see title/description metadata; the list
+adapter selects only `can_read` rows.
 
 `POST /api/v1/shares/:id/unpublish` and `/republish` require a managed Key,
 `share:publish`, the current Share `can_publish` grant, the exact strong state
@@ -159,11 +167,18 @@ returns its state and state ETag only while the current access revision still
 matches the recorded result. If a later access change occurred, the response
 confirms replay but omits the old published value and ETag. The operation
 status endpoint likewise checks current `share:publish` and `can_publish`; it
-removes the result access revision after later access change. Revoked
-credentials/grants cannot replay or query the result. Old access cookies are
-invalidated by the real transition. The public projection remains #35's:
-unpublished is neutral 404, published-but-expired is 410, and republish never
-removes protection or extends expiry.
+removes the result access revision after later access change. For an authorized
+200 operation-status result, publication actions (`unpublish` / `republish`)
+include `url`, generated as the current canonical public URL; content-update
+and restore status entries do not include that field. When access state changed,
+this URL still identifies the current canonical URL and does not assert that the
+committed state remains current. Missing authorization is non-enumerating, and
+unavailable/deleted results do not return a URL. The OpenAPI 3.1 schema
+conditionally requires `url` for publication actions and excludes it for other
+actions. Revoked credentials/grants cannot replay or query the result. Old
+access cookies are invalidated by the real transition. The public projection
+remains #35's: unpublished is neutral 404, published-but-expired is 410, and
+republish never removes protection or extends expiry.
 
 ## Dashboard content saves and restores (#33)
 

@@ -112,7 +112,8 @@ test('grant then read: scope, grant, content, state and list all agree', async (
   const state = await request(`/api/v1/shares/${share.urlId}/state`, { headers: { 'X-API-Key': key.secret } });
   assert.equal(state.status, 200);
   assert.deepEqual(state.body, {
-    success: true, id: share.urlId, published: true, isProtected: false, expiresAt: null, accessRevision: '1'
+    success: true, id: share.urlId, published: true, isProtected: false, expiresAt: null, accessRevision: '1',
+    url: share.url
   });
   assert.match(state.headers.get('etag'), /^"access:.+:1"$/);
 
