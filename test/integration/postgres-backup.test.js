@@ -7,7 +7,13 @@ const { spawn } = require('node:child_process');
 
 const { createPostgresPool } = require('../../models/postgres-config');
 const { runMigrations } = require('../../models/postgres-migrations');
-const { sanitizeChildEnv, redactCommandArgs } = require('../../scripts/backup-db');
+const {
+  isLocalHost,
+  parseConnectionStringParts,
+  samePostgresEndpoint,
+  sanitizeChildEnv,
+  redactCommandArgs
+} = require('../../scripts/backup-db');
 
 const sourceUrl = process.env.POSTGRES_BACKUP_TEST_SRC_URL;
 const restoreUrl = process.env.POSTGRES_BACKUP_TEST_RESTORE_URL;
@@ -19,11 +25,18 @@ if (!sourceUrl || !restoreUrl) {
   );
 }
 
-for (const [label, value] of [['source', sourceUrl], ['restore', restoreUrl]]) {
-  const url = new URL(value);
-  const database = decodeURIComponent(url.pathname.replace(/^\//, ''));
+const { validatePostgresTestUrl } = require('../../scripts/release-readiness-check');
+validatePostgresTestUrl(sourceUrl);
+validatePostgresTestUrl(restoreUrl);
 
-  if (!['127.0.0.1', 'localhost', '::1'].includes(url.hostname) || !database.endsWith('_test')) {
+const sourceTarget = parseConnectionStringParts(sourceUrl);
+const restoreTargetUrl = parseConnectionStringParts(restoreUrl);
+if (samePostgresEndpoint(sourceTarget, restoreTargetUrl)) {
+  throw new Error('PostgreSQL backup test source and restore URLs must target distinct databases');
+}
+
+for (const [label, target] of [['source', sourceTarget], ['restore', restoreTargetUrl]]) {
+  if (!isLocalHost(target.host) || !target.database.endsWith('_test')) {
     throw new Error(`${label} backup test URL must use localhost and a database ending in _test`);
   }
 }
@@ -202,6 +215,7 @@ test('native restore rebuilds the database and passes full verification', async 
   const restoreResult = await runStep(process.execPath, [
     'scripts/restore-db.js',
     '--manifest', manifestPath,
+    '--source-url', sourceUrl,
     '--target-url', restoreUrl,
     ...(restoreDocker ? ['--docker', restoreDocker] : []),
     '--output', path.join(tmpDir, 'restore-manifest.json')
@@ -549,7 +563,7 @@ test('a tampered #33 restore operation receipt fails verification by its own req
   assert.equal(backup.code, 0, backup.stderr);
   const manifestPath = path.join(drillDir, fs.readdirSync(drillDir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json')));
   const restore = await runStep(process.execPath, [
-    'scripts/restore-db.js', '--manifest', manifestPath, '--target-url', restoreUrl,
+    'scripts/restore-db.js', '--manifest', manifestPath, '--source-url', sourceUrl, '--target-url', restoreUrl,
     ...(restoreDocker ? ['--docker', restoreDocker] : [])
   ]);
   assert.equal(restore.code, 0, restore.stderr);
@@ -588,7 +602,7 @@ test('a tampered #33 restore operation receipt fails verification by its own req
     // Shared restore target: wipe the named tamper so later tests observe
     // the manifest-clean state they expect.
     const cleanup = await runStep(process.execPath, [
-      'scripts/restore-db.js', '--manifest', manifestPath, '--target-url', restoreUrl,
+      'scripts/restore-db.js', '--manifest', manifestPath, '--source-url', sourceUrl, '--target-url', restoreUrl,
       ...(restoreDocker ? ['--docker', restoreDocker] : [])
     ]);
     assert.equal(cleanup.code, 0, cleanup.stderr);
@@ -625,7 +639,7 @@ test('a tampered #33 restore operation receipt fails verification by its own req
   }
 
   const apiRevert = await runStep(process.execPath, [
-    'scripts/restore-db.js', '--manifest', manifestPath, '--target-url', restoreUrl,
+    'scripts/restore-db.js', '--manifest', manifestPath, '--source-url', sourceUrl, '--target-url', restoreUrl,
     ...(restoreDocker ? ['--docker', restoreDocker] : [])
   ]);
   assert.equal(apiRevert.code, 0, apiRevert.stderr);
@@ -1072,7 +1086,7 @@ test('an unpublish-state tamper fails verification and reverting the restore ret
   // into the target, then verification returns to exit 0 — proving the
   // revert path (not a stale pass) restores a trustworthy state.
   const revert = await runStep(process.execPath, [
-    'scripts/restore-db.js', '--manifest', manifestPath, '--target-url', restoreUrl,
+    'scripts/restore-db.js', '--manifest', manifestPath, '--source-url', sourceUrl, '--target-url', restoreUrl,
     ...(restoreDocker ? ['--docker', restoreDocker] : [])
   ]);
   assert.equal(revert.code, 0, revert.stderr);
@@ -1374,7 +1388,7 @@ test('restored database missing the whole share_grants table fails with ledger a
 
   // Cleanup: full re-restore brings the table and fixture grant back.
   const cleanup = await runStep(process.execPath, [
-    'scripts/restore-db.js', '--manifest', manifestPath, '--target-url', restoreUrl,
+    'scripts/restore-db.js', '--manifest', manifestPath, '--source-url', sourceUrl, '--target-url', restoreUrl,
     ...(restoreDocker ? ['--docker', restoreDocker] : [])
   ]);
   assert.equal(cleanup.code, 0, cleanup.stderr);

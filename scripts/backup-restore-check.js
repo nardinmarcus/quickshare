@@ -24,9 +24,12 @@ const { runMigrations } = require('../models/postgres-migrations');
 const { encryptSecret, hashSecret } = require('../utils/security');
 
 const {
+  assertTestDatabaseUrl,
   localPoolEnv,
   parseCliArgs,
+  parseConnectionStringParts,
   runCommand,
+  samePostgresEndpoint,
   sanitizeChildEnv
 } = require('./backup-db');
 
@@ -37,14 +40,14 @@ const FIXTURE = {
   // Container names/ports are overridable per environment (Q27_DRILL_* env)
   // so an isolated run can use its OWN namespace without touching another
   // ticket's containers; the defaults stay the original #27 values.
-  srcContainer: process.env.Q27_DRILL_SRC_CONTAINER || 'issue27-pg-src',
-  restoreContainer: process.env.Q27_DRILL_RESTORE_CONTAINER || 'issue27-pg-restore',
-  srcPort: Number(process.env.Q27_DRILL_SRC_PORT) || 5541,
-  restorePort: Number(process.env.Q27_DRILL_RESTORE_PORT) || 5542,
+  srcContainer: process.env.Q27_DRILL_SRC_CONTAINER ?? 'issue27-pg-src',
+  restoreContainer: process.env.Q27_DRILL_RESTORE_CONTAINER ?? 'issue27-pg-restore',
+  srcPort: process.env.Q27_DRILL_SRC_PORT === undefined ? 5541 : Number(process.env.Q27_DRILL_SRC_PORT),
+  restorePort: process.env.Q27_DRILL_RESTORE_PORT === undefined ? 5542 : Number(process.env.Q27_DRILL_RESTORE_PORT),
   // Database names are overridable for the same reason: an isolated run can
   // keep its whole drill (containers AND databases) inside its own namespace.
-  sourceDatabase: process.env.Q27_DRILL_SRC_DATABASE || 'issue27_src_test',
-  restoreDatabase: process.env.Q27_DRILL_RESTORE_DATABASE || 'issue27_restore_test',
+  sourceDatabase: process.env.Q27_DRILL_SRC_DATABASE ?? 'issue27_src_test',
+  restoreDatabase: process.env.Q27_DRILL_RESTORE_DATABASE ?? 'issue27_restore_test',
   pages: {
     publicHtml: 'issue27pub0010',
     markdownThemed: 'issue27md00010',
@@ -192,6 +195,63 @@ function sourceUrlFor() {
 
 function restoreUrlFor() {
   return `postgresql://postgres:${FIXTURE.password}@127.0.0.1:${FIXTURE.restorePort}/${FIXTURE.restoreDatabase}`;
+}
+
+function assertSqlDatabaseIdentifier(database, label) {
+  if (typeof database !== 'string'
+      || Buffer.byteLength(database, 'utf8') > 63
+      || !/^[a-z_][a-z0-9_]*$/.test(database)
+      || !database.endsWith('_test')) {
+    throw new Error(`${label} must be a lowercase PostgreSQL identifier of at most 63 ASCII characters ending in _test`);
+  }
+  return database;
+}
+
+function validateDrillTargets({ sourceUrl, restoreUrl, sourceDatabase, restoreDatabase }) {
+  // Keep this gate before every Docker, Pool, or SQL operation. Do not pass
+  // allowNonTest: this destructive fixture drill has no production bypass.
+  assertSqlDatabaseIdentifier(sourceDatabase, 'Source database');
+  assertSqlDatabaseIdentifier(restoreDatabase, 'Restore database');
+  assertTestDatabaseUrl(sourceUrl);
+  assertTestDatabaseUrl(restoreUrl);
+
+  const source = parseConnectionStringParts(sourceUrl);
+  const restore = parseConnectionStringParts(restoreUrl);
+  if (source.database !== sourceDatabase || restore.database !== restoreDatabase) {
+    throw new Error('Drill URL database names must match the validated SQL identifiers');
+  }
+  if (samePostgresEndpoint(source, restore)) {
+    throw new Error('Drill source and restore must use distinct effective PostgreSQL endpoints');
+  }
+  return { source, restore };
+}
+
+function validateContainerName(name, label) {
+  if (typeof name !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) {
+    throw new Error(`${label} must be a valid Docker container name`);
+  }
+  return name;
+}
+
+function validatePort(port, label) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`${label} must be an integer TCP port between 1 and 65535`);
+  }
+  return port;
+}
+
+function ensureFreshPrivateOutputDir(outputDir) {
+  const dir = outputDir || fs.mkdtempSync(path.join(os.tmpdir(), 'qs27-backup-check-'));
+  if (fs.existsSync(dir)) {
+    const stat = fs.lstatSync(dir);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.readdirSync(dir).length > 0) {
+      throw new Error('Drill output path must be an empty, real directory');
+    }
+  } else {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  fs.chmodSync(dir, 0o700);
+  return dir;
 }
 
 /**
@@ -520,225 +580,351 @@ async function seedFixture(pool) {
   return { accessRevisionSeeded, revisionsSeeded, operationsSeeded, purgeSeeded, scopesSeeded, grantsSeeded };
 }
 
-async function ensureContainerRunning(name, port, image) {
-  const inspect = await runCommand(['docker', 'inspect', '-f', '{{.State.Running}}', name]);
+const DOCKER_ID = /^[a-f0-9]{64}$/i;
 
-  if (inspect.code === 0) {
-    if (inspect.stdout.trim() === 'true') {
-      return { created: false, started: false };
-    }
-
-    const start = await runCommand(['docker', 'start', name]);
-    if (start.code !== 0) {
-      throw new Error(`docker start ${name} failed: ${start.stderr.trim().slice(0, 200)}`);
-    }
-    return { created: false, started: true };
-  }
-
-  const run = await runCommand([
-    'docker', 'run', '-d', '--name', name,
-    '-e', `POSTGRES_PASSWORD=${FIXTURE.password}`,
-    '-p', `127.0.0.1:${port}:5432`,
-    image
+async function inspectContainer(target, commandRunner = runCommand) {
+  const result = await commandRunner([
+    'docker', 'inspect', '--format',
+    '{{.Id}}@@QS@@{{.State.Running}}@@QS@@{{.Config.Image}}@@QS@@{{json .NetworkSettings.Ports}}',
+    target
   ]);
-
-  if (run.code !== 0) {
-    throw new Error(`docker run ${name} failed: ${run.stderr.trim().slice(0, 200)}`);
+  if (result.code !== 0) {
+    if (/no such (?:object|container)/i.test(result.stderr || '')) return null;
+    throw new Error(`docker inspect ${target} failed: ${(result.stderr || '').trim().slice(0, 200)}`);
   }
-
-  return { created: true, started: true };
+  const fields = String(result.stdout || '').trim().split('@@QS@@');
+  const [rawId, running, image, rawPorts] = fields;
+  const id = String(rawId || '').toLowerCase();
+  let ports;
+  try {
+    ports = JSON.parse(rawPorts);
+  } catch {
+    throw new Error(`docker inspect ${target} did not return valid published-port data`);
+  }
+  if (fields.length !== 4 || !DOCKER_ID.test(id) || !['true', 'false'].includes(running)
+      || typeof image !== 'string' || image.length === 0) {
+    throw new Error(`docker inspect ${target} did not return a valid container identity and image`);
+  }
+  return { id, running: running === 'true', image, ports };
 }
 
-async function waitForPostgres(container, timeoutMs = 60000) {
-  const deadline = Date.now() + timeoutMs;
+function assertContainerInspectionMatchesDrillTarget(inspection, {
+  id,
+  name,
+  port,
+  image,
+  endpoint,
+  database,
+  label = name
+}) {
+  if (!inspection || inspection.id !== id) {
+    throw new Error(`${label} container name/ID identity changed; refusing database access`);
+  }
+  if (!inspection.running) {
+    throw new Error(`${label} container ${id} is not running`);
+  }
+  if (inspection.image !== image) {
+    throw new Error(`${label} container ${id} image does not match the expected PostgreSQL image`);
+  }
 
+  const published = inspection.ports && typeof inspection.ports === 'object' && !Array.isArray(inspection.ports)
+    ? Object.entries(inspection.ports).filter(([, bindings]) => bindings !== null && bindings !== undefined)
+      .flatMap(([containerPort, bindings]) => {
+        if (!Array.isArray(bindings)) return [{ containerPort, malformed: true }];
+        return bindings.map(binding => ({ containerPort, binding }));
+      })
+    : [];
+  const pgBindings = inspection.ports?.['5432/tcp'];
+  if (published.length !== 1 || published[0].containerPort !== '5432/tcp'
+      || published[0].malformed || !Array.isArray(pgBindings) || pgBindings.length !== 1) {
+    throw new Error(`${label} container ${id} must publish only one exact 5432/tcp loopback binding`);
+  }
+  const binding = pgBindings[0];
+  if (!binding || binding.HostIp !== '127.0.0.1' || String(binding.HostPort) !== String(port)) {
+    throw new Error(`${label} container ${id} must publish 5432/tcp on 127.0.0.1:${port}`);
+  }
+
+  if (endpoint && (endpoint.host !== '127.0.0.1'
+      || String(endpoint.port) !== String(port) || endpoint.database !== database)) {
+    throw new Error(`${label} effective PostgreSQL URL endpoint does not match its inspected container binding`);
+  }
+  return true;
+}
+
+async function ensureContainerRunning(name, port, image, { outputDir, ownedContainers, commandRunner = runCommand } = {}) {
+  validateContainerName(name, 'Drill container');
+  validatePort(port, 'Drill container port');
+  if (!outputDir || !Array.isArray(ownedContainers)) throw new Error('Container creation needs an output directory and ownership ledger');
+  const existing = await inspectContainer(name, commandRunner);
+  if (existing) {
+    throw new Error(`Refusing to reuse pre-existing ${existing.running ? 'running' : 'stopped'} container ${name} (${existing.id})`);
+  }
+
+  const cidfile = path.join(outputDir, `${name}.container-id`);
+  if (fs.existsSync(cidfile)) throw new Error(`Container identity file already exists: ${cidfile}`);
+  const result = await commandRunner([
+    'docker', 'run', '-d', '--cidfile', cidfile, '--name', name,
+    '-e', `POSTGRES_PASSWORD=${FIXTURE.password}`,
+    '-p', `127.0.0.1:${port}:5432`, image
+  ]);
+  const cid = fs.existsSync(cidfile) ? fs.readFileSync(cidfile, 'utf8').trim().toLowerCase() : '';
+  const stdoutId = String(result.stdout || '').trim().toLowerCase();
+  const id = DOCKER_ID.test(cid) ? cid : (DOCKER_ID.test(stdoutId) ? stdoutId : '');
+  if (id) ownedContainers.push({ id, name, port, image, cidfile });
+  if (result.code !== 0) throw new Error(`docker run ${name} failed: ${(result.stderr || '').trim().slice(0, 200)}`);
+  if (!id || (DOCKER_ID.test(cid) && DOCKER_ID.test(stdoutId) && cid !== stdoutId)) {
+    throw new Error(`docker run ${name} did not produce a consistent full container ID`);
+  }
+
+  await assertContainerNameStillMapsToId(
+    { id, name }, commandRunner,
+    { port, image, label: name }
+  );
+  return ownedContainers.find(container => container.id === id);
+}
+
+async function assertContainerNameStillMapsToId(container, commandRunner = runCommand, expected = null) {
+  const byName = await inspectContainer(container.name, commandRunner);
+  const byId = await inspectContainer(container.id, commandRunner);
+  if (!byName || !byId || byName.id !== container.id || byId.id !== container.id) {
+    throw new Error(`Container name ${container.name} no longer maps to its preflight ID`);
+  }
+  if (expected) {
+    const target = { id: container.id, name: container.name, ...expected };
+    assertContainerInspectionMatchesDrillTarget(byName, target);
+    assertContainerInspectionMatchesDrillTarget(byId, target);
+  }
+  return true;
+}
+
+async function waitForPostgres(containerId, timeoutMs = 60000, commandRunner = runCommand) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const ready = await runCommand(['docker', 'exec', container, 'pg_isready', '-U', 'postgres']);
-    if (ready.code === 0) {
-      return;
-    }
+    if ((await commandRunner(['docker', 'exec', containerId, 'pg_isready', '-U', 'postgres'])).code === 0) return;
     await new Promise(resolve => setTimeout(resolve, 500));
   }
-
-  throw new Error(`Postgres in ${container} not ready after ${timeoutMs}ms`);
+  throw new Error(`Postgres in container ${containerId} not ready after ${timeoutMs}ms`);
 }
 
-async function ensureDatabase(container, database) {
-  const check = await runCommand([
-    'docker', 'exec', container, 'psql', '-U', 'postgres', '-tAc',
+async function ensureDatabase(containerId, database, commandRunner = runCommand) {
+  assertSqlDatabaseIdentifier(database, 'Database');
+  const check = await commandRunner([
+    'docker', 'exec', containerId, 'psql', '-XAt', '-U', 'postgres', '-c',
     `SELECT 1 FROM pg_database WHERE datname = '${database}'`
   ]);
-
+  if (check.code !== 0) throw new Error(`Could not check database ${database}: ${(check.stderr || '').trim().slice(0, 200)}`);
   if (check.stdout.trim() !== '1') {
-    await runCommand(['docker', 'exec', container, 'psql', '-U', 'postgres', '-c', `CREATE DATABASE ${database}`]);
+    const create = await commandRunner([
+      'docker', 'exec', containerId, 'psql', '-XAt', '-U', 'postgres', '-c', `CREATE DATABASE ${database}`
+    ]);
+    if (create.code !== 0) throw new Error(`Could not create database ${database}: ${(create.stderr || '').trim().slice(0, 200)}`);
   }
 }
 
-async function resetSourceDatabase(url) {
-  const pool = createPostgresPool(url, { env: localPoolEnv(url), max: 1 });
+async function cleanupOwnedContainer(container, commandRunner = runCommand) {
+  if ((await inspectContainer(container.id, commandRunner))?.id !== container.id) {
+    return { id: container.id, name: container.name, status: 'already-absent-or-identity-changed' };
+  }
+  // The exact ID is the ownership boundary: a same-name replacement can never
+  // be selected by this command. --volumes removes only volumes attached to it.
+  const removal = await commandRunner(['docker', 'rm', '--force', '--volumes', container.id]);
+  if (removal.code !== 0) return { id: container.id, name: container.name, status: 'remove-failed' };
+  const status = await inspectContainer(container.id, commandRunner) === null
+    ? 'removed-exact-id' : 'removal-readback-failed';
+  return { id: container.id, name: container.name, status };
+}
+
+async function resetSourceDatabase(url, { poolFactory = createPostgresPool, migrationRunner = runMigrations } = {}) {
+  const pool = poolFactory(url, { env: localPoolEnv(url), max: 1 });
 
   try {
     await pool.query('DROP SCHEMA public CASCADE');
     await pool.query('CREATE SCHEMA public');
-    await runMigrations(pool, { logger: { info() {} } });
+    await migrationRunner(pool, { logger: { info() {} } });
     return await seedFixture(pool);
   } finally {
     await pool.end();
   }
 }
 
-async function recreateRestoreDatabase(restoreUrl) {
+async function recreateRestoreDatabase(restoreUrl, { poolFactory = createPostgresPool, restoreDatabase = FIXTURE.restoreDatabase } = {}) {
+  assertSqlDatabaseIdentifier(restoreDatabase, 'Restore database');
   const controlUrl = restoreUrl.replace(/\/[^/]+$/, '/postgres');
-  const pool = createPostgresPool(controlUrl, { env: localPoolEnv(controlUrl), max: 1 });
+  const pool = poolFactory(controlUrl, { env: localPoolEnv(controlUrl), max: 1 });
 
   try {
-    await pool.query(`DROP DATABASE IF EXISTS ${FIXTURE.restoreDatabase} WITH (FORCE)`);
-    await pool.query(`CREATE DATABASE ${FIXTURE.restoreDatabase}`);
+    await pool.query(`DROP DATABASE IF EXISTS ${restoreDatabase} WITH (FORCE)`);
+    await pool.query(`CREATE DATABASE ${restoreDatabase}`);
   } finally {
     await pool.end();
   }
 }
 
-async function runStep(command, args, label, env = process.env) {
+async function runStep(command, args, label, env = process.env, commandRunner = runCommand) {
   const started = Date.now();
-  const result = await runCommand([command, ...args], { env });
+  const result = await commandRunner([command, ...args], { env });
   return { ...result, ms: Date.now() - started, label };
 }
 
-async function runDrill({ keepContainers = false, skipContainerSetup = false, outputDir } = {}) {
-  const previousSecret = process.env.SESSION_SECRET;
-  process.env.SESSION_SECRET = FIXTURE.sessionSecret;
-
+async function runDrill({
+  keepContainers = false,
+  skipContainerSetup = false,
+  outputDir,
+  commandRunner = runCommand,
+  poolFactory = createPostgresPool,
+  migrationRunner = runMigrations,
+  readinessTimeoutMs = 60000
+} = {}) {
   const sourceUrl = sourceUrlFor();
   const restoreUrl = restoreUrlFor();
-  const dir = outputDir || fs.mkdtempSync(path.join(os.tmpdir(), 'qs27-backup-check-'));
+  const targets = validateDrillTargets({
+    sourceUrl, restoreUrl,
+    sourceDatabase: FIXTURE.sourceDatabase,
+    restoreDatabase: FIXTURE.restoreDatabase
+  });
+  validateContainerName(FIXTURE.srcContainer, 'Source container');
+  validateContainerName(FIXTURE.restoreContainer, 'Restore container');
+  validatePort(FIXTURE.srcPort, 'Source container port');
+  validatePort(FIXTURE.restorePort, 'Restore container port');
+  if (FIXTURE.srcContainer === FIXTURE.restoreContainer || FIXTURE.srcPort === FIXTURE.restorePort) {
+    throw new Error('Drill source and restore containers must have distinct names and ports');
+  }
+
+  const dir = ensureFreshPrivateOutputDir(outputDir);
+  const previousSecret = process.env.SESSION_SECRET;
+  const ownedContainers = [];
+  const shouldCleanup = !skipContainerSetup && !keepContainers;
+  let sourceContainer;
+  let restoreContainer;
+  let summary;
+
+  const cleanupCreated = async () => {
+    const results = [];
+    for (const container of [...ownedContainers].reverse()) {
+      try { results.push(await cleanupOwnedContainer(container, commandRunner)); }
+      catch { results.push({ id: container.id, name: container.name, status: 'cleanup-error' }); }
+    }
+    return results;
+  };
 
   try {
-    if (!skipContainerSetup) {
-      await ensureContainerRunning(FIXTURE.srcContainer, FIXTURE.srcPort, FIXTURE.image);
-      await ensureContainerRunning(FIXTURE.restoreContainer, FIXTURE.restorePort, FIXTURE.image);
-      await waitForPostgres(FIXTURE.srcContainer);
-      await waitForPostgres(FIXTURE.restoreContainer);
+    process.env.SESSION_SECRET = FIXTURE.sessionSecret;
+    const sourceBefore = await inspectContainer(FIXTURE.srcContainer, commandRunner);
+    const restoreBefore = await inspectContainer(FIXTURE.restoreContainer, commandRunner);
+    if (skipContainerSetup) {
+      if (!sourceBefore || !restoreBefore) throw new Error('--skip-container-setup requires both named containers to exist');
+      sourceContainer = { id: sourceBefore.id, name: FIXTURE.srcContainer };
+      restoreContainer = { id: restoreBefore.id, name: FIXTURE.restoreContainer };
+    } else {
+      if (sourceBefore) throw new Error(`Refusing to use pre-existing source container ${FIXTURE.srcContainer} (${sourceBefore.id})`);
+      if (restoreBefore) throw new Error(`Refusing to use pre-existing restore container ${FIXTURE.restoreContainer} (${restoreBefore.id})`);
+      sourceContainer = await ensureContainerRunning(FIXTURE.srcContainer, FIXTURE.srcPort, FIXTURE.image, {
+        outputDir: dir, ownedContainers, commandRunner
+      });
+      restoreContainer = await ensureContainerRunning(FIXTURE.restoreContainer, FIXTURE.restorePort, FIXTURE.image, {
+        outputDir: dir, ownedContainers, commandRunner
+      });
     }
 
-    await ensureDatabase(FIXTURE.srcContainer, FIXTURE.sourceDatabase);
-    const seedResult = await resetSourceDatabase(sourceUrl);
-    await recreateRestoreDatabase(restoreUrl);
+    await assertContainerNameStillMapsToId(sourceContainer, commandRunner, {
+      port: FIXTURE.srcPort,
+      image: FIXTURE.image,
+      endpoint: targets.source,
+      database: FIXTURE.sourceDatabase,
+      label: 'Source'
+    });
+    await assertContainerNameStillMapsToId(restoreContainer, commandRunner, {
+      port: FIXTURE.restorePort,
+      image: FIXTURE.image,
+      endpoint: targets.restore,
+      database: FIXTURE.restoreDatabase,
+      label: 'Restore'
+    });
+    await waitForPostgres(sourceContainer.id, readinessTimeoutMs, commandRunner);
+    await waitForPostgres(restoreContainer.id, readinessTimeoutMs, commandRunner);
+    await ensureDatabase(sourceContainer.id, FIXTURE.sourceDatabase, commandRunner);
+    const seedResult = await resetSourceDatabase(sourceUrl, { poolFactory, migrationRunner });
+    await recreateRestoreDatabase(restoreUrl, { poolFactory, restoreDatabase: FIXTURE.restoreDatabase });
 
-    fs.writeFileSync(path.join(dir, 'fixture.json'), JSON.stringify({
+    fs.writeFileSync(path.join(dir, 'fixture.json'), `${JSON.stringify({
       apiKeys: [{ id: FIXTURE.apiKey.id, secret: FIXTURE.apiKey.secret }],
       protectedPages: [{ id: FIXTURE.pages.protectedPage, password: FIXTURE.protectedPassword }]
-    }, null, 2));
+    }, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
 
     const childEnv = sanitizeChildEnv(process.env, { SESSION_SECRET: FIXTURE.sessionSecret });
-    const spawnOptions = { env: childEnv };
-    const scriptsDir = __dirname;
-
     const backupRun = await runStep(process.execPath, [
-      path.join(scriptsDir, 'backup-db.js'),
-      '--url', sourceUrl,
-      '--output-dir', dir,
-      '--docker', FIXTURE.srcContainer
-    ], 'backup', childEnv);
-    if (backupRun.code !== 0) {
-      throw new Error(`backup failed: ${backupRun.stderr.trim().slice(0, 400)}`);
-    }
+      path.join(__dirname, 'backup-db.js'), '--url', sourceUrl, '--output-dir', dir, '--docker', sourceContainer.id
+    ], 'backup', childEnv, commandRunner);
+    if (backupRun.code !== 0) throw new Error(`backup failed: ${backupRun.stderr.trim().slice(0, 400)}`);
 
-    const manifestFile = fs.readdirSync(dir)
-      .find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json'));
+    const manifestFile = fs.readdirSync(dir).find(name => name.startsWith('quickshare-backup-') && name.endsWith('.manifest.json'));
+    if (!manifestFile) throw new Error('Backup completed without producing its expected manifest');
     const manifestPath = path.join(dir, manifestFile);
-
     const restoreRun = await runStep(process.execPath, [
-      path.join(scriptsDir, 'restore-db.js'),
-      '--manifest', manifestPath,
-      '--target-url', restoreUrl,
-      '--docker', FIXTURE.restoreContainer,
-      '--output', path.join(dir, 'restore-manifest.json')
-    ], 'restore', childEnv);
-    if (restoreRun.code !== 0) {
-      throw new Error(`restore failed: ${restoreRun.stderr.trim().slice(0, 400)}`);
-    }
+      path.join(__dirname, 'restore-db.js'), '--manifest', manifestPath,
+      '--source-url', sourceUrl, '--target-url', restoreUrl,
+      '--docker', restoreContainer.id, '--output', path.join(dir, 'restore-manifest.json')
+    ], 'restore', childEnv, commandRunner);
+    if (restoreRun.code !== 0) throw new Error(`restore failed: ${restoreRun.stderr.trim().slice(0, 400)}`);
 
     const verifyRun = await runStep(process.execPath, [
-      path.join(scriptsDir, 'verify-backup.js'),
-      '--source-url', sourceUrl,
-      '--restore-url', restoreUrl,
-      '--manifest', manifestPath,
-      '--fixture', path.join(dir, 'fixture.json'),
-      '--session-secret', FIXTURE.sessionSecret,
-      '--output', path.join(dir, 'verification.json'),
-      // The drill's fixture is fully synthetic and its history is known, so
-      // the drill itself provides the owner acknowledgment that real restores
-      // require from a human. Without this flag verification fails closed.
-      '--reconciled'
-    ], 'verify', childEnv);
+      path.join(__dirname, 'verify-backup.js'), '--source-url', sourceUrl, '--restore-url', restoreUrl,
+      '--manifest', manifestPath, '--fixture', path.join(dir, 'fixture.json'),
+      '--session-secret', FIXTURE.sessionSecret, '--output', path.join(dir, 'verification.json'), '--reconciled'
+    ], 'verify', childEnv, commandRunner);
+    if (verifyRun.code !== 0) throw new Error(`verification failed: ${verifyRun.stderr.trim().slice(0, 400)}`);
 
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    const verification = verifyRun.code === 0
-      ? JSON.parse(fs.readFileSync(path.join(dir, 'verification.json'), 'utf8'))
-      : null;
-    const summary = {
-      ok: verifyRun.code === 0,
+    const restoreManifest = JSON.parse(fs.readFileSync(path.join(dir, 'restore-manifest.json'), 'utf8'));
+    const verification = JSON.parse(fs.readFileSync(path.join(dir, 'verification.json'), 'utf8'));
+    summary = {
+      ok: true,
       snapshotAt: new Date(manifest.snapshotAt).toISOString(),
       snapshotWalLsn: manifest.snapshotWalLsn,
-      // Explicit coverage marker: 'exercised' only when the source schema
-      // actually carries pages.access_revision (#25 migration 004). A 001–003
-      // base must never claim schema004 coverage from this drill.
       accessRevision: seedResult.accessRevisionSeeded ? 'exercised' : 'absent-schema001-003',
-      // Content-revision coverage (#30 migration 007): snapshots seeded, big
-      // pointer exercised and non-default published preserved.
       revisions: seedResult.revisionsSeeded ? 'exercised' : 'absent-schema001-006',
-      // Publish-operation coverage (#32 migration 008): committed creation
-      // with encrypted receipt plus a deletion tombstone, full-row compared.
       operations: seedResult.operationsSeeded ? 'exercised' : 'absent-schema001-007',
-      // #34 purge coverage (migration 009): a real payload-NULL tombstone
-      // with provenance, plus a receipt-scrubbed operation; the verifier
-      // must compare tombstones on identity only and detect resurrection.
       revisionPurgeTombstones: seedResult.purgeSeeded ? 'exercised' : 'absent-schema001-008',
-      revisionCurrentPointer: seedResult.revisionsSeeded ? REVISION_DRILL_VALUE : null,
-      // #35 publication-state coverage (migration 007 column): the themed
-      // Share carries the REAL owner-unpublish end state — published FALSE
-      // and the bumped access revision together — plus its unpublish ledger
-      // row. A restore that loses either half fails verification by name,
-      // and apps that ignore `published` are not rollback candidates.
-      publicationState: seedResult.revisionsSeeded ? 'unpublished-exercised' : 'absent-schema001-006',
-      publicationStateAccessRevision: seedResult.revisionsSeeded ? UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE : null,
-      publishedFixture: seedResult.revisionsSeeded ? 'non-default-false-with-bumped-access' : 'absent-schema001-006',
-      // #36–#39 scope/grant coverage (existing migration 010): the fixture
-      // key carries read+update+publish scopes, the enabled future auto-edit option
-      // and one real read+update+publish grant bound to its logical id at
-      // credential_version 9007199254740993.
       apiKeyScopes: seedResult.scopesSeeded ? 'exercised' : 'absent-schema001-009',
-      shareGrants: seedResult.grantsSeeded ? 'exercised-read-update-publish-auto-edit-and-rotation-survival' : 'absent-schema001-009',
-      reconciliation: verification ? verification.reconciliation.status : 'not-available',
+      shareGrants: seedResult.grantsSeeded ? 'exercised' : 'absent-schema001-009',
+      reconciliation: verification.reconciliation.status,
       safeToServe: false,
+      isolation: 'offline-by-default',
+      postSnapshotRevocationOrPurgeMutations: false,
       durationsMs: {
         backupMs: manifest.durationsMs.dumpMs + manifest.durationsMs.snapshotMs,
-        restoreMs: JSON.parse(fs.readFileSync(path.join(dir, 'restore-manifest.json'), 'utf8')).durationsMs.restoreMs,
-        verifyMs: verification ? verification.durationsMs.verifyMs : null
+        restoreMs: restoreManifest.durationsMs.restoreMs,
+        verifyMs: verification.durationsMs.verifyMs
+      },
+      containers: {
+        source: { id: sourceContainer.id, name: sourceContainer.name },
+        restore: { id: restoreContainer.id, name: restoreContainer.name }
       },
       artifacts: {
-        dump: manifest.dumpFile,
-        manifest: manifestPath,
+        dump: path.join(dir, manifest.dumpFile), manifest: manifestPath,
         restoreManifest: path.join(dir, 'restore-manifest.json'),
-        verification: path.join(dir, 'verification.json')
+        verification: path.join(dir, 'verification.json'), fixture: path.join(dir, 'fixture.json')
       }
     };
-
-    if (verifyRun.code !== 0) {
-      summary.verificationOutput = verifyRun.stdout.trim().slice(0, 800);
-    }
-
-    return summary;
+  } catch (error) {
+    if (shouldCleanup) error.cleanup = await cleanupCreated();
+    throw error;
   } finally {
-    process.env.SESSION_SECRET = previousSecret;
-
-    if (!keepContainers) {
-      // Only ever removes its own disposable drill containers.
-      await runCommand(['docker', 'rm', '-f', FIXTURE.srcContainer]);
-      await runCommand(['docker', 'rm', '-f', FIXTURE.restoreContainer]);
-    }
+    if (previousSecret === undefined) delete process.env.SESSION_SECRET;
+    else process.env.SESSION_SECRET = previousSecret;
   }
+
+  if (shouldCleanup) {
+    summary.cleanup = { status: 'exact-owned-id-cleanup', removed: await cleanupCreated() };
+    if (summary.cleanup.removed.some(item => !['removed-exact-id', 'already-absent-or-identity-changed'].includes(item.status))) {
+      throw new Error(`Exact-ID container cleanup did not fully verify: ${JSON.stringify(summary.cleanup.removed)}`);
+    }
+  } else {
+    summary.cleanup = skipContainerSetup
+      ? { status: 'skipped-existing-containers-never-cleaned', removed: [] }
+      : { status: 'kept-created-containers', removed: [], retained: ownedContainers.map(({ id, name }) => ({ id, name })) };
+  }
+  return summary;
 }
 
 async function main() {
@@ -759,6 +945,9 @@ async function main() {
 if (require.main === module) {
   main().catch((error) => {
     console.error(`[backup:check] failed: ${error.message}`);
+    if (Array.isArray(error.cleanup)) {
+      console.error(`[backup:check] cleanup: ${JSON.stringify(error.cleanup)}`);
+    }
     process.exitCode = 1;
   });
 }
@@ -769,6 +958,12 @@ module.exports = {
   UNPUBLISHED_ACCESS_REVISION_DRILL_VALUE,
   OPERATION_FIXTURE,
   FIXTURE,
+  assertSqlDatabaseIdentifier,
+  assertContainerInspectionMatchesDrillTarget,
+  assertContainerNameStillMapsToId,
+  cleanupOwnedContainer,
+  ensureContainerRunning,
+  inspectContainer,
   probeAccessRevisionColumn,
   probeShareRevisionsTable,
   probePublishOperationsTable,
@@ -777,6 +972,7 @@ module.exports = {
   resetSourceDatabase,
   restoreUrlFor,
   runDrill,
+  validateDrillTargets,
   seedFixture,
   sourceUrlFor
 };

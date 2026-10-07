@@ -8,8 +8,8 @@ const assert = require('node:assert/strict');
 const { PostgresPageRepository } = require('../../models/postgres-pages');
 const { runMigrations } = require('../../models/postgres-migrations');
 
-const url = new URL(process.env.POSTGRES_TEST_URL);
-if (!['localhost', '127.0.0.1', '::1'].includes(url.hostname) || !url.pathname.endsWith('_test')) throw new Error('Isolated localhost _test database required');
+const { validateCanonicalPostgresSuiteUrl } = require('../../scripts/release-readiness-check');
+const url = validateCanonicalPostgresSuiteUrl(process.env.POSTGRES_TEST_URL);
 const repository = new PostgresPageRepository(url.href, {
   POSTGRES_SSL: 'false', POSTGRES_POOL_MAX: '5',
   POSTGRES_STATEMENT_TIMEOUT_MS: '8000', POSTGRES_QUERY_TIMEOUT_MS: '9000',

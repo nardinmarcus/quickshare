@@ -7,8 +7,8 @@ const { PostgresPageRepository } = require('../../models/postgres-pages');
 const { runMigrations } = require('../../models/postgres-migrations');
 const { hashSecret } = require('../../utils/security');
 
-const url = new URL(process.env.POSTGRES_TEST_URL);
-if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || !url.pathname.endsWith('_test')) throw new Error('Local _test database required');
+const { validateCanonicalPostgresSuiteUrl } = require('../../scripts/release-readiness-check');
+const url = validateCanonicalPostgresSuiteUrl(process.env.POSTGRES_TEST_URL);
 const repository = new PostgresPageRepository(url.href, { POSTGRES_SSL: 'false', POSTGRES_POOL_MAX: '6', POSTGRES_STATEMENT_TIMEOUT_MS: '8000', POSTGRES_QUERY_TIMEOUT_MS: '9000', POSTGRES_IDLE_TRANSACTION_TIMEOUT_MS: '15000' });
 process.env.NODE_ENV = 'test';
 process.env.AUTH_ENABLED = 'false';

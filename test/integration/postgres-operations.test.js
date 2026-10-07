@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const url = new URL(process.env.POSTGRES_TEST_URL);
-if (!['localhost', '127.0.0.1', '::1'].includes(url.hostname) || !url.pathname.endsWith('_test')) throw new Error('Isolated localhost _test database required');
+const { validateCanonicalPostgresSuiteUrl } = require('../../scripts/release-readiness-check');
+const url = validateCanonicalPostgresSuiteUrl(process.env.POSTGRES_TEST_URL);
 
 process.env.NODE_ENV = 'test';
 process.env.AUTH_ENABLED = 'false';

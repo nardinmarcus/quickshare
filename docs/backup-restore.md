@@ -18,10 +18,18 @@ npm run backup:check
 1. 启动两台仅绑定 `127.0.0.1` 的一次性 PostgreSQL 17 容器（`issue27-pg-src` / `issue27-pg-restore`），创建 `issue27_src_test` / `issue27_restore_test` 数据库（执行者专属环境可用 scratch harness 覆盖 `FIXTURE` 的运行地址/身份后再 `runDrill`，生产源码不携带执行者身份）；
 2. 在源库执行真实迁移并植入合成夹具（四类页面、主题、收藏、密码保护、过期、managed Key、审计、站点设置；迁移 `007` 起还包含内容 Revision 快照、超过 2^53 的精确 `current_revision` 指针与非默认 `published=FALSE` 页面；迁移 `008` 起还包含发布操作记录：创建回执、Dashboard restore receipt 与恢复来源、managed-Key restore receipt 与来源、Key content-update receipt，以及删除墓碑；迁移 `009` 起还包含 #34 清除夹具：一条真实清除墓碑——载荷与快照哈希为 NULL、`purged_at` 已记录——以及一条结果版本即该墓碑的 `restore` 操作，其回执已按 Share+Revision 清除并带 `purged_at`；迁移 `010` 起还包含 #36/#38 授权夹具：Key 的非默认 scopes 与 auto-grant 标记，以及一条指向主题 Share 的真实 read+update 授权——即轮换存活夹具）；
 3. `scripts/backup-db.js` 执行 `pg_dump -Fc`，记录快照点（时间戳 + WAL LSN）与耗时；
-4. `scripts/restore-db.js` 校验 dump SHA-256 后用 `pg_restore` 重建隔离库，记录耗时；
+4. `scripts/restore-db.js` 先校验独立传入的备份源 URL、manifest endpoint 一致性与源/目标不相同，再校验 dump SHA-256 并用 `pg_restore` 重建隔离库，记录耗时；
 5. `scripts/verify-backup.js` 用两条独立连接核对恢复结果，输出验证报告。
 
 演练使用的会话密钥与密码全部是脚本内定义的合成值；真实 secret 与加密材料不进入夹具、日志或 Issue。演练只创建/停止/删除自己命名的一次性容器，不触碰其他容器或共享引擎。
+
+### #43 AC2 快照后撤销/清除证据
+
+早期 synthetic-only 试验（仅向 `audit_logs` 插入 `api_key.revoke` 与 `page.revision.purge` 两条合成事件，未实际撤销 Key grant，也未执行 revision/receipt purge）属于**历史审计词表测试**，不是领域 mutation 证据，也不是当前 #43 AC2 的证明。它最多证明 verifier 能识别合成审计事件，不能证明 `api_keys`、`share_grants`、`share_revisions` 或 `publish_operations` 的持久状态已改变。
+
+当前 AC2 本地证据见 R 根 `issue43-ac2-real-mutation-result.md`：在隔离 PostgreSQL 17 fixture 上，authoritative snapshot 后经真实 dashboard HTTP 路由执行了 3 次 grant revoke 与 revision 2 purge（含关联 receipt 清除）；source 有 3 条 `api_key.revoke` 和 1 条 `page.revision.purge` 审计。未变更的 private restore 仍保留快照中的授权、revision 正文与 receipt。post-mutation verifier 预期以 exit 1 返回 `ok=false`，并列出 `shareRevisions`、`managedApiKeys`、`shareGrants`、`publishOperations` 四类实际差异，状态为 `unreconciled`、`safeToServe=false`、`offline-by-default`。这是 fail-closed 结果，不是测试失败或 reconciliation 通过；private restore 未被配置为应用数据库，也未提供服务。任何未来恢复用途仍需 owner review/reconciliation。该本地合成演练不构成生产或 serving 授权。
+
+标准 `npm run backup:check` 的已知合成历史会调用 verifier 的 `--reconciled`，因此它证明完整备份恢复与数据校验，不单独证明快照后撤销处理。
 
 2026-09-21 实测（OrbStack 29.4.0，postgres:17-alpine，server 17.11 / pg_dump 17.11）：snapshot `0/1A8ACB0`，backup 209ms，restore 183ms，verify 82ms，验证全绿。
 
@@ -34,6 +42,7 @@ npm run backup:db -- --url 'postgresql://postgres:pw@127.0.0.1:5541/issue27_src_
 
 # 2. 恢复到另一台隔离库（自动校验 dump 摘要；目标库必须不同于备份源库）
 npm run restore:db -- --manifest /tmp/qs27-backup/quickshare-backup-*.manifest.json \
+  --source-url 'postgresql://postgres:pw@127.0.0.1:5541/issue27_src_test' \
   --target-url 'postgresql://postgres:pw@127.0.0.1:5542/issue27_restore_test' \
   --docker issue27-pg-restore --output /tmp/qs27-backup/restore-manifest.json
 
@@ -81,6 +90,10 @@ npm run verify:backup -- --source-url <src> --restore-url <restore> \
 ## 凭据与安全边界
 
 - 脚本不加载 `.env`；URL 一律显式传入，子进程环境会剥离继承的 `DATABASE_URL`、`SESSION_SECRET` 等再注入合成值。
+- 连接目标以 URL authority 为准：`host`、`hostaddr`、`port`、`database`/`dbname`、socket 等 query 覆盖项一律拒绝，`--allow-non-test` 也不能绕过；脚本还会无网络解析 node-postgres 的有效 host/port/database 并与 authority 比对。`sslmode=disable` 等非目标选项仍可用。
+- 恢复必须显式传入独立的 `--source-url`。它必须来自可信的备份运行记录/操作者输入，不能从 manifest 或目标 URL 推导。manifest 的 `host`、`port`、`database` 必须完整、格式有效且与该 URL 一致；这些可编辑字段只是交叉校验，不是来源证明，dump SHA-256 只绑定 dump 字节、不认证 manifest endpoint。显式 source URL 是操作者提供的信任输入，不是密码学来源证明。
+- 恢复源/目标身份保守地将 `localhost`、`127.0.0.1`、`::1` 视为 loopback。相同 database name 且任一端为 non-loopback 时，无论 DNS hostname alias、loopback tunnel 或 port 是否不同，一律在读取 dump、建 Pool 或调用 `pg_restore` 前拒绝：URL authority 不能证明远端实例身份。此拒绝不受 `--allow-non-test` 覆盖；同名远端恢复只能走单独授权的 distinct-database-name restore 与已验证 operator flow。纯 loopback 的相同 database name 可使用不同 port；不同 database name 仍可用作独立目标。
+- `--allow-non-test` 只显式绕过 source 与 target 的本地 `_test` 限制，适用于另行授权的真实远端运维操作；它不绕过 manifest/source 一致性或任何 source/target 冲突检查，也不能证明两个远端 authority 指向不同服务器。
 - manifest 与日志只含 redacted URL；密码不出现在任何产物中。
 - 测试与演练只用合成 secret；生产备份属于单独授权的运维操作（脚本提供显式 `--allow-non-test` 逃生口并在 manifest 中记录绕过标记）。
 - 恢复库保持私有：不要把恢复库 URL 配置给任何 QuickShare 运行环境。恢复到 `publishing_writes_paused=true` 也不替代隔离或所有者复核；若快照值为 false，更不能直接开放。`published` 列自迁移 `007` 起存在并由 #35 夹具实际验证：恢复库中 `published=false` 的 Share 保持下架，「恢复即重新上线」永远不是本工具的结论，需要单独的所有者决策；忽略 `published` 的旧应用不是安全回滚候选。受控暂停、旧写入者退出/排空与恢复写入流程见 [写维护手册](maintenance.md)。

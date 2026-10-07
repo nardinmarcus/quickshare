@@ -1,21 +1,22 @@
 // #39 native PostgreSQL integration: exact access BIGINTs, transactional
 // publish operations, replays, revocation/rotation races and shared #35 CAS.
+const { validatePostgresTestUrl } = require('../../scripts/release-readiness-check');
+const url = validatePostgresTestUrl(process.env.POSTGRES_TEST_URL);
+if (decodeURIComponent(url.pathname.slice(1)) !== 'issue39_api_publish_test') {
+  throw new Error('POSTGRES_TEST_URL must name the actor-owned localhost issue39_api_publish_test database');
+}
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { PostgresPageRepository } = require('../../models/postgres-pages');
 const { runMigrations } = require('../../models/postgres-migrations');
 
-const url = new URL(process.env.POSTGRES_TEST_URL || '');
-if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
-  || !/^issue39_api_publish_test$/.test(decodeURIComponent(url.pathname.slice(1)))) {
-  throw new Error('POSTGRES_TEST_URL must name the actor-owned localhost issue39_api_publish_test database');
-}
-
 process.env.NODE_ENV = 'test';
 process.env.AUTH_ENABLED = 'false';
 process.env.SHARE_API_KEY = 'issue39-pg-legacy-key';
 process.env.SESSION_SECRET = 'issue39-postgres-publish-state-session-secret';
+process.env.SHARE_BASE_URL = 'https://share.issue39.invalid';
 process.env.DATABASE_URL = '';
 process.env.POSTGRES_URL = '';
 
@@ -170,7 +171,9 @@ test('publish-only grant is independent, has exact state permission and first/la
 
   const current = await state(key.secret, share.urlId);
   assert.equal(current.status, 200);
-  assert.deepEqual(Object.keys(current.body).sort(), ['success', 'id', 'published', 'isProtected', 'expiresAt', 'accessRevision'].sort());
+  assert.deepEqual(Object.keys(current.body).sort(), ['success', 'id', 'published', 'isProtected', 'expiresAt', 'accessRevision', 'url'].sort());
+  assert.equal(current.body.url, `https://share.issue39.invalid/view/${encodeURIComponent(share.urlId)}`);
+  assert.equal(current.body.expiresAt, null, 'an unset expiry is represented as JSON null');
   assert.match(current.headers.get('etag'), new RegExp(`^"access:${share.urlId}:1"$`));
   for (const path of [
     '/api/v1/shares',

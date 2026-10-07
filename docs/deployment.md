@@ -42,7 +42,7 @@ npm run hash-password -- "your-admin-password"
    ```
 
    首次执行应列出 applied；紧接着的第二次必须全部 skipped。命令结束后立即移除该 job 的 secret 和环境变量。
-4. 核对 `public.quickshare_schema_migrations`、`pages`、`share_revisions`、`audit_logs`、`api_keys`、`site_settings`、记录数和索引。当前迁移台账应包含 `001`–`007`；`api_keys.credential_version` 必须为正 BIGINT，初始为 1，已有 ID/hash 保持；`pages.access_revision` 必须保留精确 BIGINT 版本；`site_settings.publishing_writes_paused` 必须为 `BOOLEAN NOT NULL DEFAULT FALSE`（已有维护状态不得被重置）；`pages.is_favorite` 必须为 `BOOLEAN NOT NULL DEFAULT FALSE`，且不存在 `NULL`。迁移 `007` 后 `pages.current_revision` 必须为正 BIGINT（已有 Share 初始 1）、`pages.published` 为 `BOOLEAN NOT NULL DEFAULT TRUE`，`share_revisions(share_id, revision)` 为主键；新 Share 在网页/API/克隆创建时同时写入 Revision 1 快照。存量 Share 的 Revision 1 基线只能在受控维护窗口由专用基线回填补齐（见 [Revision 切换手册](revisions-rollout.md)），不由迁移或启动写入。`site_settings.id=1` 必须存在，`homepage_password_required` 应与迁移前保持一致。
+4. 核对 `public.quickshare_schema_migrations` 的 `001`–`010` 版本及 checksum，并读回关键 schema 与数据：`pages.access_revision`（004，精确 BIGINT）、`publishing_writes_paused`（005，既有维护状态不得重置）、`api_keys.credential_version`（006，正 BIGINT，初始为 1，既有 ID/hash 保持）、`current_revision` / `published` / `share_revisions`（007；Revision 指针为正 BIGINT，`published` 为 `BOOLEAN NOT NULL DEFAULT TRUE`，新 Share 同事务写入 Revision 1；存量基线只按 [Revision 切换手册](revisions-rollout.md) 在受控维护窗口回填）、`publish_operations`（008，幂等操作及回执/删除墓碑）、`share_revisions.purged_at` 与 `publish_operations.purged_at`（009，清除墓碑和回执清除时刻）、以及 `api_keys.scopes`、`auto_grant_new_share_edit`、`share_grants`（010，逐 Share 读取/编辑/发布授权）。同时确认 `pages.is_favorite` 为 `BOOLEAN NOT NULL DEFAULT FALSE` 且无 `NULL`，`site_settings.id=1` 存在且 `homepage_password_required` 未改变；比对 revisions/当前指针、下架状态、Key scopes 与 grants、发布操作/墓碑、审计和设置记录数。不得仅凭迁移命令成功或部署状态替代读回证据。
 5. 在本地创建已审查的 release commit，但先不要 push `main`；从该 commit 部署 Preview 并完成下方 smoke。
 6. Preview 通过后才把同一 commit push 到 `main`，等待 CI 和 Vercel Production 自动部署，再用 `vercel inspect` 核对自定义域名指向该修订。
 
@@ -51,14 +51,14 @@ npm run hash-password -- "your-admin-password"
 ### 回滚与恢复
 
 - 迁移命令在 `COMMIT` 前失败：整批事务自动回滚，不会留下迁移记录；修正原因后重跑即可，无需数据恢复。
-- 新代码部署后需要回滚：只能使用已验证、同时理解维护闸与当前访问版本/内容版本安全语义的兼容应用；忽略维护闸、`access_revision`、内容 `current_revision` 基线或 managed Key `credential_version` 锁内复核的旧版本不再是安全回滚候选。没有兼容候选时保持维护并向前修复。保留 `site_settings`、`pages.is_favorite`、访问/内容版本、`share_revisions` 及迁移记录，不执行破坏性 down migration。
-- `COMMIT` 后确认发生数据异常：先停止写入，再从迁移前的 provider branch / PITR 检查点恢复到新分支；核对表结构和记录数后才切换运行时连接。不要在未核验的生产主库上直接覆盖恢复。
+- 新代码部署后需要回滚：只能使用已验证、能正确解释维护闸、`access_revision`、内容 revisions、`published`、managed-Key `credential_version`、`publish_operations`、清除墓碑及 Key scopes/grants 的兼容应用。忽略其中任一持久化语义的旧版本都不是安全回滚候选；没有兼容候选时保持维护并发布 forward-fix。保留现有 schema 与迁移台账，不执行破坏性 down migration。
+- `COMMIT` 后确认发生数据异常：先停止写入，再从迁移前的 provider branch / PITR 检查点恢复到新的隔离分支；按 [原生备份与恢复演练](backup-restore.md) 核对 snapshot、数据、迁移台账和快照后撤销/清除事件。恢复验证保持 `safeToServe: false` / offline-by-default；所有者完成人工 reconciliation 并核实 readback 前，不得切换运行时连接或重新启用内容。不得在未核验的生产主库上直接覆盖恢复。
 
 ### 写维护与旧写入者退出
 
 迁移 `005` 只新增运维状态，不提供普通用户配置项。受控运维主机临时注入 `DATABASE_MIGRATION_URL`，使用 `npm run maintenance -- pause|status|resume`；CLI 不加载 `.env` 或回退内存。pause 的成功输出发生在同一数据库事务取得排他维护锁、排空既有发布事务并提交之后。
 
-**滚动部署不是排空证明。**旧部署、旧函数实例与旧 CLI 若不认识维护闸，必须先退出可写路径，并通过连接身份、在途事务与锁状态证明确已排空。无法确认时维持维护状态，不继续回填/开放；`status=true` 不能替代这些证据。公开/管理读取与登录保持可用，符合访问条件的写请求和浏览事件返回 `PUBLISHING_MAINTENANCE` 503，事件不计数。详细步骤、错误恢复及回滚边界见 [写维护手册](maintenance.md)。
+**滚动部署不是排空证明。**旧部署、旧函数实例与旧 CLI 若不认识维护闸，必须先退出可写路径，并通过连接身份、在途事务与锁状态证明确已排空。无法确认时维持维护状态，不继续迁移、回填或开放；`status=true` 不能替代这些证据。迁移后、恢复写入前，操作者须读回并核验 `001`–`010` 台账/checksum、关键列/表、Revision 指针与下架状态、Key scopes/grants、发布操作/清除墓碑及站点维护值；再次运行迁移应全部 skipped。核验不一致时保持维护并 forward-fix，不回滚到忽略新语义的旧写入者。公开/管理读取与登录保持可用，符合访问条件的写请求和浏览事件返回 `PUBLISHING_MAINTENANCE` 503，事件不计数。详细步骤、错误恢复及回滚边界见 [写维护手册](maintenance.md)。
 
 ### 原生备份与恢复演练
 
@@ -129,7 +129,23 @@ npm test
 用一次性本地 Postgres 验证真实迁移：
 
 ```bash
-POSTGRES_TEST_URL=postgresql://postgres:password@127.0.0.1:5432/quickshare_test?sslmode=disable \
+POSTGRES_TEST_URL='postgresql://postgres:password@127.0.0.1:5432/issue39_api_publish_test?sslmode=disable' \
+  npm run test:postgres
+```
+
+`npm run test:postgres`、所有直接使用 `POSTGRES_TEST_URL` 的破坏性 integration entry，以及独立 `node scripts/release-readiness-check.js` 都要求精确的 actor-owned 数据库 `issue39_api_publish_test`；每个入口均在启动子测试、构造 pool 或执行 DDL 前验证目标。底层通用 `validatePostgresTestUrl()` 仍接受其它 loopback `_test` 名称，供使用独立 `POSTGRES_BACKUP_TEST_SRC_URL` / `POSTGRES_BACKUP_TEST_RESTORE_URL` 的 backup/drill fixture owner 使用；这不授权 canonical suite 使用这些数据库。未设置 `QUICKSHARE_TEST_CLIENT_ROOT` 时，客户端生命周期和 10× scale/restore 两项会明确标记为 skipped，数据库故障测试仍运行；这不等于完整 #43 发布门。独立 checker 还要求干净 pinned checkout（commit `2eec5060c1f7e10e7849fe6085f673d5db72e038`），并拒绝任何 skip：
+
+```bash
+QUICKSHARE_TEST_CLIENT_ROOT=/path/to/clean/quickshare-client-checkout \
+POSTGRES_TEST_URL='postgresql://postgres:password@127.0.0.1:5432/issue39_api_publish_test?sslmode=disable' \
+  node scripts/release-readiness-check.js
+```
+
+也可在完整 PostgreSQL 套件中 opt-in 客户端相关用例：
+
+```bash
+QUICKSHARE_TEST_CLIENT_ROOT=/path/to/clean/quickshare-client-checkout \
+POSTGRES_TEST_URL='postgresql://postgres:password@127.0.0.1:5432/issue39_api_publish_test?sslmode=disable' \
   npm run test:postgres
 ```
 

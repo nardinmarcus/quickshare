@@ -5,10 +5,12 @@
  * Native restore for QuickShare PostgreSQL backups.
  *
  * Restores a pg_dump custom-format backup (produced by scripts/backup-db.js)
- * into an isolated restore database. The restore target must differ from the
- * backup source database and must satisfy the same localhost `_test` guard.
- * A restored database is never wired to an application by this script; it
- * stays offline by default (see docs/backup-restore.md).
+ * into an isolated restore database. The target must differ from the source;
+ * a matching database name with any non-loopback endpoint is rejected because
+ * URL hostnames cannot prove remote server identity. Both URLs must also
+ * satisfy the localhost `_test` guard unless separately authorized. A restored
+ * database is never wired to an application; it stays offline by default
+ * (see docs/backup-restore.md).
  */
 
 const fs = require('fs');
@@ -18,11 +20,13 @@ const {
   assertTestDatabaseUrl,
   assertToolMatchesServer,
   deriveInternalUrl,
+  isLocalHost,
   localPoolEnv,
   parseCliArgs,
   parseConnectionStringParts,
   parsePostgresMajorFromServerVersionNum,
   redactUrl,
+  samePostgresEndpoint,
   resolveToolCommand,
   runCommand
 } = require('./backup-db');
@@ -45,20 +49,77 @@ function verifyDumpSha256(dumpPath, expectedSha256) {
   return true;
 }
 
-function assertRestoreTargetDiffers(manifest, target) {
-  if (!manifest || typeof manifest !== 'object') {
+function normalizeEndpoint(endpoint, label) {
+  if (!endpoint || typeof endpoint !== 'object' || Array.isArray(endpoint)) {
+    throw new Error(`${label} endpoint is required`);
+  }
+
+  const { host, database } = endpoint;
+  const rawPort = endpoint.port;
+  const port = typeof rawPort === 'number' && Number.isInteger(rawPort)
+    ? String(rawPort)
+    : rawPort;
+
+  if (typeof host !== 'string' || host.length === 0 || host !== host.trim()
+      || /[\s\/@?#]/.test(host)) {
+    throw new Error(`${label} endpoint host is missing or malformed`);
+  }
+
+  try {
+    const hostAuthority = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+    const parsedHost = new URL(`postgresql://${hostAuthority}/`);
+    if (!parsedHost.hostname || parsedHost.port || parsedHost.username || parsedHost.password
+        || parsedHost.pathname !== '/') {
+      throw new Error('invalid host authority');
+    }
+  } catch {
+    throw new Error(`${label} endpoint host is missing or malformed`);
+  }
+
+  if ((typeof port !== 'string' && typeof port !== 'number')
+      || !/^\d+$/.test(String(port))
+      || Number(port) < 1 || Number(port) > 65535) {
+    throw new Error(`${label} endpoint port is missing or malformed`);
+  }
+
+  if (typeof database !== 'string' || database.trim().length === 0 || database.includes('\0')) {
+    throw new Error(`${label} endpoint database is missing or malformed`);
+  }
+
+  return { host, port: String(port), database };
+}
+
+function assertManifestSourceMatchesSourceUrl(manifest, sourceUrlParts) {
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     throw new Error('A backup manifest is required');
   }
 
-  const sameDatabase = manifest.database === target.database
-    && String(manifest.port || '5432') === String(target.port || '5432')
-    && (manifest.host === target.host
-      || (manifest.host === 'localhost' && target.host === '127.0.0.1')
-      || (manifest.host === '127.0.0.1' && target.host === 'localhost'));
+  const manifestSource = normalizeEndpoint(manifest, 'Backup manifest source');
+  const trustedSource = normalizeEndpoint(sourceUrlParts, 'Trusted source URL');
 
-  if (sameDatabase) {
-    throw new Error(`Restore target must differ from the backup source database ` +
-      `(${manifest.host}:${manifest.port}/${manifest.database}); refusing an in-place overwrite.`);
+  if (!samePostgresEndpoint(manifestSource, trustedSource)) {
+    throw new Error('Backup manifest source endpoint does not match the independently supplied --source-url');
+  }
+
+  return true;
+}
+
+function assertRestoreTargetDiffers(source, target) {
+  const sourceEndpoint = normalizeEndpoint(source, 'Trusted source');
+  const targetEndpoint = normalizeEndpoint(target, 'Restore target');
+
+  const sameDatabaseName = sourceEndpoint.database === targetEndpoint.database;
+  const hasNonLoopbackEndpoint = !isLocalHost(sourceEndpoint.host) || !isLocalHost(targetEndpoint.host);
+  if (sameDatabaseName && hasNonLoopbackEndpoint) {
+    throw new Error(`Restore source and target use the same database name "${sourceEndpoint.database}" ` +
+      'and at least one endpoint is non-loopback; hostname aliases and tunnels cannot prove separate PostgreSQL instances. ' +
+      'Refusing before reading the dump or connecting. Use a separately authorized restore to a distinct database name ' +
+      'and follow the verified operator flow; --allow-non-test does not override this guard.');
+  }
+
+  if (samePostgresEndpoint(sourceEndpoint, targetEndpoint)) {
+    throw new Error(`Restore target must differ from the trusted source database ` +
+      `(${sourceEndpoint.host}:${sourceEndpoint.port}/${sourceEndpoint.database}); refusing an in-place overwrite.`);
   }
 
   return true;
@@ -89,15 +150,28 @@ async function restoreBackup({
   manifestPath,
   dumpPath,
   targetUrl,
+  sourceUrl,
   dockerContainer,
   toolBin,
   clean = true,
   allowNonTest
 }) {
+  if (!sourceUrl) {
+    throw new Error('A trusted backup source URL is required (--source-url)');
+  }
   if (!targetUrl) {
     throw new Error('A restore target URL is required (--target-url or RESTORE_DATABASE_URL)');
   }
 
+  const sourceParts = parseConnectionStringParts(sourceUrl);
+  const targetParts = parseConnectionStringParts(targetUrl);
+
+  // This guard is intentionally independent of editable manifest metadata and
+  // runs before the local/test guard, reading the dump, constructing a Pool,
+  // or invoking pg_restore. Remote URL authorities cannot prove server identity.
+  assertRestoreTargetDiffers(sourceParts, targetParts);
+
+  assertTestDatabaseUrl(sourceUrl, { allowNonTest });
   const guard = assertTestDatabaseUrl(targetUrl, { allowNonTest });
   const testGuardBypassed = guard === true ? false : guard.testGuardBypassed;
 
@@ -107,6 +181,10 @@ async function restoreBackup({
   if (resolvedManifest.kind !== 'quickshare-native-consistent-backup') {
     throw new Error(`Unexpected manifest kind: ${resolvedManifest.kind}`);
   }
+
+  // The manifest is editable and its dump digest binds only dump bytes. Treat
+  // endpoint fields as consistency claims, never as source identity proof.
+  assertManifestSourceMatchesSourceUrl(resolvedManifest, sourceParts);
 
   const resolvedDumpPath = dumpPath
     || (manifestPath
@@ -118,9 +196,6 @@ async function restoreBackup({
   }
 
   verifyDumpSha256(resolvedDumpPath, resolvedManifest.dumpSha256);
-
-  const targetParts = parseConnectionStringParts(targetUrl);
-  assertRestoreTargetDiffers(resolvedManifest, targetParts);
 
   const targetServer = await readRestoreServerState(targetUrl);
   const targetMajor = parsePostgresMajorFromServerVersionNum(targetServer.serverVersionNum);
@@ -199,13 +274,14 @@ async function main() {
   const args = parseCliArgs(process.argv.slice(2));
   const targetUrl = args.targetUrl || process.env.RESTORE_DATABASE_URL;
 
-  if (!args.manifest && !args.dump) {
-    throw new Error('A backup manifest is required: pass --manifest <path>');
+  if (!args.manifest) {
+    throw new Error('A backup manifest is required: pass --manifest <path>; --dump only overrides its dump path');
   }
 
   const restoreManifest = await restoreBackup({
     manifestPath: args.manifest,
     dumpPath: args.dump,
+    sourceUrl: args.sourceUrl,
     targetUrl,
     dockerContainer: args.docker || undefined,
     toolBin: args.toolBin || process.env.PG_RESTORE_BIN || undefined,
@@ -235,6 +311,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  assertManifestSourceMatchesSourceUrl,
   assertRestoreTargetDiffers,
   restoreBackup,
   verifyDumpSha256

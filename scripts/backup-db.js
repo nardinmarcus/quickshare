@@ -21,10 +21,15 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { Client } = require('pg');
 
 const { createPostgresPool } = require('../models/postgres-config');
 
 const DUMP_FORMAT = 'custom';
+const TARGET_OVERRIDE_PARAMETERS = new Set([
+  'host', 'hostaddr', 'port', 'database', 'dbname', 'socket', 'socketdir'
+]);
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 const REDACTED_URL_MARKER = '***';
 
 function redactUrl(connectionString) {
@@ -77,22 +82,67 @@ function redactCommandArgs(args) {
   });
 }
 
+function normalizeHost(hostname) {
+  return String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+}
+
+function isLocalHost(hostname) {
+  return LOOPBACK_HOSTS.has(normalizeHost(hostname));
+}
+
+function samePostgresEndpoint(left, right) {
+  if (!left || !right) return false;
+
+  const leftHost = normalizeHost(left.host);
+  const rightHost = normalizeHost(right.host);
+  const sameHost = leftHost === rightHost
+    || (LOOPBACK_HOSTS.has(leftHost) && LOOPBACK_HOSTS.has(rightHost));
+
+  return sameHost
+    && String(left.port || '5432') === String(right.port || '5432')
+    && String(left.database || '') === String(right.database || '');
+}
+
 function parseConnectionStringParts(connectionString) {
-  const url = new URL(connectionString);
+  let url;
+  try {
+    url = new URL(connectionString);
+  } catch {
+    throw new Error('Connection string must be a valid PostgreSQL URL');
+  }
 
   if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') {
     throw new Error('Connection string must use postgres:// or postgresql://');
   }
 
-  return {
-    host: url.hostname,
-    port: url.port || '5432',
-    database: decodeURIComponent(url.pathname.replace(/^\//, ''))
-  };
-}
+  const targetOverrides = [...url.searchParams.keys()]
+    .filter((key) => TARGET_OVERRIDE_PARAMETERS.has(key.toLowerCase()));
+  if (targetOverrides.length > 0) {
+    throw new Error('Connection string must not contain PostgreSQL target override parameters');
+  }
 
-function isLocalHost(hostname) {
-  return ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(hostname);
+  let database;
+  let effective;
+  try {
+    database = decodeURIComponent(url.pathname.replace(/^\//, ''));
+    // node-postgres parses URLs synchronously in the Client constructor; no
+    // socket is opened. Compare its effective endpoint to the URL authority.
+    effective = new Client({ connectionString: url.href }).connectionParameters;
+  } catch {
+    throw new Error('Connection string must identify a valid PostgreSQL target');
+  }
+
+  const authority = { host: url.hostname, port: url.port || '5432', database };
+  const actual = {
+    host: effective.host,
+    port: String(effective.port || '5432'),
+    database: String(effective.database || '')
+  };
+  if (!samePostgresEndpoint(authority, actual)) {
+    throw new Error('Connection string PostgreSQL target does not match its URL authority');
+  }
+
+  return authority;
 }
 
 /**
@@ -279,7 +329,7 @@ function buildBackupManifest({
     snapshotWalLsn: snapshotWalLsn || null,
     consistency: 'single-transaction-snapshot (pg_dump custom format)',
     host: parts.host,
-    port: parts.port,
+    port: parts.port || '5432',
     database: parts.database,
     serverVersion,
     serverVersionNum,
@@ -511,6 +561,7 @@ module.exports = {
   computeFileSha256,
   createBackup,
   deriveInternalUrl,
+  isLocalHost,
   localPoolEnv,
   parseCliArgs,
   parseConnectionStringParts,
@@ -520,5 +571,6 @@ module.exports = {
   redactCommandArgs,
   resolveToolCommand,
   runCommand,
+  samePostgresEndpoint,
   sanitizeChildEnv
 };

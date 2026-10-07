@@ -11,13 +11,8 @@ if (!connectionString) {
   throw new Error('POSTGRES_TEST_URL is required for Postgres integration tests');
 }
 
-const testUrl = new URL(connectionString);
-const databaseName = testUrl.pathname.replace(/^\//, '');
-const isLocalHost = ['127.0.0.1', 'localhost', '::1'].includes(testUrl.hostname);
-
-if (!isLocalHost || !databaseName.endsWith('_test')) {
-  throw new Error('POSTGRES_TEST_URL must use localhost and a database ending in _test');
-}
+const { validateCanonicalPostgresSuiteUrl } = require('../../scripts/release-readiness-check');
+const testUrl = validateCanonicalPostgresSuiteUrl(connectionString);
 
 const env = {
   POSTGRES_SSL: 'false',
