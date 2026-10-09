@@ -17,12 +17,12 @@ jobs:
       postgres:
         image: postgres:17-alpine
         env:
-          POSTGRES_DB: quickshare_test
+          POSTGRES_DB: issue39_api_publish_test
           POSTGRES_PASSWORD: postgres
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d quickshare_test"
+          --health-cmd "pg_isready -U postgres -d issue39_api_publish_test"
           --health-interval 1s
           --health-timeout 3s
           --health-retries 30
@@ -55,5 +55,5 @@ jobs:
 
       - name: Run PostgreSQL integration tests
         env:
-          POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/quickshare_test?sslmode=disable
+          POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/issue39_api_publish_test?sslmode=disable
         run: npm run test:postgres

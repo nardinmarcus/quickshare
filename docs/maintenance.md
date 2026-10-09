@@ -53,7 +53,7 @@ npm run maintenance -- resume
 
 ```bash
 npm test
-POSTGRES_TEST_URL='postgresql://postgres:synthetic@127.0.0.1:55428/issue28_core_test?sslmode=disable' npm run test:postgres
+POSTGRES_TEST_URL='postgresql://postgres:synthetic@127.0.0.1:55428/issue39_api_publish_test?sslmode=disable' npm run test:postgres
 ```
 
-PostgreSQL 文件按顺序执行，避免共享测试 schema 的并行重建。维护测试使用不同 backend PID、锁等待观测（`pg_stat_clear_snapshot`）与确定性 barrier，覆盖排空、排队竞争、设置事务、SQL/审计回滚、提交后响应、恢复、运维 CLI 和单连接 backfill。只运行在自己的 localhost `_test` 数据库，不使用其他工作者的库。
+PostgreSQL 文件按顺序执行，避免共享测试 schema 的并行重建。维护测试使用不同 backend PID、锁等待观测（`pg_stat_clear_snapshot`）与确定性 barrier，覆盖排空、排队竞争、设置事务、SQL/审计回滚、提交后响应、恢复、运维 CLI 和单连接 backfill。完整 `npm run test:postgres` 只运行在预检确认归属的 localhost `issue39_api_publish_test` 数据库，不使用其他工作者的库。

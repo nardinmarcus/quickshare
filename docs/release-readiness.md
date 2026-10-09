@@ -1,6 +1,14 @@
-# #43 发布就绪交接（r12 canonical PostgreSQL safety gate）
+# #43 发布就绪交接（r14 CI 与 canonical PostgreSQL 合同）
 
-## r12 当前候选与结论
+## 当前本地工程状态与 r14 增量（不等于发布批准）
+
+r12 的精确树 `66815b75358e63cedf9b33f4f8e9ba4ead6ff499` 已在本地提交并 fast-forward 集成，产品 integration commit `65424e091d401f7fb62b4ece7f834eb581b88a24`。随后发布前只读核查发现 GitHub CI 的 `POSTGRES_DB`、`pg_isready` 与 `POSTGRES_TEST_URL` 仍为 `quickshare_test`，与 r12 canonical suite 只接受 `issue39_api_publish_test` 的前置保护冲突，导致 CI 在测试启动前 exit 1。原始无网络 RED 保留在 R 根 `evidence/issue43/attempts/20261009T163100Z-r14-ci-canonical-db-red/`；既有 r12 本地 107/107 不证明 GitHub CI 会通过。
+
+r14 仅对齐 `.github/workflows/ci.yml` 三处数据库名、`docs/maintenance.md` 的过期测试示例，并在 `test/release-readiness.test.js` 增加读取真实 workflow 的 CI 合同回归；本文只同步状态与证据索引。先 RED、后 GREEN 1/1；Node 24 `npm test` 613/613；独占 PG17 synthetic canonical fixture 上 pinned-client `npm run test:postgres` 107/107、standalone checker 3/3；按 CI 原状不带客户端的同一数据库 suite 为 105 pass + 2 explicit skips，不能冒充 pinned-client 发布门。原始逐命令与 exact-ID fixture 清理证据见 R 根 `evidence/issue43/local-r14-ci/` 及 `evidence/issue43/attempts/*-r14-*/`。此前在已集成 r12 commit 的 PostgreSQL UI/健康后故障补证见 R 根 `issue43-local-r13-ui-outage-result.md`；失败与缺失即时 exit 仍须按原记录披露。
+
+本文件不授权新候选的提交、集成或发布；r14 须对新的完整树再取得两份独立 Standards/Spec 审查及 Commander 决定。恢复副本保持私有、`safeToServe=false`，生产迁移/部署、push、Issue 操作仍需另行明确授权。下面 r12/r11/r7 等段落是相应时间点的历史交接，不应将其“当前”“未提交”等原始表述当作最终运行状态。
+
+## r12 当时的候选与结论（已本地集成；非 r14 新鲜门）
 
 r12 关闭 r11 Standards 与 Spec 的同一项 MUST：独立 `node scripts/release-readiness-check.js` 及每个直接可运行、使用 `POSTGRES_TEST_URL` 的破坏性 PostgreSQL integration entry 均须先通过 `validateCanonicalPostgresSuiteUrl()`，只接受 effective target 为 loopback 的 actor-owned `issue39_api_publish_test`。standalone checker 在 pinned-client 子进程启动前拒绝 `other_test`；direct entry 在 TAP/test registration、Pool/Client/socket I/O 与 DDL 前拒绝。原有 migrations guard 已是 exact canonical；publish-state guard 也保持 exact canonical。`postgres-backup.test.js` 继续排除在本合同之外：它使用独立 `POSTGRES_BACKUP_TEST_SRC_URL` / `POSTGRES_BACKUP_TEST_RESTORE_URL`，在各自 fixture preflight 后复用通用 `_test` validator。通用 `validatePostgresTestUrl()` 未收窄，`other_test` 等独立 loopback fixture 仍可供 backup/drill 使用。
 
@@ -11,7 +19,7 @@ Fresh PG17.11 fixture 的 DDL 前证据核对了 `postgres:17-alpine` image ID `
 - r12 immutable attempts 位于 R 根 `evidence/issue43/attempts/`：RED `20261007T153231Z-r12-wrong-local-db-guard-red/`；GREEN `20261007T153319Z-r12-wrong-local-db-guard-green/`；首次 focused correction `20261007T153327Z-r12-release-readiness-focused/`（exit 1，旧 synthetic fixture URL 不符合新 canonical contract，且未触及数据库）；更正后 focused `20261007T153348Z-r12-release-readiness-focused-correction1/`；Node 全套 `20261007T153403Z-r12-npm-test/`；fixture vacancy / start / pre-DDL / canonical DB create 分别为 `20261007T153519Z-r12-fixture-vacancy-preflight/`, `20261007T153539Z-r12-fixture-create-start/`, `20261007T153558Z-r12-pre-ddl-inventory/`, `20261007T153609Z-r12-create-canonical-test-db/`；PG gate `20261007T153622Z-r12-pinned-client-postgres-suite/`；checker `20261007T153710Z-r12-pinned-client-release-readiness-checker/`；精确 cleanup 前身份核对、cleanup、最终 readback 分别为 `20261007T153801Z-r12-precleanup-exact-identity/`, `20261007T153813Z-r12-exact-owned-fixture-cleanup/`, `20261007T153826Z-r12-final-fixture-cleanup-readback/`。每个执行 attempt 有 literal redacted command、完整 raw log 与即时 exit；失败记录保留原样。
 - 两次 freeze-audit harness 失败也原样保留：`20261007T153958Z-r12-frozen-candidate-identity/` 内部 allowlist 比较失败却由 wrapper 记 exit 0（不可作通过证据）；`20261007T154026Z-r12-frozen-candidate-identity-correction1/` 将 prior tree file inventory 错当 changed-path set，exit 1。改正比较后重新通过 freeze identity 核验，精确 receipt 由 R-root handoff 索引；未回填或覆盖旧 attempt。
 - 本轮没有改动 backup/restore implementation；r9 native PG17 backup/restore 与 AC2 actual-mutation evidence 仍是先前、独立、未重分类的证据，不作为 r12 新 gate。恢复 reconciliation 仍 `owner-review-required` / `safeToServe=false` / `offline-by-default`；AC3 UI、AC4 production SLO、AC5 provider migration/readback/rollback 仍部分或未验证。r5 mtime-based scratch deletion incident 仍单独待 Commander disposition；无历史 scratch 清理或追溯恢复声明。
-- 此候选只冻结为 staged patch，不创建 commit。fresh independent full-tree Standards 与 Spec review 及 Commander acceptance 尚待进行；不作 self-review/self-acceptance，也不授权 integration、push、production/deploy/provider 或 Issue 操作。最终 staged tree、patch digest、owned paths 与 freeze receipt 由 R-root `issue43-review-ready-r12.md` 精确索引。
+- 在 r12 handoff 写成时，此候选只冻结为 staged patch，尚未 commit/审查/集成；后续两份独立审查和本地提交/集成已另行完成，见上方当前状态及 R-root `review43-standards-r12-result.md`、`review43-spec-r12-result.md`、`accept43-r12-precommit.json`、`integration43-result.md`。其 staged tree、patch digest 与 freeze receipt 仍由 `issue43-review-ready-r12.md` 精确索引。该历史结论不授权 push、production/deploy/provider 或 Issue 操作。
 
 ## r11 历史候选与结论（r12 已取代）
 
@@ -25,7 +33,7 @@ PG fixture 在 DDL 前已核实 image `postgres:17-alpine` 的不可变 image ID
 
 - Gate/evidence attempts 位于 R 根 `evidence/issue43/attempts/`：RED `20261007T150401Z-r11-wrong-local-db-guard-red/`；绿回归 `20261007T150441Z-r11-wrong-local-db-guard-green/`；focused `20261007T150505Z-r11-release-readiness-tests-focused/`；Node 全套 `20261007T150524Z-r11-npm-test/`；fixture preflight correction `20261007T150814Z-r11-pinned-fixture-resource-preflight-correction1/`、创建/启动 `20261007T150835Z-r11-pinned-fixture-create-start/`、DDL 前目录 `20261007T150854Z-r11-pinned-fixture-pre-ddl-inventory/`、创建目标库/OID `20261007T150907Z-r11-create-canonical-test-db/`；PG gate `20261007T150925Z-r11-pinned-client-postgres-suite/`；checker `20261007T151012Z-r11-pinned-client-release-readiness-checker/`；清理前精确复核 `20261007T151044Z-r11-precleanup-exact-identity/`、精确清理 `20261007T151053Z-r11-exact-owned-fixture-cleanup/`、最终 readback `20261007T151109Z-r11-final-fixture-cleanup-readback/`。每个通过 gate 都有 redacted `.cmd`、完整 `.raw.log` 和即时 `.exit`。
 - 两个本轮失败 attempt 原样保留：RED regression exit 1 是修复前证实 canonical script 会继续启动测试（PG I/O preload 阻断 Pool，未触及数据库）；`20261007T150737Z-r11-pinned-fixture-resource-preflight/` 的 shell wrapper 因 awk 转义错误后在分组内 `exit`，没写即时 `.exit`，未创建 container/volume/DB、未做 DDL。没有回填 sidecar；改用独立 correction attempt 并通过。历史 r7、AC2、r9 三个缺即时 sidecar 的 initial-preflight attempts 也保持原状。r5 mtime scratch-cleanup incident 仍未裁定，未清理任何历史 scratch。
-- 当前仍未 commit、push、integration、production/deploy、provider mutation/readback 或操作 Issue。AC2 restore reconciliation/serving 仍未完成：`owner-review-required`、`safeToServe=false`、`offline-by-default`。AC3 仍不具备完整 UI 条件验收；AC4 只有本地竞争/10×规模/运行故障证据，不是生产 SLO；AC5 的生产旧 writer drain、迁移/readback 与 rollback 均未验证。fresh independent full-tree reviews 与 Commander acceptance 尚未完成；本文不是接受或发布授权。
+- 在 r11 handoff 时仍未 commit、push、integration、production/deploy、provider mutation/readback 或操作 Issue。AC2 restore reconciliation/serving 仍未完成：`owner-review-required`、`safeToServe=false`、`offline-by-default`。AC3 仍不具备完整 UI 条件验收；AC4 只有本地竞争/10×规模/运行故障证据，不是生产 SLO；AC5 的生产旧 writer drain、迁移/readback 与 rollback 均未验证。fresh independent full-tree reviews 与 Commander acceptance 尚未完成；本文不是接受或发布授权。
 
 ## r9 历史候选门禁与证据（保留，不是 r12 新鲜执行）
 
@@ -48,7 +56,7 @@ PG fixture 在 DDL 前已核实 image `postgres:17-alpine` 的不可变 image ID
 
 PG17 native drill artifacts（`20261007T140731Z-r9-native-pg17-drill/artifacts/`）SHA-256：dump `d9be9bf7fa97cbe900cba4483d48d07acbc96dbd092559225ca6ee29f7f17cc6`；backup manifest `94860f2710c29a384b307175ff5aa51c1ce4488272e5d591949579f079484083`；restore manifest `62e0ac7b63eadf17ae17df24b440acd9549c93df0fc029595866fa9e7aa6dcf4`；完整 `verification.json` `9bd76be0242681c2342c414f8abe06b9ed634237bdc5ad61dce9fd9bc4071d4f`；独立 parity `d226e0180af6c2549c112c81096863f08aec81ee6023529642ba3b53f6e35a74`。Backup manifest dump digest 与独立重算一致。原生 drill 容器/image/port/database/volume 身份与精确 cleanup 记录见对应 preflight 与 cleanup attempts。
 
-## r8/r7 与更早的历史门禁（不作为 r12 当前候选）
+## r8/r7 与更早的历史门禁（不作为当前 r14 候选）
 
 以下门禁来自 r7 代码/测试候选；本轮仅更新本文档，没有修改受测 JavaScript/test 文件。所有 attempt 位于 R 根 `evidence/issue43/attempts/`，失败记录不覆盖。
 
@@ -134,7 +142,7 @@ r7 正常 drill 的 artifacts 位于 `20261006T184327Z-r7-native-drill/artifacts
 - **r4 历史 AC4 smoke**：`20261006T161000Z-r4-release-checker-pinned/full.raw.log` 曾记录 100→1,000 Pages/revisions、本地有界管理列表、历史表读取观察与恢复耗时。该结果不是当前 r7 代码门禁或 r8 staged tree 的替代证据，也没有证明服务健康运行后数据库突失或生产 SLO。
 - **r5 scratch incident（不可变披露）**：R 根 `issue43-r5-scratch-cleanup-incident.md` 记录了按 mtime 删除 11 个 TMPDIR 路径、其中至少两个可证为 r4 scratch，另外八个归属无法证明。后续 r6/r7/AC2 durable artifacts 不会恢复已删除的旧 scratch；本轮没有清理任何历史或 unowned scratch，也不声称追溯修复该事件。独立审查应继续单独评估该 process/evidence incident，不得静默豁免或与产品代码结果混为一谈。
 
-## 尚待完成
+## r7/r12 handoff 写成时尚待完成（历史记录，不代表当前状态）
 
 1. r12 staged tree 冻结后，需由两位 fresh、independent reviewer 完成全树 Standards 与 Spec review；本 writer 不自审、不接受、不 commit、不 integration，r11 及更早 review 均不覆盖 r12。
 2. Commander 仍需单独裁定 r5 scratch-cleanup preservation incident；本轮没有清理旧 scratch，也没有追溯恢复缺失内容。

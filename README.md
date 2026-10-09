@@ -99,10 +99,10 @@ share.example.com
 npm test
 ```
 
-Postgres 迁移集成测试需要一次性本地测试库，数据库名必须以 `_test` 结尾：
+Postgres 集成测试需要经预检确认归属的一次性本地测试库；完整 `npm run test:postgres` 仅接受精确库名 `issue39_api_publish_test`：
 
 ```bash
-POSTGRES_TEST_URL=postgresql://postgres:password@127.0.0.1:5432/quickshare_test?sslmode=disable \
+POSTGRES_TEST_URL=postgresql://postgres:password@127.0.0.1:5432/issue39_api_publish_test?sslmode=disable \
   npm run test:postgres
 ```
 

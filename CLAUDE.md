@@ -85,7 +85,7 @@ npm test
 POSTGRES_TEST_URL='postgresql://postgres:password@127.0.0.1:5432/issue39_api_publish_test?sslmode=disable' npm run test:postgres
 ```
 
-测试套件包含既有 `postgres-api-publish-state.test.js`，它只接受自己拥有的精确数据库名 `issue39_api_publish_test`。覆盖：内容渲染、安全与访问策略、Share API、admin 路由、Favorite Share 交互/生命周期/公开边界，以及真实 PostgreSQL 的空库、legacy、重复迁移、Repository 与失败回滚。PostgreSQL 套件会重建 `public` schema，只能指向 localhost 且数据库名必须以 `_test` 结尾。
+测试套件包含既有 `postgres-api-publish-state.test.js`，它只接受自己拥有的精确数据库名 `issue39_api_publish_test`。覆盖：内容渲染、安全与访问策略、Share API、admin 路由、Favorite Share 交互/生命周期/公开边界，以及真实 PostgreSQL 的空库、legacy、重复迁移、Repository 与失败回滚。PostgreSQL 套件会重建 `public` schema，执行 `npm run test:postgres` 时只允许预检确认归属的 localhost `issue39_api_publish_test` 数据库；独立 backup/drill 夹具仍使用各自的 `_test` 库。
 
 ## 安全边界
 

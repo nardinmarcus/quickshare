@@ -183,6 +183,17 @@ test('canonical suite validator pins the actor-owned database without restrictin
   assert.throws(() => validateCanonicalPostgresSuiteUrl(independentlyOwnedBackupUrl), /issue39_api_publish_test/);
 });
 
+test('CI PostgreSQL service, health check, and suite URL target the canonical actor-owned database', () => {
+  const workflow = fs.readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8');
+  const database = workflow.match(/^\s+POSTGRES_DB:\s+([a-z][a-z0-9_]*)\s*$/m)?.[1];
+  const healthDatabase = workflow.match(/--health-cmd "pg_isready -U postgres -d ([a-z][a-z0-9_]*)"/)?.[1];
+  const suiteUrl = workflow.match(/^\s+POSTGRES_TEST_URL:\s+(postgresql:\/\/\S+)\s*$/m)?.[1];
+  assert.ok(database && healthDatabase && suiteUrl, 'CI must declare a PostgreSQL database, health check, and suite URL');
+  const canonical = validateCanonicalPostgresSuiteUrl(suiteUrl);
+  assert.equal(database, canonical.pathname.slice(1), 'service database must match the guarded suite');
+  assert.equal(healthDatabase, database, 'health check must target the same database');
+});
+
 test('runner rejects remote URI overrides before client validation or test launch', () => {
   const result = runNode([RUNNER], probeEnvironment(
     'postgres://synthetic:secret@127.0.0.1/issue43_test?host=203.0.113.8'
