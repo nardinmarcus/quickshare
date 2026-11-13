@@ -232,6 +232,58 @@
     </div>
   </section>
 
+  <section class="card admin-card" id="history-section">
+    <h2 class="admin-section-title">历史版本</h2>
+    <p class="admin-history-note">只读浏览此分享的内容历史：可查看单个版本的源码与预览，并比较任意两个版本。此处不提供恢复或清除操作。</p>
+    <p id="history-status" aria-live="polite">正在加载历史…</p>
+    <button type="button" class="cyber-btn cyber-btn-secondary" id="history-retry" hidden>重试</button>
+    <div id="history-list"></div>
+    <div class="admin-history-pager" id="history-pager" hidden>
+      <button type="button" class="cyber-btn cyber-btn-secondary" id="history-prev">上一页</button>
+      <span id="history-page-info"></span>
+      <button type="button" class="cyber-btn cyber-btn-secondary" id="history-next">下一页</button>
+    </div>
+    <div class="admin-history-compare-bar" id="history-compare-bar" hidden>
+      <span id="history-compare-selection"></span>
+      <button type="button" class="cyber-btn" id="history-compare-run">比较所选版本</button>
+      <button type="button" class="cyber-btn cyber-btn-secondary" id="history-compare-clear">清除选择</button>
+    </div>
+    <div id="history-compare-result" hidden>
+      <h3 class="admin-history-subtitle">版本比较 <span id="history-compare-title"></span></h3>
+      <table class="admin-conflict-meta" id="history-compare-meta" hidden>
+        <thead>
+          <tr><th scope="col">字段</th><th scope="col">旧版</th><th scope="col">新版</th></tr>
+        </thead>
+        <tbody id="history-compare-meta-body"></tbody>
+      </table>
+      <p id="history-compare-status" aria-live="polite"></p>
+      <div class="admin-conflict-diff" id="history-compare-diff" aria-label="正文行级差异"></div>
+      <details class="admin-conflict-full">
+        <summary>查看旧版完整正文</summary>
+        <pre id="history-compare-before-full"></pre>
+      </details>
+      <details class="admin-conflict-full">
+        <summary>查看新版完整正文</summary>
+        <pre id="history-compare-after-full"></pre>
+      </details>
+    </div>
+    <div id="history-source" hidden>
+      <h3 class="admin-history-subtitle">版本源码 <span id="history-source-title"></span></h3>
+      <p id="history-source-status" aria-live="polite"></p>
+      <pre class="admin-history-source-body" id="history-source-body"></pre>
+      <div class="admin-edit-actions">
+        <button type="button" class="cyber-btn cyber-btn-secondary" id="history-source-close">关闭</button>
+      </div>
+    </div>
+    <div id="history-preview" hidden>
+      <h3 class="admin-history-subtitle">版本预览 <span id="history-preview-title"></span></h3>
+      <iframe id="history-preview-frame" class="admin-rendered-preview" sandbox="allow-downloads allow-forms allow-modals allow-popups allow-scripts" title="历史版本预览"></iframe>
+      <div class="admin-edit-actions">
+        <button type="button" class="cyber-btn cyber-btn-secondary" id="history-preview-close">关闭预览</button>
+      </div>
+    </div>
+  </section>
+
   <section class="card admin-card" id="content-section">
     <div class="admin-content-header">
       <div class="admin-content-tabs" role="tablist" aria-label="内容视图">
@@ -265,5 +317,7 @@
 <script src="/js/admin-favorite.js"></script>
 <script src="/js/admin-time.js"></script>
 <script src="/js/theme-sampler.js"></script>
+<script src="/js/source-diff.js"></script>
 <script src="/js/admin-detail.js"></script>
+<script src="/js/admin-history.js"></script>
 <%- include('partials/footer', { page }) %>

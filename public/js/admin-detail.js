@@ -41,9 +41,10 @@
   // conflict (T06). The candidate is never overwritten by remote data;
   // only an explicit owner choice resolves the conflict.
   let conflictState = null;
-  let diffWorker = null;
-  let diffRunId = 0;
-  let diffDeadline = null;
+  // Monotonic render token for the conflict comparison (T07): every
+  // hide/reset/new comparison bumps it, which supersedes the pending
+  // SourceDiff run and stops any chunked rendering still in flight.
+  let diffRenderSeq = 0;
 
   function csrfToken() {
     const meta = document.querySelector('meta[name="csrf-token"]');
@@ -250,16 +251,10 @@
   // --- Content conflict + Worker diff -----------------------------------
 
   function discardDiffRun() {
-    diffRunId += 1;
+    diffRenderSeq += 1;
 
-    if (diffDeadline) {
-      clearTimeout(diffDeadline);
-      diffDeadline = null;
-    }
-
-    if (diffWorker) {
-      diffWorker.terminate();
-      diffWorker = null;
+    if (window.SourceDiff) {
+      window.SourceDiff.cancel();
     }
   }
 
@@ -283,30 +278,16 @@
     conflictDiffStatus.textContent = '差异过大，未完成比较。可分别查看远端最新版与我的稿件的完整正文。';
   }
 
-  function splitDiffLines(parts) {
-    const lines = [];
-
-    parts.forEach(function (part) {
-      const kind = part.added ? 'added' : part.removed ? 'removed' : 'context';
-      const prefix = part.added ? '+ ' : part.removed ? '- ' : '  ';
-      const segments = String(part.value).split('\n');
-
-      segments.forEach(function (segment, index) {
-        if (index === segments.length - 1 && segment === '') {
-          return;
-        }
-        lines.push({ text: prefix + segment, kind });
-      });
-    });
-
-    return lines;
-  }
-
   function renderConflictDiff(parts) {
-    const lines = splitDiffLines(parts);
-    const hasChanges = lines.some(function (line) { return line.kind !== 'context'; });
-
-    conflictDiff.textContent = '';
+    // Shared chunked renderer (T07): chunk appends re-check the render
+    // token, so hiding or resetting this section mid-render stops the
+    // old chunks instead of painting them into the next state.
+    const seq = diffRenderSeq;
+    const hasChanges = window.SourceDiff.renderParts(
+      conflictDiff,
+      parts,
+      () => seq === diffRenderSeq
+    );
 
     if (!hasChanges) {
       conflictDiffStatus.textContent = '正文内容没有差异（差异仅在标题、简介或主题字段）。';
@@ -314,89 +295,45 @@
     }
 
     conflictDiffStatus.textContent = '红色为远端最新版中的行，绿色为我的稿件中的行。';
-
-    let index = 0;
-
-    (function appendChunk() {
-      const fragment = document.createDocumentFragment();
-      const end = Math.min(index + 400, lines.length);
-
-      for (; index < end; index += 1) {
-        const div = document.createElement('div');
-        div.className = 'diff-line diff-line-' + lines[index].kind;
-        div.textContent = lines[index].text;
-        fragment.appendChild(div);
-      }
-
-      conflictDiff.appendChild(fragment);
-
-      if (index < lines.length) {
-        setTimeout(appendChunk, 0);
-      }
-    })();
   }
 
   function runConflictDiff(before, after) {
     discardDiffRun();
-    const runId = diffRunId;
+    const seq = diffRenderSeq;
 
     conflictDiff.textContent = '';
     conflictDiffStatus.textContent = '正在比较差异…';
 
-    let worker;
-
-    try {
-      worker = new Worker('/js/diff-worker.js');
-    } catch (error) {
+    if (!window.SourceDiff) {
       showDiffTooLarge();
       return;
     }
 
-    diffWorker = worker;
+    // The shared SourceDiff consumer owns the Worker lifecycle, the
+    // 1000ms algorithm budget and the 2000ms outer deadline (parent
+    // spec §9). A superseded run resolves as 'superseded' and is
+    // ignored here; a Worker failure rejects and lands in the same
+    // truthful unfinished state as an over-budget comparison — with
+    // both complete originals available below — never in a permanent
+    // loading label and never as "no differences".
+    window.SourceDiff.compare(before, after).then(function (result) {
+      if (seq !== diffRenderSeq) return;
 
-    // Outer deadline (parent spec §9): the Worker's own algorithm budget
-    // is 1000ms; if no trustworthy result arrives within 2000ms the run
-    // is terminated and reported as an incomplete comparison, never as
-    // "no differences". Switching the comparison target discards the
-    // previous run: its messages no longer match the current run id.
-    diffDeadline = setTimeout(function () {
-      if (runId !== diffRunId) return;
-
-      if (diffWorker) {
-        diffWorker.terminate();
-        diffWorker = null;
-      }
-      diffDeadline = null;
-      showDiffTooLarge();
-    }, 2000);
-
-    worker.onmessage = function (event) {
-      if (!event.data || event.data.runId !== runId || runId !== diffRunId) return;
-
-      if (diffDeadline) {
-        clearTimeout(diffDeadline);
-        diffDeadline = null;
-      }
-
-      if (!event.data.ok) {
-        showDiffTooLarge();
+      if (result.status === 'ok') {
+        renderConflictDiff(result.parts);
         return;
       }
 
-      renderConflictDiff(event.data.parts);
-    };
-
-    worker.onerror = function () {
-      if (runId !== diffRunId) return;
-
-      if (diffDeadline) {
-        clearTimeout(diffDeadline);
-        diffDeadline = null;
+      if (result.status === 'superseded') {
+        return;
       }
-      showDiffTooLarge();
-    };
 
-    worker.postMessage({ runId, before, after });
+      showDiffTooLarge();
+    }).catch(function () {
+      if (seq !== diffRenderSeq) return;
+
+      showDiffTooLarge();
+    });
   }
 
   function renderConflictMeta(remote, candidate) {

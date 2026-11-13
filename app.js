@@ -1621,6 +1621,136 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
   }
 });
 
+// --- Share history browsing (T07, issue #31) ---------------------------
+//
+// Read-only, owner-only history surfaces for the admin detail page. All
+// three endpoints require the dashboard admin identity: a Share being
+// public, an unlock Cookie, or an API Key never grants history access.
+// The /admin prefix already carries private/no-store, and history bodies
+// never enter a shared cache. Listing returns metadata only (no content
+// aggregation); a single Revision returns its complete raw snapshot to
+// the owner; the preview renders that snapshot through the same
+// renderer + sandbox pipeline as the public view, without embedding any
+// admin credential in the framed document. No restore or purge action
+// exists in this ticket.
+
+function historyRevisionMetaJson(record) {
+  return {
+    revision: toContentRevisionString(record.revision),
+    createdAt: Number(record.created_at),
+    createdAtText: formatManagementDateTime(record.created_at),
+    source: record.source,
+    actorType: record.actor_type,
+    restoredFromRevision: record.restored_from_revision == null
+      ? null
+      : toContentRevisionString(record.restored_from_revision)
+  };
+}
+
+app.get('/admin/pages/:id/revisions', requireDashboardApiAdmin, async (req, res) => {
+  try {
+    const sharedPage = await pageRepository.getById(req.params.id);
+
+    if (!sharedPage) {
+      return res.status(404).json({ success: false, error: 'Share not found' });
+    }
+
+    const parsedLimit = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(parsedLimit)
+      ? Math.min(100, Math.max(1, parsedLimit))
+      : 20;
+    const parsedOffset = Number.parseInt(req.query.offset, 10);
+    const offset = Number.isFinite(parsedOffset) && parsedOffset > 0 ? parsedOffset : 0;
+
+    const { total, revisions } = await pageRepository.listContentRevisionMeta(
+      req.params.id,
+      { limit, offset }
+    );
+
+    return res.json({
+      success: true,
+      total,
+      limit,
+      offset,
+      revisions: revisions.map(historyRevisionMetaJson)
+    });
+  } catch (error) {
+    console.error('Admin revision list failed:', error);
+    return res.status(500).json({ success: false, error: 'Unable to load revision history' });
+  }
+});
+
+app.get('/admin/pages/:id/revisions/:revision', requireDashboardApiAdmin, async (req, res) => {
+  try {
+    const revision = toContentRevisionString(req.params.revision);
+
+    if (revision === null) {
+      return res.status(404).json({ success: false, error: 'Revision not found' });
+    }
+
+    const snapshot = await pageRepository.getContentSnapshot(req.params.id, revision);
+
+    if (!snapshot) {
+      return res.status(404).json({ success: false, error: 'Revision not found' });
+    }
+
+    return res.json({
+      success: true,
+      revision: {
+        ...historyRevisionMetaJson(snapshot),
+        codeType: snapshot.code_type,
+        title: snapshot.title,
+        description: snapshot.description,
+        markdownTheme: snapshot.markdown_theme,
+        htmlContent: snapshot.html_content,
+        contentEtag: formatContentEtag(req.params.id, snapshot.revision)
+      }
+    });
+  } catch (error) {
+    console.error('Admin revision read failed:', error);
+    return res.status(500).json({ success: false, error: 'Unable to load revision' });
+  }
+});
+
+app.get('/admin/pages/:id/revisions/:revision/preview', requireDashboardAdmin, async (req, res) => {
+  try {
+    const revision = toContentRevisionString(req.params.revision);
+    const snapshot = revision === null
+      ? null
+      : await pageRepository.getContentSnapshot(req.params.id, revision);
+
+    if (!snapshot) {
+      return res.status(404).render('error', {
+        title: 'Page Not Found',
+        page: 'error-page',
+        message: 'The requested revision does not exist'
+      });
+    }
+
+    const prepared = await prepareSandboxContent(
+      snapshot.html_content,
+      snapshot.code_type,
+      snapshot.markdown_theme
+    );
+
+    setPrivateNoStore(res);
+    return res.send(renderSandboxedDocument(prepared.renderedContent, prepared.contentType, {
+      title: snapshot.title,
+      description: snapshot.description,
+      pageUrl: null,
+      socialImageUrl: socialImageUrl(req),
+      viewEventUrl: null
+    }));
+  } catch (error) {
+    console.error('Admin revision preview failed:', error);
+    return res.status(500).render('error', {
+      title: 'Server Error',
+      page: 'error-page',
+      message: 'Unable to preview this revision'
+    });
+  }
+});
+
 app.put('/admin/pages/:id/favorite', requireDashboardApiAdmin, parseSmallJsonBody, requireDashboardCsrf, async (req, res) => {
   if (typeof req.body?.isFavorite !== 'boolean') {
     return res.status(400).json({

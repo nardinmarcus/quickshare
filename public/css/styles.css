@@ -2584,6 +2584,82 @@ body:hover::-webkit-scrollbar,
   overflow-wrap: anywhere;
 }
 
+/* Admin Share history browser (T07) */
+.admin-section-title {
+  font-size: 1.05rem;
+  margin: 0 0 0.5rem;
+}
+
+.admin-history-note {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin: 0 0 0.75rem;
+}
+
+.admin-history-subtitle {
+  font-size: 0.95rem;
+  margin: 1rem 0 0.5rem;
+}
+
+.admin-history-item {
+  align-items: flex-start;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  justify-content: space-between;
+  padding: 0.6rem 0;
+}
+
+.admin-history-item-heading {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.admin-history-item-meta {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  margin-top: 0.2rem;
+  overflow-wrap: anywhere;
+}
+
+.admin-history-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.admin-history-pager {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+
+.admin-history-compare-bar {
+  align-items: center;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+}
+
+.admin-history-source-body {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  max-height: 420px;
+  overflow: auto;
+  padding: 0.6rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Admin password input in edit form */
 .admin-password-input-wrap {
   margin-top: 0.5rem;
