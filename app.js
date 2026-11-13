@@ -1233,7 +1233,15 @@ app.get('/admin/pages/export', requireDashboardAdmin, async (req, res) => {
 
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', 'attachment; filename="quickshare-export.json"');
-    return res.json({ exportedAt: Date.now(), total: exportData.length, pages: exportData });
+    return res.json({
+      kind: 'manifest',
+      includesContent: false,
+      restorable: false,
+      notice: '清单导出仅包含分享元信息，不包含正文、密码材料、站点设置或审计记录，不能独立用于恢复。完整备份请使用数据库备份脚本（见 docs/backup-restore.md）。',
+      exportedAt: Date.now(),
+      total: exportData.length,
+      pages: exportData
+    });
   } catch (error) {
     console.error('Export failed:', error);
     return res.status(500).json({ success: false, error: 'Failed to export pages' });
