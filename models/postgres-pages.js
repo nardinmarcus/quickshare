@@ -887,13 +887,54 @@ class PostgresPageRepository {
   // authorization, publish state, favorite and view count are never
   // written here. A snapshot whose payload was cleared (a purge
   // tombstone) is not a valid restore source.
-  async restoreRevision({ id, sourceRevision, precondition = {}, operation = null }) {
+  // `apiCredential` + `grantCheck` + `restoreMeta` serve the
+  // Key-authenticated restore (T14, issue #38), under the same
+  // discipline as the T13 content update: after the operation lock,
+  // the transaction re-verifies the credential version (taking the Key
+  // row lock) and re-reads the caller's grant BEFORE any replay is
+  // honored or any precondition is judged, so a rotation, deletion or
+  // revocation that committed first refuses the in-flight restore and
+  // a revoked Key cannot replay its own earlier result (parent spec
+  // #24 §8). `restoreMeta` names the snapshot provenance for the API
+  // actor (source 'api-restore', actorType 'api_key'); dashboard
+  // callers pass none of these and keep the T09 owner provenance.
+  async restoreRevision({ id, sourceRevision, precondition = {}, operation = null, apiCredential = null, grantCheck = null, restoreMeta = null }) {
     const sourceRevisionString = toContentRevisionString(sourceRevision);
 
     return withPublishingWrite(this.pool, async (client) => {
       if (operation) {
         await acquireOperationLock(client, operation);
+      }
 
+      await recheckManagedCredential(client, apiCredential);
+
+      if (grantCheck) {
+        const grantResult = await client.query(
+          `
+            SELECT can_read, can_update, can_publish
+            FROM public.share_grants
+            WHERE api_key_id = $1 AND share_id = $2
+            LIMIT 1
+          `,
+          [grantCheck.keyId, id]
+        );
+        const permissions = grantPermissionsFromRow(grantResult.rows[0]);
+
+        if (!permissions[grantCheck.permission]) {
+          return {
+            outcome: 'executed',
+            result: {
+              status: 'grant_not_found',
+              accessRevision: null,
+              contentRevision: null,
+              contentChanged: false,
+              current: null
+            }
+          };
+        }
+      }
+
+      if (operation) {
         const resolved = await resolveExistingOperation(client, operation);
 
         if (resolved) {
@@ -943,9 +984,9 @@ class PostgresPageRepository {
         expectedAccessRevision: null,
         advanceAccessRevision: false,
         contentMeta: {
-          source: 'admin-restore',
-          actorType: 'owner',
-          actorId: null,
+          source: restoreMeta?.source || 'admin-restore',
+          actorType: restoreMeta?.actorType || 'owner',
+          actorId: restoreMeta?.actorId ?? null,
           restoredFromRevision: sourceRevisionString
         }
       }, row);
@@ -2411,6 +2452,166 @@ class PostgresPageRepository {
           : Number(row.expires_at),
         accessRevision: toAccessRevisionString(row.access_revision)
       }
+    };
+  }
+
+  // Granted history list for the v1 API (T14, issue #38): the Revision
+  // metadata of one granted Share, newest first, paginated exactly like
+  // the dashboard history browser. Grant, Share pointer, total and the
+  // metadata page are read by ONE statement, so they all come from a
+  // single snapshot: the currentRevision the route derives each entry's
+  // `current` flag from can never be a stale pointer contradicting the
+  // rows it accompanies (the failure mode of reading the page row and
+  // the Revision rows in separate queries while a concurrent edit
+  // commits in between). The query deliberately never selects
+  // html_content, so listing history cannot become an unbounded content
+  // aggregation. Returns null when the Key holds no grant on the Share
+  // (or the Share is gone) — the route answers the same 404 either way.
+  // Deliberately NOT judged by public visibility: a granted manager
+  // reads the history of an unpublished or expired Share exactly like
+  // the owner does in the admin.
+  async getGrantedShareRevisions({ keyId, shareId, limit = 20, offset = 0 }) {
+    const result = await this.pool.query(
+      `
+        SELECT g.can_read, g.can_update, g.can_publish,
+               p.current_revision::text AS current_revision,
+               COUNT(r.revision) OVER ()::int AS total,
+               r.revision::text AS revision, r.created_at, r.source,
+               r.actor_type,
+               r.restored_from_revision::text AS restored_from_revision,
+               r.purged_at
+        FROM public.share_grants g
+        JOIN public.pages p ON p.id = g.share_id
+        LEFT JOIN public.share_revisions r ON r.share_id = p.id
+        WHERE g.api_key_id = $1 AND g.share_id = $2
+        ORDER BY r.revision DESC NULLS LAST
+        LIMIT $3 OFFSET $4
+      `,
+      [keyId, shareId, limit, offset]
+    );
+
+    const first = result.rows[0];
+
+    if (!first) {
+      // An out-of-range page of a granted Share is an empty list, not a
+      // missing Share: distinguish the two with an existence read (it
+      // carries no Revision rows, so there is nothing for its pointer
+      // to contradict).
+      const existence = await this.pool.query(
+        `
+          SELECT g.can_read, g.can_update, g.can_publish,
+                 p.current_revision::text AS current_revision,
+                 (SELECT COUNT(*)::int FROM public.share_revisions c
+                   WHERE c.share_id = p.id) AS total
+          FROM public.share_grants g
+          JOIN public.pages p ON p.id = g.share_id
+          WHERE g.api_key_id = $1 AND g.share_id = $2
+          LIMIT 1
+        `,
+        [keyId, shareId]
+      );
+      const existing = existence.rows[0];
+
+      if (!existing) {
+        return null;
+      }
+
+      return {
+        permissions: grantPermissionsFromRow(existing),
+        shareId,
+        currentRevision: existing.current_revision === null || existing.current_revision === undefined
+          ? null
+          : String(existing.current_revision),
+        total: Number(existing.total),
+        revisions: []
+      };
+    }
+
+    return {
+      permissions: grantPermissionsFromRow(first),
+      shareId,
+      currentRevision: first.current_revision === null || first.current_revision === undefined
+        ? null
+        : String(first.current_revision),
+      total: Number(first.total),
+      revisions: result.rows
+        .filter(row => row.revision !== null)
+        .map(row => ({
+          revision: row.revision,
+          created_at: row.created_at,
+          source: row.source,
+          actor_type: row.actor_type,
+          restored_from_revision: row.restored_from_revision ?? null,
+          purged_at: row.purged_at ?? null
+        }))
+    };
+  }
+
+  // Granted single-Revision read for the v1 API (T14): one complete
+  // snapshot of one granted Share. Grant, the Share's current pointer
+  // and the snapshot row are read by ONE statement (one snapshot), so
+  // the `current` flag the route derives is coherent with the snapshot
+  // it accompanies. Returns null when the Key holds no grant (or the
+  // Share is gone); `snapshot` is null when the Revision does not
+  // exist. A purged Revision returns its tombstone row (payload columns
+  // already null) — the route answers 410, never a fabricated snapshot.
+  async getGrantedShareRevision({ keyId, shareId, revision }) {
+    const revisionString = toContentRevisionString(revision);
+
+    if (revisionString === null) {
+      return null;
+    }
+
+    const result = await this.pool.query(
+      `
+        SELECT g.can_read, g.can_update, g.can_publish,
+               p.current_revision::text AS current_revision,
+               r.share_id AS snapshot_share_id,
+               r.revision::text AS revision, r.html_content, r.code_type,
+               r.title, r.description, r.markdown_theme, r.snapshot_hash,
+               r.source, r.actor_type, r.actor_id,
+               r.restored_from_revision::text AS restored_from_revision,
+               r.created_at, r.purged_at
+        FROM public.share_grants g
+        JOIN public.pages p ON p.id = g.share_id
+        LEFT JOIN public.share_revisions r
+          ON r.share_id = p.id AND r.revision = $3::bigint
+        WHERE g.api_key_id = $1 AND g.share_id = $2
+        LIMIT 1
+      `,
+      [keyId, shareId, revisionString]
+    );
+
+    const row = result.rows[0];
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      permissions: grantPermissionsFromRow(row),
+      shareId,
+      currentRevision: row.current_revision === null || row.current_revision === undefined
+        ? null
+        : String(row.current_revision),
+      snapshot: row.snapshot_share_id === null || row.snapshot_share_id === undefined
+        ? null
+        : {
+            share_id: row.snapshot_share_id,
+            revision: row.revision,
+            html_content: row.html_content,
+            code_type: row.code_type,
+            title: row.title,
+            description: row.description,
+            markdown_theme: row.markdown_theme,
+            snapshot_hash: row.snapshot_hash,
+            source: row.source,
+            actor_type: row.actor_type,
+            actor_id: row.actor_id,
+            restored_from_revision: row.restored_from_revision,
+            created_at: row.created_at,
+            purged_at: row.purged_at
+          }
     };
   }
 
