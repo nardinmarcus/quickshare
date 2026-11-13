@@ -50,7 +50,7 @@ npm run db:verify-backup -- \
   [--passwords ./passwords.json] [--report ./verify-report.json]
 ```
 
-核对内容：迁移台账（版本与校验和）、每张表的行数与逐行摘要——正文、ID、主题、收藏、有效期、密码 hash 与回显材料是否存在、`access_revision` 精确值、API Key、审计日志与高水位、站点设置。同时报告会列出备份时点**之前**审计中记录的访问撤销/策略变更事件（`page.access.revoke`，以及 `fields` 包含 `passwordHash`/`isProtected`/`expiresAt` 等访问策略字段的 `page.update`，和删除事件）。
+核对内容：迁移台账（版本与校验和）、每张表的行数与逐行摘要——正文、ID、主题、收藏、有效期、密码 hash 与回显材料是否存在、`access_revision` 精确值、API Key（含逐 Key 的 `credential_version` 精确值，006 起）、审计日志与高水位、站点设置。同时报告会列出备份时点**之前**审计中记录的访问撤销/策略变更事件（`page.access.revoke`，以及 `fields` 包含 `passwordHash`/`isProtected`/`expiresAt` 等访问策略字段的 `page.update`，和删除事件）。
 
 可选 `--passwords`：一个 `{ "<pageId>": "<明文密码>" }` 的 JSON 文件（私密保管，用后删除）。提供后会真实校验受保护 Share 的密码校验与回显解密能力（需要环境中正确的 `SESSION_SECRET`）。报告的 `passwordCapability.status` 区分 `verified`（夹具覆盖全部受保护 Share 且通过）、`partial` 与 `structural-only`（只验了结构，未验明文）——未提供夹具时不会把结构检查冒充成功能验证。
 
@@ -67,7 +67,7 @@ QS_PG_BIN_DIR=/path/to/pg/bin \
   npm run db:backup-check -- [--schema full|legacy] [--keep]
 ```
 
-演练自建两个以 `_test` 结尾的合成本地库，写入已知夹具（公开/受保护/已过期 Share、收藏、主题、API Key、撤销与策略变更审计、站点设置），跑通备份 → 恢复 → 核对，并断言：非默认 `access_revision`（如 `9007199254740993`）精确往返、只改恢复库的 `access_revision` 会被核对拒绝、报告包含备份与恢复耗时、恢复库 `safeToServe: false`。完整结构（台账 001–005）下夹具还会把写维护开关 `publishing_writes_paused` 置为 `true`，断言恢复库保持暂停（开关本身也是备份内容，恢复后不会悄悄恢复写入；开关操作见 [写维护手册](maintenance.md)）。`--schema legacy` 用 001–003 旧结构演练，此时 `access_revision` 与 `publishing_writes_paused` 相关断言会显式 SKIP 并打印说明。演练结束自动删除两个夹具库（`--keep` 保留以便排查）。该演练也包含在 `npm run test:postgres` 中（工具缺失时显式 skip，不冒充通过）。
+演练自建两个以 `_test` 结尾的合成本地库，写入已知夹具（公开/受保护/已过期 Share、收藏、主题、API Key、撤销与策略变更审计、站点设置），跑通备份 → 恢复 → 核对，并断言：非默认 `access_revision`（如 `9007199254740993`）精确往返、只改恢复库的 `access_revision` 会被核对拒绝、报告包含备份与恢复耗时、恢复库 `safeToServe: false`。完整结构（台账 001–006）下夹具还会把写维护开关 `publishing_writes_paused` 置为 `true`，断言恢复库保持暂停（开关本身也是备份内容，恢复后不会悄悄恢复写入；开关操作见 [写维护手册](maintenance.md)），并断言 API Key 的非默认 `credential_version`（夹具值 7）精确往返、只改恢复库的 `credential_version` 会被核对拒绝。`--schema legacy` 用 001–003 旧结构演练，此时 `access_revision`、`publishing_writes_paused` 与 `credential_version` 相关断言会显式 SKIP 并打印说明。演练结束自动删除两个夹具库（`--keep` 保留以便排查）。该演练也包含在 `npm run test:postgres` 中（工具缺失时显式 skip，不冒充通过）。
 
 ## 记录要求
 

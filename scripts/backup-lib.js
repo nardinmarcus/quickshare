@@ -426,7 +426,25 @@ async function collectSnapshot(query) {
   }
 
   const apiKeyResult = await query('SELECT * FROM public.api_keys ORDER BY id');
-  const apiKeys = buildSection(apiKeyResult.rows, API_KEY_DIGEST_FIELDS, 'id');
+  // credential_version arrives with migration 006 (T05); mirror the
+  // access_revision treatment and only digest it when the column exists,
+  // so legacy 001-003 fixtures keep their historical digests. The exact
+  // per-Key versions are also recorded verbatim (like accessRevisions) so
+  // verification can name a credential_version difference directly.
+  const hasCredentialVersion = (columns.api_keys || []).includes('credential_version');
+  const apiKeyFields = hasCredentialVersion
+    ? [...API_KEY_DIGEST_FIELDS, 'credential_version']
+    : API_KEY_DIGEST_FIELDS;
+  const apiKeys = buildSection(apiKeyResult.rows, apiKeyFields, 'id');
+  apiKeys.hasCredentialVersion = hasCredentialVersion;
+
+  if (hasCredentialVersion) {
+    apiKeys.credentialVersions = {};
+
+    for (const row of apiKeyResult.rows) {
+      apiKeys.credentialVersions[row.id] = canonicalValue(row.credential_version);
+    }
+  }
 
   const auditResult = await query('SELECT * FROM public.audit_logs ORDER BY id');
   const auditRows = auditResult.rows;
@@ -611,6 +629,23 @@ function compareSnapshots(expected, actual) {
         if (actualRevisions[pageId] !== revision) {
           failures.push(
             `pages ${pageId} access_revision differs (backup ${revision}, restored ${actualRevisions[pageId]})`
+          );
+        }
+      }
+    }
+  }
+
+  if (expected.apiKeys && expected.apiKeys.hasCredentialVersion) {
+    if (!actual.apiKeys || !actual.apiKeys.hasCredentialVersion) {
+      failures.push('api_keys.credential_version column missing after restore');
+    } else {
+      const expectedVersions = expected.apiKeys.credentialVersions || {};
+      const actualVersions = actual.apiKeys.credentialVersions || {};
+
+      for (const [keyId, version] of Object.entries(expectedVersions)) {
+        if (actualVersions[keyId] !== version) {
+          failures.push(
+            `api_keys ${keyId} credential_version differs (backup ${version}, restored ${actualVersions[keyId]})`
           );
         }
       }
