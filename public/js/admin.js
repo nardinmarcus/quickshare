@@ -454,3 +454,118 @@ window.Toast = {
     startCloneIntents();
   }
 })();
+
+// --- Publish-state toggles (T11) -------------------------------------------
+// Each list row's unpublish/republish button submits the target state
+// with the row's access-revision precondition and a per-intent request
+// identifier. The intent ({ requestId, intentKey }) is kept in
+// sessionStorage keyed by Share, where the intent key binds the target
+// state and the access-revision baseline: if a response is lost, the
+// next click replays the same identifier and the server returns the
+// recorded result instead of re-judging a now-stale precondition. A
+// changed baseline (the server reports a newer revision, or the row was
+// re-rendered) mints a fresh intent. A confirmed result retires it.
+(function initPublishToggles() {
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+
+  function startPublishToggles() {
+    var buttons = Array.prototype.slice.call(document.querySelectorAll('[data-publish-toggle]'));
+    if (!buttons.length) return;
+
+    function storageKey(pageId) { return 'quickshare-admin-publish-intent:' + pageId; }
+
+    function readIntent(pageId) {
+      try {
+        var raw = window.sessionStorage.getItem(storageKey(pageId));
+        return raw ? JSON.parse(raw) : null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function writeIntent(pageId, intent) {
+      try { window.sessionStorage.setItem(storageKey(pageId), JSON.stringify(intent)); } catch (error) { /* storage unavailable */ }
+    }
+
+    function clearIntent(pageId) {
+      try { window.sessionStorage.removeItem(storageKey(pageId)); } catch (error) { /* storage unavailable */ }
+    }
+
+    function newRequestId() {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return window.crypto.randomUUID();
+      }
+      return 'publish-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12);
+    }
+
+    async function readJson(response) {
+      try { return await response.json(); } catch (error) { return {}; }
+    }
+
+    buttons.forEach(function (button) {
+      button.addEventListener('click', async function () {
+        var pageId = button.dataset.pageId;
+        var targetPublished = button.dataset.published !== 'true';
+        var accessRevision = button.dataset.accessRevision || '';
+        var intentKey = 'publish:' + (targetPublished ? 'true' : 'false') + ':access:' + accessRevision;
+        var intent = readIntent(pageId);
+
+        if (!intent || intent.intentKey !== intentKey || !intent.requestId) {
+          intent = { requestId: newRequestId(), intentKey: intentKey };
+          writeIntent(pageId, intent);
+        }
+
+        button.disabled = true;
+
+        try {
+          var response = await fetch('/admin/pages/' + encodeURIComponent(pageId) + '/publish-state', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+              'X-CSRF-Token': dashboardCsrfToken()
+            },
+            body: JSON.stringify({
+              published: targetPublished,
+              expectedAccessRevision: accessRevision,
+              requestId: intent.requestId
+            })
+          });
+          var data = await readJson(response);
+
+          if (response.status === 412) {
+            clearIntent(pageId);
+            Toast.error('访问策略已被更新，正在刷新最新状态');
+            setTimeout(function () { window.location.reload(); }, 800);
+            return;
+          }
+
+          if (!response.ok || !data.success) {
+            throw new Error(data.error || '更新发布状态失败');
+          }
+
+          clearIntent(pageId);
+
+          if (data.unchanged) {
+            Toast.success('已是该状态，未做变更');
+          } else if (data.published) {
+            Toast.success('已重新发布，公开链接恢复访问');
+          } else {
+            Toast.success('已下架，公开链接将返回 404');
+          }
+
+          setTimeout(function () { window.location.reload(); }, 800);
+        } catch (error) {
+          Toast.error(error.message || '更新发布状态失败');
+          button.disabled = false;
+        }
+      });
+    });
+  }
+
+  if (document.readyState === 'loading' && typeof document.addEventListener === 'function') {
+    document.addEventListener('DOMContentLoaded', startPublishToggles);
+  } else {
+    startPublishToggles();
+  }
+})();
