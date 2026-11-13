@@ -74,7 +74,7 @@
     const scopesCell = document.createElement('td');
     scopesCell.className = 'api-key-scopes';
     const heldScopes = Array.isArray(apiKey.scopes) ? apiKey.scopes : ['share:create'];
-    for (const [scope, label] of [['share:create', '创建'], ['share:read', '读取已授权 Share'], ['share:update', '编辑已授权 Share']]) {
+    for (const [scope, label] of [['share:create', '创建'], ['share:read', '读取已授权 Share'], ['share:update', '编辑已授权 Share'], ['share:publish', '上下架已授权 Share']]) {
       const option = document.createElement('label');
       option.className = 'api-scope-option';
       const checkbox = document.createElement('input');
@@ -300,12 +300,14 @@
     }
   }
 
-  // --- Per-Share grants (T12; edit grant + auto-edit opt-in, T13) -----
+  // --- Per-Share grants (T12; edit grant + auto-edit opt-in, T13;
+  // --- publish grant, T15) -------------------------------------------
   // The grant panels are owner tooling: they list what the API itself
   // never exposes (which Shares a Key may touch) and grant/revoke the
-  // read and update permissions. The publish permission still has no
-  // API behavior and is not offered here. The auto-edit toggle opts
-  // the Key into read+update grants on its OWN future creations only.
+  // read, update and publish permissions. Publish is independent: it
+  // neither rides along with an edit grant nor implies read. The
+  // auto-edit toggle opts the Key into read+update grants on its OWN
+  // future creations only — never publish.
 
   function grantableShares() {
     try {
@@ -378,9 +380,12 @@
     const keyId = panel.dataset.apiKeyId;
     const shareId = select.value;
     const permissionSelect = panel.querySelector('[data-grant-permission]');
-    const permissions = permissionSelect && permissionSelect.value === 'update'
+    const permissionChoice = permissionSelect ? permissionSelect.value : 'read';
+    const permissions = permissionChoice === 'update'
       ? { read: true, update: true }
-      : { read: true };
+      : permissionChoice === 'publish'
+        ? { publish: true }
+        : { read: true };
 
     if (!keyId || !shareId) return;
 
@@ -401,7 +406,11 @@
       }
 
       select.value = '';
-      notify('success', permissions.update ? '已授予编辑权限（含读取）' : '已授予只读权限');
+      notify('success', permissions.update
+        ? '已授予编辑权限（含读取）'
+        : permissions.publish
+          ? '已授予上下架权限（不含读取）'
+          : '已授予只读权限');
       await loadGrants(panel);
     } catch (error) {
       notify('error', error.message);
@@ -566,7 +575,13 @@
     const updateOption = document.createElement('option');
     updateOption.value = 'update';
     updateOption.textContent = '编辑（含读取）';
-    permissionSelect.append(readOption, updateOption);
+    // T15: publish is a separately grantable permission here too —
+    // a panel built for a freshly created Key must offer the same
+    // three choices as the server-rendered one.
+    const publishOption = document.createElement('option');
+    publishOption.value = 'publish';
+    publishOption.textContent = '上下架（不含读取）';
+    permissionSelect.append(readOption, updateOption, publishOption);
 
     const submit = document.createElement('button');
     submit.className = 'cyber-btn cyber-btn-secondary';

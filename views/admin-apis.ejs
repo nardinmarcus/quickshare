@@ -94,6 +94,10 @@
                   <input type="checkbox" class="api-scope-checkbox" data-scope="share:update" <%= apiKey.scopeList.includes('share:update') ? 'checked' : '' %>>
                   编辑已授权 Share
                 </label>
+                <label class="api-scope-option">
+                  <input type="checkbox" class="api-scope-checkbox" data-scope="share:publish" <%= apiKey.scopeList.includes('share:publish') ? 'checked' : '' %>>
+                  上下架已授权 Share
+                </label>
                 <button type="button" class="cyber-btn cyber-btn-secondary api-key-scopes-btn" data-api-key-id="<%= apiKey.id %>" data-api-key-name="<%= apiKey.name %>">保存范围</button>
               </td>
               <td><time datetime="<%= new Date(Number(apiKey.created_at)).toISOString() %>"><%= formatManagementDateTime(apiKey.created_at) %></time></td>
@@ -125,7 +129,7 @@
     <div class="admin-content-header">
       <div>
         <h2>Share 授权</h2>
-        <p class="admin-muted">给具名密钥授权指定 Share 的读取或编辑权限：密钥还需具备对应的「读取」/「编辑」范围，且只能接触被授权的 Share。编辑授权自动包含读取，但不包含上下架。授权不改变 Share 的归属，轮换密钥后授权保留，删除密钥或 Share 时授权一并失效。</p>
+        <p class="admin-muted">给具名密钥授权指定 Share 的读取、编辑或上下架权限：密钥还需具备对应的「读取」/「编辑」/「上下架」范围，且只能接触被授权的 Share。编辑授权自动包含读取，但不包含上下架；上下架授权不包含读取。授权不改变 Share 的归属，轮换密钥后授权保留，删除密钥或 Share 时授权一并失效。</p>
       </div>
     </div>
 
@@ -157,6 +161,7 @@
             <select class="cyber-input api-grant-permission-select" data-grant-permission>
               <option value="read">只读</option>
               <option value="update">编辑（含读取）</option>
+              <option value="publish">上下架（不含读取）</option>
             </select>
           </label>
           <button class="cyber-btn cyber-btn-secondary" type="submit">授予</button>
@@ -168,7 +173,7 @@
   <section class="api-docs-grid">
     <article class="card api-doc-card">
       <h2>资源管理（需授权）</h2>
-      <p>具备相应范围的托管密钥，可按授权读取或编辑指定 Share；旧版环境变量密钥始终只能创建。</p>
+      <p>具备相应范围的托管密钥，可按授权读取、编辑或上下架指定 Share；旧版环境变量密钥始终只能创建。</p>
       <dl class="api-field-list">
         <div><dt><code>GET /api/v1/shares</code></dt><dd>已授权 Share 清单，游标分页（默认 20、上限 100）。无读取授权的条目只显示中性元信息。</dd></div>
         <div><dt><code>GET /api/v1/shares/:id/content</code></dt><dd>当前内容快照，带强 ETag <code>"content:&lt;id&gt;:&lt;revision&gt;"</code>，支持 <code>If-None-Match</code> 弱比较返回 304。</dd></div>
@@ -177,6 +182,8 @@
         <div><dt><code>GET /api/v1/shares/:id/revisions</code></dt><dd>历史元信息分页（默认 20、上限 100），只含版本、时间、来源与清除状态，永不聚合正文；需要「读取」范围与读取授权。清除墓碑仍列出。</dd></div>
         <div><dt><code>GET /api/v1/shares/:id/revisions/:revision</code></dt><dd>指定版本的完整快照，带该版本自身的强 ETag <code>"content:&lt;id&gt;:&lt;revision&gt;"</code>，支持 <code>If-None-Match</code> 弱比较返回 304；已清除版本返回 410。</dd></div>
         <div><dt><code>POST /api/v1/shares/:id/restore</code></dt><dd>把指定版本恢复为当前内容（产生新版本，相同内容为无变化成功）：请求体只有 <code>revision</code> 字段，必须带当前内容 <code>If-Match</code> 与 <code>Idempotency-Key</code>，需要「读取」+「编辑」范围与编辑授权；不改变 URL、密码、有效期与访问版本。清除历史没有 API 入口，只能在后台操作。</dd></div>
+        <div><dt><code>POST /api/v1/shares/:id/unpublish</code></dt><dd>下架指定 Share：请求体为空，必须带当前状态 <code>If-Match</code>（状态 ETag <code>"access:&lt;id&gt;:&lt;revision&gt;"</code>，不能用内容标签代替）与 <code>Idempotency-Key</code>，需要「上下架」范围与上下架授权（编辑授权不能代替）。真实切换会推进访问版本，旧解锁 Cookie 立即失效；已是下架状态返回 <code>changed:false</code>。</dd></div>
+        <div><dt><code>POST /api/v1/shares/:id/republish</code></dt><dd>沿原 URL 重新发布：条件与下架相同；不改变密码、有效期、内容与历史，下架期间发出的旧 Cookie 不复活，过期仍按原有效期过期。</dd></div>
       </dl>
       <p>无凭据 401；缺范围 403；有范围但目标未授权 404（与不存在不可区分）。下架或过期不影响已授权的管理读取与编辑。</p>
     </article>
