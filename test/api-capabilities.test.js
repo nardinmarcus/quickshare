@@ -141,12 +141,13 @@ test('GET /api/v1/capabilities returns the real create-only surface for both cre
     assert.deepEqual(capabilities.markdownThemePresets, expectedPresetIds);
     assert.equal(capabilities.limits.shareRequestBody, '2mb');
     assert.equal(capabilities.limits.shareRequestBodyBytes, 2 * 1024 * 1024);
-    // Create-only stage: exactly one write operation plus the two
-    // connection reads. No management operation may be advertised before
-    // it exists.
+    // Create-only stage: exactly one write operation plus the connection
+    // reads and operation confirmation (T08 — part of the create
+    // capability, not a management grant). No management operation may
+    // be advertised before it exists.
     assert.deepEqual(
       capabilities.operations.map(operation => operation.id),
-      ['share.create', 'connection.me', 'connection.capabilities']
+      ['share.create', 'connection.me', 'connection.capabilities', 'operation.status']
     );
     assert.deepEqual(capabilities.operations[0], {
       id: 'share.create',
@@ -156,6 +157,19 @@ test('GET /api/v1/capabilities returns the real create-only surface for both cre
     assert.equal(capabilities.conditionalWrites.length, 1);
     assert.equal(capabilities.conditionalWrites[0].operation, 'share.create');
     assert.equal(capabilities.conditionalWrites[0].requiresIfMatch, false);
+    // T08: optional idempotency is advertised exactly as implemented —
+    // header optional, replay supported, 409/410 machine-readable.
+    assert.equal(capabilities.conditionalWrites[0].requiresIdempotencyKey, false);
+    assert.deepEqual(capabilities.conditionalWrites[0].idempotency, {
+      header: 'Idempotency-Key',
+      required: false,
+      replaySupported: true,
+      keyFormat: '16-128 characters of [A-Za-z0-9_-]; clients generate a UUID v4',
+      confirmationOperation: 'operation.status',
+      conflict: { status: 409, code: 'idempotency_conflict', retryable: false },
+      resultUnavailable: { status: 410, code: 'operation_result_unavailable', retryable: false },
+      invalidKey: { status: 400, code: 'invalid_idempotency_key', retryable: false }
+    });
     assert.deepEqual(capabilities.conditionalWrites[0].maintenanceRefusal, {
       status: 503,
       code: 'maintenance',
