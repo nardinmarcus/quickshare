@@ -35,7 +35,7 @@
     const row = document.createElement('tr');
     row.id = 'api-keys-empty';
     const cell = document.createElement('td');
-    cell.colSpan = 6;
+    cell.colSpan = 7;
     cell.className = 'api-key-empty';
     cell.textContent = '尚未创建托管密钥。';
     row.appendChild(cell);
@@ -69,6 +69,30 @@
 
     const version = createCell(String(apiKey.credential_version || '1'), 'api-key-version');
 
+    // A freshly created Key is create-only; its scope cell matches the
+    // server-rendered rows so it can be widened without a reload.
+    const scopesCell = document.createElement('td');
+    scopesCell.className = 'api-key-scopes';
+    const heldScopes = Array.isArray(apiKey.scopes) ? apiKey.scopes : ['share:create'];
+    for (const [scope, label] of [['share:create', '创建'], ['share:read', '读取已授权 Share']]) {
+      const option = document.createElement('label');
+      option.className = 'api-scope-option';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'api-scope-checkbox';
+      checkbox.dataset.scope = scope;
+      checkbox.checked = heldScopes.includes(scope);
+      option.append(checkbox, document.createTextNode(' ' + label));
+      scopesCell.appendChild(option);
+    }
+    const scopesButton = document.createElement('button');
+    scopesButton.type = 'button';
+    scopesButton.className = 'cyber-btn cyber-btn-secondary api-key-scopes-btn';
+    scopesButton.dataset.apiKeyId = apiKey.id;
+    scopesButton.dataset.apiKeyName = apiKey.name;
+    scopesButton.textContent = '保存范围';
+    scopesCell.appendChild(scopesButton);
+
     const created = document.createElement('td');
     const createdTime = document.createElement('time');
     createdTime.dateTime = new Date(Number(apiKey.created_at)).toISOString();
@@ -95,8 +119,9 @@
     remove.innerHTML = '<i class="fas fa-trash-alt" aria-hidden="true"></i><span class="sr-only">删除</span>';
     actions.append(rotate, remove);
 
-    row.append(name, prefix, version, created, lastUsed, actions);
+    row.append(name, prefix, version, scopesCell, created, lastUsed, actions);
     keyRows.prepend(row);
+    addGrantPanel(apiKey);
   }
 
   async function rotateKey(button) {
@@ -169,6 +194,7 @@
       }
 
       button.closest('tr')?.remove();
+      document.querySelector('.api-grant-panel[data-api-key-id="' + id + '"]')?.remove();
       addEmptyState();
       notify('success', 'API 密钥已删除');
     } catch (error) {
@@ -238,7 +264,260 @@
     }
   });
 
+  async function saveScopes(button) {
+    const id = button.dataset.apiKeyId;
+    const row = button.closest('tr');
+
+    if (!id || !row) return;
+
+    const scopes = Array.from(row.querySelectorAll('.api-scope-checkbox'))
+      .filter(checkbox => checkbox.checked)
+      .map(checkbox => checkbox.dataset.scope);
+
+    button.disabled = true;
+
+    try {
+      const response = await fetch('/admin/apis/keys/' + encodeURIComponent(id) + '/scopes', {
+        method: 'PUT',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfToken()
+        },
+        body: JSON.stringify({ scopes })
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || '保存授权范围失败');
+      }
+
+      notify('success', '授权范围已保存');
+    } catch (error) {
+      notify('error', error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  // --- Per-Share read grants (T12) -------------------------------------
+  // The grant panels are owner tooling: they list what the API itself
+  // never exposes (which Shares a Key may read) and grant/revoke the
+  // read permission. Only the read permission exists in this UI — the
+  // edit/publish grants arrive with their own capabilities.
+
+  function grantableShares() {
+    try {
+      return JSON.parse(document.getElementById('grantable-shares-data')?.textContent || '[]');
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function permissionLabel(permissions) {
+    const labels = [];
+
+    if (permissions.read) labels.push('只读');
+    if (permissions.update) labels.push('编辑');
+    if (permissions.publish) labels.push('上下架');
+
+    return labels.join('、') || '无';
+  }
+
+  async function loadGrants(panel) {
+    const keyId = panel.dataset.apiKeyId;
+    const list = panel.querySelector('[data-grant-list]');
+
+    if (!keyId || !list) return;
+
+    try {
+      const response = await fetch('/admin/apis/keys/' + encodeURIComponent(keyId) + '/grants', {
+        headers: { Accept: 'application/json' }
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || '加载授权失败');
+      }
+
+      list.replaceChildren();
+
+      if (data.grants.length === 0) {
+        const empty = document.createElement('li');
+        empty.className = 'admin-muted';
+        empty.textContent = '暂无授权。';
+        list.appendChild(empty);
+        return;
+      }
+
+      for (const grant of data.grants) {
+        const item = document.createElement('li');
+        const label = document.createElement('span');
+        label.textContent = (grant.shareTitle ? grant.shareTitle + '（' + grant.shareId + '）' : grant.shareId)
+          + ' · ' + permissionLabel(grant.permissions)
+          + (grant.shareExists ? '' : ' · Share 已不存在');
+        const revoke = document.createElement('button');
+        revoke.type = 'button';
+        revoke.className = 'cyber-btn cyber-btn-secondary api-grant-revoke-btn';
+        revoke.dataset.shareId = grant.shareId;
+        revoke.textContent = '撤回';
+        item.append(label, revoke);
+        list.appendChild(item);
+      }
+    } catch (error) {
+      list.replaceChildren();
+      const failed = document.createElement('li');
+      failed.className = 'admin-muted';
+      failed.textContent = error.message;
+      list.appendChild(failed);
+    }
+  }
+
+  async function grantAccess(panel, select) {
+    const keyId = panel.dataset.apiKeyId;
+    const shareId = select.value;
+
+    if (!keyId || !shareId) return;
+
+    try {
+      const response = await fetch('/admin/apis/keys/' + encodeURIComponent(keyId) + '/grants', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfToken()
+        },
+        body: JSON.stringify({ shareId, permissions: { read: true } })
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || '授予只读失败');
+      }
+
+      select.value = '';
+      notify('success', '已授予只读权限');
+      await loadGrants(panel);
+    } catch (error) {
+      notify('error', error.message);
+    }
+  }
+
+  async function revokeAccess(panel, button) {
+    const keyId = panel.dataset.apiKeyId;
+    const shareId = button.dataset.shareId;
+
+    if (!keyId || !shareId || !window.confirm('确定撤回该 Share 的授权吗？')) {
+      return;
+    }
+
+    button.disabled = true;
+
+    try {
+      const response = await fetch(
+        '/admin/apis/keys/' + encodeURIComponent(keyId) + '/grants/' + encodeURIComponent(shareId),
+        {
+          method: 'DELETE',
+          headers: {
+            Accept: 'application/json',
+            'X-CSRF-Token': csrfToken()
+          }
+        }
+      );
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || '撤回授权失败');
+      }
+
+      notify('success', '授权已撤回');
+      await loadGrants(panel);
+    } catch (error) {
+      button.disabled = false;
+      notify('error', error.message);
+    }
+  }
+
+  function wireGrantPanel(panel) {
+    const form = panel.querySelector('[data-grant-form]');
+
+    form?.addEventListener('submit', function (event) {
+      event.preventDefault();
+      grantAccess(panel, form.querySelector('[data-grant-share]'));
+    });
+
+    panel.querySelector('[data-grant-list]')?.addEventListener('click', function (event) {
+      const button = event.target.closest('.api-grant-revoke-btn');
+
+      if (button) revokeAccess(panel, button);
+    });
+
+    loadGrants(panel);
+  }
+
+  function addGrantPanel(apiKey) {
+    const card = document.querySelector('.api-grants-card');
+
+    if (!card) return;
+
+    card.querySelector('.api-key-empty')?.remove();
+
+    const panel = document.createElement('div');
+    panel.className = 'api-grant-panel';
+    panel.dataset.apiKeyId = apiKey.id;
+
+    const heading = document.createElement('h3');
+    heading.className = 'api-grant-key-name';
+    heading.textContent = apiKey.name + ' ';
+    const prefix = document.createElement('code');
+    prefix.className = 'api-key-prefix';
+    prefix.textContent = apiKey.key_prefix;
+    heading.appendChild(prefix);
+
+    const list = document.createElement('ul');
+    list.className = 'api-grant-list';
+    list.dataset.grantList = '';
+
+    const form = document.createElement('form');
+    form.className = 'api-grant-form';
+    form.dataset.grantForm = '';
+    const select = document.createElement('select');
+    select.className = 'cyber-input api-grant-share-select';
+    select.dataset.grantShare = '';
+    select.required = true;
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '选择 Share…';
+    select.appendChild(placeholder);
+
+    for (const share of grantableShares()) {
+      const option = document.createElement('option');
+      option.value = share.id;
+      option.textContent = (share.title ? share.title : share.id) + '（' + share.id + '）';
+      select.appendChild(option);
+    }
+
+    const submit = document.createElement('button');
+    submit.className = 'cyber-btn cyber-btn-secondary';
+    submit.type = 'submit';
+    submit.textContent = '授予只读';
+    form.append(select, submit);
+
+    panel.append(heading, list, form);
+    card.appendChild(panel);
+    wireGrantPanel(panel);
+  }
+
+  document.querySelectorAll('.api-grant-panel').forEach(wireGrantPanel);
+
   keyRows.addEventListener('click', function (event) {
+    const scopesButton = event.target.closest('.api-key-scopes-btn');
+
+    if (scopesButton) {
+      saveScopes(scopesButton);
+      return;
+    }
+
     const rotateButton = event.target.closest('.api-key-rotate-btn');
 
     if (rotateButton) {

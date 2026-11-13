@@ -57,7 +57,8 @@ test('migrations contain every runtime table, column, index, and site setting', 
     '006_api_key_credential_version.sql',
     '007_share_revisions.sql',
     '008_publish_operations.sql',
-    '009_share_revision_purge.sql'
+    '009_share_revision_purge.sql',
+    '010_api_key_scopes_grants.sql'
   ]);
   assert.match(migrations[0].sql, /CREATE TABLE IF NOT EXISTS public\.pages/i);
   assert.match(migrations[0].sql, /ADD COLUMN IF NOT EXISTS password_hash/i);
@@ -107,6 +108,21 @@ test('migrations contain every runtime table, column, index, and site setting', 
   assert.match(migrations[8].sql, /ALTER COLUMN html_content DROP NOT NULL/i);
   assert.match(migrations[8].sql, /ALTER COLUMN snapshot_hash DROP NOT NULL/i);
   assert.match(migrations[8].sql, /ADD COLUMN IF NOT EXISTS purged_at BIGINT/i);
+  // T12: managed Keys gain scopes (existing Keys migrate to
+  // create-only) and the auto-edit opt-in at its default false; the
+  // grant table is keyed by (api_key_id, share_id) — one grant row per
+  // Key/Share pair — and deliberately has no foreign keys, mirroring
+  // publish_operations: grant cleanup is an explicit transactional
+  // step of Key/Share deletion.
+  assert.match(migrations[9].sql, /ADD COLUMN IF NOT EXISTS scopes TEXT NOT NULL DEFAULT '\["share:create"\]'/i);
+  assert.match(migrations[9].sql, /ADD COLUMN IF NOT EXISTS auto_grant_new_share_edit BOOLEAN NOT NULL DEFAULT FALSE/i);
+  assert.match(migrations[9].sql, /CREATE TABLE IF NOT EXISTS public\.share_grants/i);
+  assert.match(migrations[9].sql, /PRIMARY KEY \(api_key_id, share_id\)/i);
+  assert.match(migrations[9].sql, /can_read BOOLEAN NOT NULL DEFAULT FALSE/i);
+  assert.match(migrations[9].sql, /can_update BOOLEAN NOT NULL DEFAULT FALSE/i);
+  assert.match(migrations[9].sql, /can_publish BOOLEAN NOT NULL DEFAULT FALSE/i);
+  assert.match(migrations[9].sql, /idx_share_grants_share_id/i);
+  assert.doesNotMatch(migrations[9].sql, /REFERENCES public\.(pages|api_keys)/i);
 });
 
 test('migration runner applies pending files once and releases its client', async () => {
@@ -123,8 +139,8 @@ test('migration runner applies pending files once and releases its client', asyn
   const second = await runMigrations(fake.pool, { logger: { info() {} } });
   const migrationSql = loadMigrations().map(migration => migration.sql.trim());
 
-  assert.deepEqual(first, { applied: ['001', '002', '003', '004', '005', '006', '007', '008', '009'], skipped: [] });
-  assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007', '008', '009'] });
+  assert.deepEqual(first, { applied: ['001', '002', '003', '004', '005', '006', '007', '008', '009', '010'], skipped: [] });
+  assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007', '008', '009', '010'] });
   for (const sql of migrationSql) {
     assert.equal(fake.queries.filter(query => query.sql === sql).length, 1);
   }

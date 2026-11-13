@@ -36,6 +36,12 @@
 //     flip of its published flag is rejected by verify as a named
 //     "published drift" failure (explicitly skipped on a legacy 001-003
 //     schema, where the column does not exist)
+//   - Key scopes and per-Share grants (migration 010, T12) round-trip:
+//     the fixture Key carries a non-default scope list and two read
+//     grants, all restored exactly; a restored-only narrowing of the
+//     scopes is rejected as a named "scopes differ" failure and a
+//     restored-only grant flip is rejected by name (explicitly skipped
+//     on a legacy 001-003 schema, where neither exists)
 //
 // No production data is involved; both fixture databases are dropped at the
 // end unless --keep is passed.
@@ -243,11 +249,23 @@ async function seedFixtures(pool, { hasAccessRevision }) {
   if (hasAccessRevision) {
     // Full schema includes migration 006: seed a non-default credential
     // version so the drill proves the version itself is backed up and
-    // restored, not silently reset to 1.
+    // restored, not silently reset to 1. Migration 010 (T12) adds a
+    // non-default scope list for the same reason: the restored Key must
+    // come back with exactly the scopes it had, no wider and no
+    // narrower.
     await pool.query(
-      `INSERT INTO public.api_keys (id, name, key_hash, key_prefix, created_at, last_used_at, credential_version)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      ['drillkey1', 'Drill key', await hashSecret('drill-api-secret'), 'qs_drill', BASE_TIME + 5, null, 7]
+      `INSERT INTO public.api_keys (id, name, key_hash, key_prefix, created_at, last_used_at, credential_version, scopes, auto_grant_new_share_edit)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      ['drillkey1', 'Drill key', await hashSecret('drill-api-secret'), 'qs_drill', BASE_TIME + 5, null, 7, '["share:create","share:read"]', false]
+    );
+
+    // Per-Share read grants for the fixture Key (T12): authorization
+    // state is part of the backup, so the drill proves the grant rows
+    // themselves round-trip exactly.
+    await pool.query(
+      `INSERT INTO public.share_grants (api_key_id, share_id, can_read, can_update, can_publish, created_at, updated_at)
+       VALUES ($1, $2, true, false, false, $3, $3), ($1, $4, true, false, false, $5, $5)`,
+      ['drillkey1', 'drill-public', BASE_TIME + 40, 'drill-protected', BASE_TIME + 41]
     );
   } else {
     await pool.query(
@@ -303,6 +321,16 @@ async function seedFixtures(pool, { hasAccessRevision }) {
   await audit('page.revision.purge', 'drill-revoked', { revision: '1', purgedAt: BASE_TIME + 3500 }, 15);
   await audit('page.publish.update', 'drill-unpublished', { from: true, to: false, accessRevision: '3' }, 16);
 
+  if (hasAccessRevision) {
+    // Grant history (T12): two live grants plus one grant that was
+    // granted and revoked again before the backup — the revocation is
+    // exactly the evidence the verify report's detector must surface,
+    // because restoring an older backup would revive that grant.
+    await audit('api_key.grant', 'drill-public', { apiKeyId: 'drillkey1', shareId: 'drill-public', permissions: { read: true, update: false, publish: false } }, 42);
+    await audit('api_key.grant', 'drill-protected', { apiKeyId: 'drillkey1', shareId: 'drill-protected', permissions: { read: true, update: false, publish: false } }, 43);
+    await audit('api_key.grant_revoke', 'drill-expired', { apiKeyId: 'drillkey1', shareId: 'drill-expired' }, 44);
+  }
+
   await pool.query(
     'UPDATE public.site_settings SET homepage_password_required = false, updated_at = $1 WHERE id = 1',
     [BASE_TIME + 20]
@@ -348,6 +376,8 @@ async function main() {
     log('SKIP content Revision assertions: schema 007 absent (legacy 001-003 fixture)');
     skipped.push('publish-state assertions skipped: schema 007 absent (legacy 001-003 fixture)');
     log('SKIP publish-state assertions: schema 007 absent (legacy 001-003 fixture)');
+    skipped.push('grant assertions skipped: schema 010 absent (legacy 001-003 fixture)');
+    log('SKIP grant assertions: schema 010 absent (legacy 001-003 fixture)');
   }
 
   if (!process.env.SESSION_SECRET) {
@@ -472,6 +502,12 @@ async function main() {
     check('revocation detector sees the policy change for drill-protected', detectedTypes.includes('drill-protected:access-policy-change'));
     check('revocation detector sees the access revoke for drill-revoked', detectedTypes.includes('drill-revoked:access-revoke'));
     check('revocation detector sees the publish-state change for drill-unpublished', detectedTypes.includes('drill-unpublished:publish-state-change'));
+    check('revocation detector sees the grant revocation for drill-expired', !hasAccessRevision
+      || detectedTypes.includes('drill-expired:grant-revoke'));
+    check('verify report accounts for the 2 seeded Share grants', !hasAccessRevision
+      || (report.shareGrants !== undefined
+        && report.shareGrants.tracked === true
+        && report.shareGrants.grants === 2));
 
     restorePool = createPostgresPool(restoreUrl, { max: 1 });
 
@@ -683,12 +719,67 @@ async function main() {
         && publishedTamperReport !== null
         && publishedTamperReport.ok === false
         && publishedTamperReport.failures.some(failure => failure.includes('published drift')));
+
+      const grantResult = await restorePool.query(
+        `SELECT share_id, can_read, can_update, can_publish
+         FROM public.share_grants
+         WHERE api_key_id = 'drillkey1'
+         ORDER BY share_id`
+      );
+      check('restored share_grants carries both seeded read grants exactly', grantResult.rows.length === 2
+        && grantResult.rows.every(row => row.can_read === true
+          && row.can_update === false
+          && row.can_publish === false)
+        && grantResult.rows.map(row => row.share_id).join(',') === 'drill-protected,drill-public');
+
+      const scopesResult = await restorePool.query(
+        "SELECT scopes FROM public.api_keys WHERE id = 'drillkey1'"
+      );
+      check('non-default Key scopes restored exactly',
+        scopesResult.rows[0].scopes === '["share:create","share:read"]');
+
+      await restorePool.query(
+        "UPDATE public.share_grants SET can_read = FALSE WHERE api_key_id = 'drillkey1' AND share_id = 'drill-public'"
+      );
+
+      const grantTamperResult = await runScript('verify-backup.js', verifyArgs, childEnv);
+      let grantTamperReport = null;
+
+      try {
+        grantTamperReport = parseStdoutJson(grantTamperResult, 'verify-backup.js (grant tampered)');
+      } catch (error) {
+        // handled by the check below
+      }
+
+      check('verify rejects a restored-only grant tamper', grantTamperResult.code !== 0
+        && grantTamperReport !== null
+        && grantTamperReport.ok === false
+        && grantTamperReport.failures.some(failure => failure.includes('share_grants')));
+
+      await restorePool.query(
+        "UPDATE public.api_keys SET scopes = '[\"share:create\"]' WHERE id = 'drillkey1'"
+      );
+
+      const scopesTamperResult = await runScript('verify-backup.js', verifyArgs, childEnv);
+      let scopesTamperReport = null;
+
+      try {
+        scopesTamperReport = parseStdoutJson(scopesTamperResult, 'verify-backup.js (scopes tampered)');
+      } catch (error) {
+        // handled by the check below
+      }
+
+      check('verify rejects a restored-only scopes tamper by name', scopesTamperResult.code !== 0
+        && scopesTamperReport !== null
+        && scopesTamperReport.ok === false
+        && scopesTamperReport.failures.some(failure => failure.includes('scopes differ')));
     }
 
     const summary = {
       ok: failures.length === 0,
       schema: options.schema,
       publicationState: hasAccessRevision ? 'unpublished-exercised' : 'skipped-legacy-schema',
+      grantState: hasAccessRevision ? 'grants-exercised' : 'skipped-legacy-schema',
       steps,
       skipped,
       failures

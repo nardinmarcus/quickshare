@@ -121,6 +121,14 @@ function buildReport({ manifest, receipt, snapshot, pageRows, auditRows, revisio
       plaintextVerified: passwordCapability.plaintextVerified,
       status: passwordCapability.status
     },
+    shareGrants: {
+      // Per-Share grants (T12): tracked only when the schema
+      // carries migration 010. The count is informational; the exact
+      // grant-by-grant equivalence is enforced by the digest
+      // comparison above.
+      tracked: Boolean(snapshot.grants),
+      grants: snapshot.grants ? snapshot.grants.count : 0
+    },
     contentRevisions: {
       tracked: Boolean(snapshot.pages && snapshot.pages.hasContentRevision),
       snapshots: (revisionRows || []).length,
