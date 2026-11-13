@@ -297,7 +297,7 @@ test('Issue #15 carries both IDs through preview, browser/API persistence, metad
 
     const update = await jsonRequest(`/admin/pages/${browserCreate.body.urlId}`, 'PUT', {
       markdownTheme: id
-    });
+    }, { 'If-Match': `"content:${browserCreate.body.urlId}:1"` });
     assert.equal(update.status, 200);
     assert.equal(update.body.page.markdownTheme, id);
 
@@ -338,7 +338,7 @@ test('Issue #15 theme-only edits preserve every unrelated Share field for both t
 
     const response = await jsonRequest(`/admin/pages/${shareId}`, 'PUT', {
       markdownTheme: targetId
-    });
+    }, { 'If-Match': `"content:${shareId}:1"` });
     const stored = await app.locals.pageRepository.getById(shareId);
 
     assert.equal(response.status, 200);

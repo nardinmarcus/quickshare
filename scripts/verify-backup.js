@@ -33,6 +33,7 @@ const {
   collectSnapshot,
   compareSnapshots,
   detectAccessRevocations,
+  evaluateRevisionIntegrity,
   parseArgs
 } = require('./backup-lib');
 
@@ -97,8 +98,9 @@ async function evaluatePasswordCapability(pageRows, passwordFixtures) {
   };
 }
 
-function buildReport({ manifest, receipt, snapshot, pageRows, auditRows, passwordCapability, verifyDurationMs }) {
+function buildReport({ manifest, receipt, snapshot, pageRows, auditRows, revisionRows, passwordCapability, verifyDurationMs }) {
   const failures = compareSnapshots(manifest.snapshot, snapshot);
+  failures.push(...evaluateRevisionIntegrity(pageRows, revisionRows || []));
   failures.push(...passwordCapability.failures);
 
   const revocations = detectAccessRevocations(auditRows);
@@ -118,6 +120,13 @@ function buildReport({ manifest, receipt, snapshot, pageRows, auditRows, passwor
       protectedPages: passwordCapability.protectedPages,
       plaintextVerified: passwordCapability.plaintextVerified,
       status: passwordCapability.status
+    },
+    contentRevisions: {
+      tracked: Boolean(snapshot.pages && snapshot.pages.hasContentRevision),
+      snapshots: (revisionRows || []).length,
+      sharesWithBaseline: (pageRows || []).filter(
+        row => row.current_revision !== null && row.current_revision !== undefined
+      ).length
     },
     revocations: {
       detected: revocations,
@@ -169,7 +178,7 @@ async function main() {
   const verifyStartedAt = Date.now();
 
   try {
-    const { snapshot, pageRows, auditRows } = await collectSnapshot(
+    const { snapshot, pageRows, auditRows, revisionRows } = await collectSnapshot(
       (text, params) => pool.query(text, params)
     );
     const passwordCapability = await evaluatePasswordCapability(pageRows, passwordFixtures);
@@ -179,6 +188,7 @@ async function main() {
       snapshot,
       pageRows,
       auditRows,
+      revisionRows,
       passwordCapability,
       verifyDurationMs: Date.now() - verifyStartedAt
     });

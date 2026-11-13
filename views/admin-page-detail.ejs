@@ -63,6 +63,27 @@
         <dd><time datetime="<%= new Date(Number(sharedPage.createdAt)).toISOString() %>"><%= formatManagementDateTime(sharedPage.createdAt) %></time></dd>
       </div>
       <div>
+        <dt>内容版本</dt>
+        <dd id="content-revision-display">
+          <% if (sharedPage.currentRevision) { %>
+            <span>Revision <%= sharedPage.currentRevision %></span>
+            <code class="admin-etag-value"><%= sharedPage.contentEtag %></code>
+          <% } else { %>
+            <span class="admin-muted">尚未建立基线版本</span>
+          <% } %>
+        </dd>
+      </div>
+      <div>
+        <dt>发布状态</dt>
+        <dd id="published-display">
+          <% if (sharedPage.published) { %>
+            <span class="admin-status public">已发布</span>
+          <% } else { %>
+            <span class="admin-status protected">已下架</span>
+          <% } %>
+        </dd>
+      </div>
+      <div>
         <dt>状态</dt>
         <dd id="status-display">
           <% if (sharedPage.isProtected) { %>
@@ -99,7 +120,9 @@
     </dl>
 
     <form id="edit-form" class="admin-edit-form" aria-busy="false" hidden>
-      <div class="admin-edit-grid">
+      <fieldset class="admin-edit-group" id="content-fields">
+        <legend>内容</legend>
+        <div class="admin-edit-grid">
         <div class="admin-edit-field">
           <label for="edit-title">标题</label>
           <input type="text" id="edit-title" name="title" value="<%= sharedPage.title || '' %>" maxlength="200">
@@ -108,6 +131,24 @@
           <label for="edit-description">描述</label>
           <textarea id="edit-description" name="description" rows="2" maxlength="500"><%= sharedPage.description || '' %></textarea>
         </div>
+        <% if (sharedPage.codeType === 'markdown') { %>
+          <%- include('partials/theme-sampler', {
+            containerId: 'theme-field',
+            containerClass: 'admin-edit-field',
+            selectId: 'edit-theme',
+            selectedThemeId: sharedPage.markdownTheme,
+            markdownThemeOptions
+          }) %>
+        <% } %>
+        </div>
+        <p class="admin-edit-hint">正文在下方“原始内容”中编辑；内容保存以当前内容版本为前置条件，版本冲突时你的稿件会被保留并展示差异。</p>
+        <div class="admin-edit-actions">
+          <button type="submit" class="cyber-btn" id="edit-save-content" data-save-family="content">保存内容</button>
+        </div>
+      </fieldset>
+      <fieldset class="admin-edit-group" id="access-fields">
+        <legend>访问设置</legend>
+        <div class="admin-edit-grid">
         <div class="admin-edit-field">
           <label for="edit-expires">过期时间（北京时间）</label>
           <input
@@ -155,21 +196,40 @@
             <% } %>
           </p>
         </div>
-        <% if (sharedPage.codeType === 'markdown') { %>
-          <%- include('partials/theme-sampler', {
-            containerId: 'theme-field',
-            containerClass: 'admin-edit-field',
-            selectId: 'edit-theme',
-            selectedThemeId: sharedPage.markdownTheme,
-            markdownThemeOptions
-          }) %>
-        <% } %>
-      </div>
+        </div>
+        <div class="admin-edit-actions">
+          <button type="submit" class="cyber-btn" id="edit-save-access" data-save-family="access">保存访问设置</button>
+        </div>
+      </fieldset>
       <div class="admin-edit-actions">
         <button type="button" class="cyber-btn cyber-btn-secondary" id="edit-cancel">取消</button>
-        <button type="submit" class="cyber-btn" id="edit-save">保存修改</button>
       </div>
     </form>
+  </section>
+
+  <section class="card admin-card admin-conflict" id="content-conflict" hidden>
+    <h2 class="admin-conflict-title">内容版本冲突</h2>
+    <p id="conflict-message" role="alert">远端内容已经更新，你的稿件没有被覆盖。下面是远端最新版与你的稿件之间的差异，请决定如何处理。</p>
+    <table class="admin-conflict-meta" id="conflict-meta" hidden>
+      <thead>
+        <tr><th scope="col">字段</th><th scope="col">远端最新版</th><th scope="col">我的稿件</th></tr>
+      </thead>
+      <tbody id="conflict-meta-body"></tbody>
+    </table>
+    <p id="conflict-diff-status" aria-live="polite"></p>
+    <div class="admin-conflict-diff" id="conflict-diff" aria-label="正文行级差异"></div>
+    <details class="admin-conflict-full">
+      <summary>查看远端最新版完整正文</summary>
+      <pre id="conflict-remote-full"></pre>
+    </details>
+    <details class="admin-conflict-full">
+      <summary>查看我的稿件完整正文</summary>
+      <pre id="conflict-candidate-full"></pre>
+    </details>
+    <div class="admin-edit-actions">
+      <button type="button" class="cyber-btn cyber-btn-secondary" id="conflict-load-remote">放弃我的稿件，加载远端最新版</button>
+      <button type="button" class="cyber-btn" id="conflict-save-mine">以我的版本保存</button>
+    </div>
   </section>
 
   <section class="card admin-card" id="content-section">

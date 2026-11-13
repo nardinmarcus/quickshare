@@ -51,6 +51,11 @@ ID、体积限制与条件写规则。当前阶段两类凭据均为 **create-on
 - `conditionalWrites`：创建目前不要求 `If-Match` 或幂等键；但写操作经过
   写维护闸（暂停时 503 `maintenance`），且托管 Key 写会在事务内复核凭据
   版本（见下）。
+- T06 起，创建响应附带新 Share 的基线内容版本 `contentRevision: "1"` 与
+  其强 ETag `contentEtag`（格式 `"content:<Share ID>:<Revision>"`)。
+  v1 API 仍是 create-only：不存在经 API 修改内容的写操作，因此能力响应
+  不宣称任何内容条件写；内容修订与 `If-Match` 前置条件只存在于后台编辑
+  入口（见 [内容 Revision 上线说明](content-revision-rollout.md)）。
 
 ## Key 轮换与凭据版本复核
 

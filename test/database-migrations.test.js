@@ -54,7 +54,8 @@ test('migrations contain every runtime table, column, index, and site setting', 
     '003_page_favorites.sql',
     '004_page_access_revision.sql',
     '005_publishing_writes_paused.sql',
-    '006_api_key_credential_version.sql'
+    '006_api_key_credential_version.sql',
+    '007_share_revisions.sql'
   ]);
   assert.match(migrations[0].sql, /CREATE TABLE IF NOT EXISTS public\.pages/i);
   assert.match(migrations[0].sql, /ADD COLUMN IF NOT EXISTS password_hash/i);
@@ -82,6 +83,11 @@ test('migrations contain every runtime table, column, index, and site setting', 
   assert.match(migrations[5].sql, /ALTER TABLE public\.api_keys/i);
   assert.match(migrations[5].sql, /ADD COLUMN IF NOT EXISTS credential_version/i);
   assert.match(migrations[5].sql, /BIGINT NOT NULL DEFAULT 1/i);
+  assert.match(migrations[6].sql, /ADD COLUMN IF NOT EXISTS current_revision/i);
+  assert.match(migrations[6].sql, /ADD COLUMN IF NOT EXISTS published/i);
+  assert.match(migrations[6].sql, /CREATE TABLE IF NOT EXISTS public\.share_revisions/i);
+  assert.match(migrations[6].sql, /snapshot_hash TEXT NOT NULL/i);
+  assert.match(migrations[6].sql, /PRIMARY KEY \(share_id, revision\)/i);
 });
 
 test('migration runner applies pending files once and releases its client', async () => {
@@ -98,8 +104,8 @@ test('migration runner applies pending files once and releases its client', asyn
   const second = await runMigrations(fake.pool, { logger: { info() {} } });
   const migrationSql = loadMigrations().map(migration => migration.sql.trim());
 
-  assert.deepEqual(first, { applied: ['001', '002', '003', '004', '005', '006'], skipped: [] });
-  assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004', '005', '006'] });
+  assert.deepEqual(first, { applied: ['001', '002', '003', '004', '005', '006', '007'], skipped: [] });
+  assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007'] });
   for (const sql of migrationSql) {
     assert.equal(fake.queries.filter(query => query.sql === sql).length, 1);
   }

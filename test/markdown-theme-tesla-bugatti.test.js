@@ -209,7 +209,7 @@ test('preview, browser/API creation, metadata, admin update, and public renderin
 
     const adminId = `issue-17-admin-${id}`;
     await seedMarkdownShare(adminId);
-    const adminUpdate = await jsonRequest(`/admin/pages/${adminId}`, 'PUT', { markdownTheme: id });
+    const adminUpdate = await jsonRequest(`/admin/pages/${adminId}`, 'PUT', { markdownTheme: id }, { 'If-Match': `"content:${adminId}:1"` });
     const stored = await app.locals.pageRepository.getById(adminId);
     assert.equal(adminUpdate.status, 200);
     assert.equal(adminUpdate.body.page.markdownTheme, id);

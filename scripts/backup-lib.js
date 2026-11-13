@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { computeSnapshotHash } = require('../utils/contentRevision');
 
 // Every public table a complete QuickShare backup must account for. The
 // snapshot records whatever tables actually exist and verification fails on
@@ -21,6 +22,7 @@ const KNOWN_TABLES = [
   'audit_logs',
   'pages',
   'quickshare_schema_migrations',
+  'share_revisions',
   'site_settings'
 ];
 
@@ -57,6 +59,47 @@ const AUDIT_DIGEST_FIELDS = [
   'ip',
   'created_at'
 ];
+
+// Content Revision snapshots (migration 007, T06). Every field of the
+// snapshot row is digested, including the stored integrity hash and the
+// provenance fields, so a restore that alters history in any way —
+// payload, hash, source, actor, capture time — is detected.
+const REVISION_DIGEST_FIELDS = [
+  'share_id',
+  'revision',
+  'html_content',
+  'code_type',
+  'title',
+  'description',
+  'markdown_theme',
+  'snapshot_hash',
+  'source',
+  'actor_type',
+  'actor_id',
+  'restored_from_revision',
+  'created_at'
+];
+
+function revisionKey(row) {
+  return `${row.share_id}:${canonicalValue(row.revision)}`;
+}
+
+function buildRevisionSection(rows) {
+  const digests = {};
+  const ordered = [...rows].sort((left, right) => (
+    revisionKey(left).localeCompare(revisionKey(right))
+  ));
+
+  for (const row of ordered) {
+    digests[revisionKey(row)] = rowDigest(row, REVISION_DIGEST_FIELDS);
+  }
+
+  const aggregateDigest = sha256Hex(
+    ordered.map(row => digests[revisionKey(row)]).join('\n')
+  );
+
+  return { count: rows.length, aggregateDigest, digests };
+}
 
 const SITE_SETTINGS_DIGEST_FIELDS = [
   'id',
@@ -408,14 +451,25 @@ async function collectSnapshot(query) {
   }
 
   const hasAccessRevision = (columns.pages || []).includes('access_revision');
-  const pageFields = hasAccessRevision
+  const hasContentRevision = (columns.pages || []).includes('current_revision');
+
+  let pageFields = hasAccessRevision
     ? [...PAGE_DIGEST_FIELDS, 'access_revision']
-    : PAGE_DIGEST_FIELDS;
+    : [...PAGE_DIGEST_FIELDS];
+
+  if (hasContentRevision) {
+    // T06: the content Revision pointer and published flag are part of the
+    // per-Share content state; digest them (when the columns exist) so a
+    // restore that moves a pointer or flips publication is detected. The
+    // exact values are also recorded verbatim below, like accessRevisions.
+    pageFields = [...pageFields, 'current_revision', 'published'];
+  }
 
   const pageResult = await query('SELECT * FROM public.pages ORDER BY id');
   const pageRows = pageResult.rows;
   const pages = buildSection(pageRows, pageFields, 'id');
   pages.hasAccessRevision = hasAccessRevision;
+  pages.hasContentRevision = hasContentRevision;
 
   if (hasAccessRevision) {
     pages.accessRevisions = {};
@@ -423,6 +477,29 @@ async function collectSnapshot(query) {
     for (const row of pageRows) {
       pages.accessRevisions[row.id] = canonicalValue(row.access_revision);
     }
+  }
+
+  if (hasContentRevision) {
+    pages.currentRevisions = {};
+
+    for (const row of pageRows) {
+      pages.currentRevisions[row.id] = canonicalValue(row.current_revision);
+    }
+  }
+
+  // Content Revision snapshots (migration 007). Present only when the
+  // table exists; legacy snapshots carry no section and drill expectations
+  // skip the Revision assertions explicitly.
+  let revisions = null;
+  let revisionRows = [];
+
+  if (tables.includes('share_revisions')) {
+    const revisionResult = await query(
+      'SELECT * FROM public.share_revisions ORDER BY share_id, revision'
+    );
+
+    revisionRows = revisionResult.rows;
+    revisions = buildRevisionSection(revisionRows);
   }
 
   const apiKeyResult = await query('SELECT * FROM public.api_keys ORDER BY id');
@@ -486,10 +563,11 @@ async function collectSnapshot(query) {
       highWaterId: audit.highWaterId,
       highWaterCreatedAt: audit.highWaterCreatedAt
     },
-    siteSettings
+    siteSettings,
+    revisions
   };
 
-  return { snapshot, pageRows, auditRows };
+  return { snapshot, pageRows, auditRows, revisionRows };
 }
 
 // The manifest is the public record of a backup: it must let an operator
@@ -553,6 +631,76 @@ function compareSections(label, expected, actual, failures) {
 // collected from a restored database. Returns a list of human-readable
 // failures; an empty list means the restore is byte-for-byte equivalent at
 // the row level for every covered table.
+// Semantic integrity of content Revision data (T06), independent of the
+// digest comparison: every stored snapshot hash must recompute from its
+// payload, every baselined Share's current_revision must have a snapshot,
+// and that snapshot must equal the Share's materialized projection. Rows
+// from a pre-007 schema (no current_revision property, no snapshots)
+// produce no failures, so legacy backups keep verifying.
+function evaluateRevisionIntegrity(pageRows, revisionRows) {
+  const failures = [];
+  const rows = revisionRows || [];
+  const byKey = new Map();
+
+  for (const row of rows) {
+    const key = revisionKey(row);
+
+    if (byKey.has(key)) {
+      failures.push(`share_revisions ${key}: duplicate snapshot row`);
+    }
+
+    byKey.set(key, row);
+
+    const recomputed = computeSnapshotHash(row.share_id, canonicalValue(row.revision), {
+      htmlContent: row.html_content,
+      codeType: row.code_type,
+      title: row.title ?? null,
+      description: row.description ?? null,
+      markdownTheme: row.markdown_theme ?? null
+    });
+
+    if (recomputed !== row.snapshot_hash) {
+      failures.push(`share_revisions ${key}: snapshot_hash does not match the snapshot payload`);
+    }
+  }
+
+  for (const page of pageRows || []) {
+    if (!Object.prototype.hasOwnProperty.call(page, 'current_revision')) {
+      continue;
+    }
+
+    const current = canonicalValue(page.current_revision);
+    const shareRows = rows.filter(row => row.share_id === page.id);
+
+    if (current === null) {
+      if (shareRows.length > 0) {
+        failures.push(`pages ${page.id}: has Revision snapshots but no current_revision pointer`);
+      }
+
+      continue;
+    }
+
+    const snapshot = byKey.get(`${page.id}:${current}`);
+
+    if (!snapshot) {
+      failures.push(`pages ${page.id}: current_revision ${current} has no matching snapshot`);
+      continue;
+    }
+
+    if (
+      snapshot.html_content !== page.html_content ||
+      snapshot.code_type !== (page.code_type || 'html') ||
+      (snapshot.title ?? null) !== (page.title ?? null) ||
+      (snapshot.description ?? null) !== (page.description ?? null) ||
+      (snapshot.markdown_theme ?? null) !== (page.markdown_theme ?? null)
+    ) {
+      failures.push(`pages ${page.id}: current snapshot payload differs from the materialized projection`);
+    }
+  }
+
+  return failures;
+}
+
 function compareSnapshots(expected, actual) {
   const failures = [];
 
@@ -617,6 +765,27 @@ function compareSnapshots(expected, actual) {
   compareSections('api_keys', expected.apiKeys, actual.apiKeys, failures);
   compareSections('audit_logs', expected.audit, actual.audit, failures);
   compareSections('site_settings', expected.siteSettings, actual.siteSettings, failures);
+
+  if (expected.revisions) {
+    compareSections('share_revisions', expected.revisions, actual.revisions, failures);
+  }
+
+  if (expected.pages.hasContentRevision) {
+    if (!actual.pages.hasContentRevision) {
+      failures.push('pages.current_revision column missing after restore');
+    } else {
+      const expectedCurrent = expected.pages.currentRevisions || {};
+      const actualCurrent = actual.pages.currentRevisions || {};
+
+      for (const id of Object.keys(expectedCurrent)) {
+        if (actualCurrent[id] !== expectedCurrent[id]) {
+          failures.push(
+            `pages ${id} current_revision differs (backup ${String(expectedCurrent[id])}, restored ${String(actualCurrent[id])})`
+          );
+        }
+      }
+    }
+  }
 
   if (expected.pages.hasAccessRevision) {
     if (!actual.pages.hasAccessRevision) {
@@ -729,6 +898,7 @@ module.exports = {
   collectSnapshot,
   compareSnapshots,
   detectAccessRevocations,
+  evaluateRevisionIntegrity,
   parseArgs,
   parseDatabaseUrl,
   pgToolConnection,

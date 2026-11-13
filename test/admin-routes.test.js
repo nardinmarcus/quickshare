@@ -806,7 +806,9 @@ test('dashboard page mutations accept the rendered CSRF token', async () => {
     headers: {
       Cookie: cookie,
       'Content-Type': 'application/json',
-      'X-CSRF-Token': csrfToken
+      'X-CSRF-Token': csrfToken,
+      // T06: content saves carry the strong content If-Match (Revision 1).
+      'If-Match': `"content:${updatePage.urlId}:1"`
     },
     body: JSON.stringify({ title: 'Updated with CSRF' })
   });
