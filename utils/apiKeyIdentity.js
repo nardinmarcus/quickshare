@@ -91,6 +91,81 @@ function credentialVersionMatches(current, expected) {
   return toCredentialVersionString(current) === toCredentialVersionString(expected);
 }
 
+// --- Scopes (T12, issue #36) ---------------------------------------------
+//
+// Operation permissions use scopes (parent spec #24 §6): a scope says
+// what KIND of operation a credential may attempt; a per-Share grant
+// (utils/shareGrants.js) says WHICH Shares it may touch. Authorization
+// for a managed resource is always the conjunction of the two. The
+// scope vocabulary is fixed; this ticket implements create and read —
+// update and publish scopes exist in the vocabulary (and in stored
+// rows) but no route consumes them yet, and the admin only assigns the
+// scopes whose behavior is implemented (see app.js).
+const API_KEY_SCOPES = Object.freeze([
+  'share:create',
+  'share:read',
+  'share:update',
+  'share:publish'
+]);
+
+const CREATE_ONLY_API_KEY_SCOPES = Object.freeze(['share:create']);
+
+// The scopes with no stored representation: a row predating migration
+// 010, or an unparseable stored value, is create-only — the upgrade
+// default — never silently more.
+function parseApiKeyScopes(value) {
+  let parsed = value;
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+
+    if (!trimmed) {
+      return [...CREATE_ONLY_API_KEY_SCOPES];
+    }
+
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch (error) {
+      return [...CREATE_ONLY_API_KEY_SCOPES];
+    }
+  }
+
+  if (!Array.isArray(parsed)) {
+    return [...CREATE_ONLY_API_KEY_SCOPES];
+  }
+
+  const present = new Set(
+    parsed.filter(scope => typeof scope === 'string' && API_KEY_SCOPES.includes(scope))
+  );
+
+  return API_KEY_SCOPES.filter(scope => present.has(scope));
+}
+
+// Normalizes a caller-supplied scope list for storage. Returns null
+// when any entry is not a known scope, so write paths can refuse the
+// input instead of silently dropping a scope the owner asked for.
+function normalizeApiKeyScopes(value) {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const present = new Set();
+
+  for (const scope of value) {
+    if (typeof scope !== 'string' || !API_KEY_SCOPES.includes(scope)) {
+      return null;
+    }
+
+    present.add(scope);
+  }
+
+  return API_KEY_SCOPES.filter(scope => present.has(scope));
+}
+
+function serializeApiKeyScopes(scopes) {
+  return JSON.stringify(parseApiKeyScopes(scopes));
+}
+
 // The identity recorded on a request after a managed Key verifies. Only
 // non-secret fields are kept: the secret itself is never stored on the
 // request, logged, or returned after authentication.
@@ -99,30 +174,39 @@ function managedCredentialIdentity(apiKeyRow) {
     type: 'managed',
     keyId: apiKeyRow.id,
     name: apiKeyRow.name,
-    credentialVersion: toCredentialVersionString(apiKeyRow.credential_version)
+    credentialVersion: toCredentialVersionString(apiKeyRow.credential_version),
+    scopes: parseApiKeyScopes(apiKeyRow.scopes)
   };
 }
 
 // The legacy environment-variable credential has no logical Key ID and no
 // credential version: it can only be replaced by changing the environment
-// and restarting, which invalidates every in-flight process anyway.
+// and restarting, which invalidates every in-flight process anyway. It is
+// create-only by construction (parent spec #24 §6): no stored scopes,
+// and management capabilities are never granted to it.
 function legacyCredentialIdentity() {
   return {
     type: 'legacy',
     keyId: null,
     name: null,
-    credentialVersion: null
+    credentialVersion: null,
+    scopes: [...CREATE_ONLY_API_KEY_SCOPES]
   };
 }
 
 module.exports = {
   API_KEY_CREDENTIAL_CHANGED_CODE,
+  API_KEY_SCOPES,
+  CREATE_ONLY_API_KEY_SCOPES,
   ApiKeyCredentialChangedError,
   credentialVersionMatches,
   isApiKeyCredentialChangedError,
   legacyCredentialIdentity,
   managedCredentialIdentity,
   nextCredentialVersion,
+  normalizeApiKeyScopes,
+  parseApiKeyScopes,
   parseManagedApiKeyCredential,
+  serializeApiKeyScopes,
   toCredentialVersionString
 };

@@ -24,8 +24,13 @@ const {
   ApiKeyCredentialChangedError,
   credentialVersionMatches,
   nextCredentialVersion,
+  parseApiKeyScopes,
   toCredentialVersionString
 } = require('../utils/apiKeyIdentity');
+const {
+  compareShareListPosition,
+  grantPermissionsFromRow
+} = require('../utils/shareGrants');
 const {
   IdempotencyConflictError,
   requestHmacMatches
@@ -103,6 +108,11 @@ class MemoryPageRepository {
     this.auditLogs = [];
     this.auditIdCounter = 0;
     this.apiKeys = new Map();
+    // Per-Share resource grants (T12): `${apiKeyId}\n${shareId}` ->
+    // grant record mirroring public.share_grants. Grants belong to the
+    // logical Key ID, so rotation keeps them; deleting the Key or the
+    // Share removes them in the same step.
+    this.shareGrants = new Map();
     this.homepagePasswordRequired = true;
     // Same observable maintenance-gate protocol as the Postgres advisory
     // lock (T04): shared holds for writes, exclusive drain for pausing.
@@ -948,7 +958,12 @@ class MemoryPageRepository {
         key_prefix: apiKey.keyPrefix,
         created_at: apiKey.createdAt,
         last_used_at: null,
-        credential_version: '1'
+        credential_version: '1',
+        // Scopes (T12): a new managed Key starts create-only, exactly
+        // like a pre-T12 Key migrated by 010, and the auto-edit opt-in
+        // starts at its spec default false.
+        scopes: parseApiKeyScopes(apiKey.scopes),
+        auto_grant_new_share_edit: apiKey.autoGrantNewShareEdit === true
       };
 
       this.apiKeys.set(record.id, record);
@@ -958,7 +973,9 @@ class MemoryPageRepository {
         key_prefix: record.key_prefix,
         created_at: record.created_at,
         last_used_at: record.last_used_at,
-        credential_version: record.credential_version
+        credential_version: record.credential_version,
+        scopes: [...record.scopes],
+        auto_grant_new_share_edit: record.auto_grant_new_share_edit
       };
     });
   }
@@ -986,7 +1003,35 @@ class MemoryPageRepository {
         key_prefix: record.key_prefix,
         created_at: record.created_at,
         last_used_at: record.last_used_at,
-        credential_version: toCredentialVersionString(record.credential_version)
+        credential_version: toCredentialVersionString(record.credential_version),
+        scopes: [...parseApiKeyScopes(record.scopes)],
+        auto_grant_new_share_edit: record.auto_grant_new_share_edit === true
+      };
+    });
+  }
+
+  // Scope assignment (T12): replaces the Key's stored scope list in one
+  // gated write, mirroring the Postgres adapter. Returns the public
+  // record, or null when the Key does not exist.
+  async updateApiKeyScopes(id, scopes) {
+    return this.publishingGate.runWrite(async () => {
+      const record = this.apiKeys.get(id);
+
+      if (!record) {
+        return null;
+      }
+
+      record.scopes = parseApiKeyScopes(scopes);
+
+      return {
+        id: record.id,
+        name: record.name,
+        key_prefix: record.key_prefix,
+        created_at: record.created_at,
+        last_used_at: record.last_used_at,
+        credential_version: toCredentialVersionString(record.credential_version),
+        scopes: [...record.scopes],
+        auto_grant_new_share_edit: record.auto_grant_new_share_edit === true
       };
     });
   }
@@ -994,7 +1039,7 @@ class MemoryPageRepository {
   async listApiKeys() {
     return Array.from(this.apiKeys.values())
       .sort((left, right) => Number(right.created_at) - Number(left.created_at))
-      .map(({ key_hash, ...apiKey }) => ({ ...apiKey }));
+      .map(({ key_hash, ...apiKey }) => ({ ...apiKey, scopes: [...parseApiKeyScopes(apiKey.scopes)] }));
   }
 
   async getApiKeyById(id) {
@@ -1002,7 +1047,228 @@ class MemoryPageRepository {
   }
 
   async deleteApiKey(id) {
-    return this.publishingGate.runWrite(async () => this.apiKeys.delete(id));
+    return this.publishingGate.runWrite(async () => {
+      const deleted = this.apiKeys.delete(id);
+
+      if (deleted) {
+        // Deleting a Key retires every grant it held in the same step
+        // (T12): a deleted credential leaves no authorization behind.
+        for (const [grantKey, record] of Array.from(this.shareGrants.entries())) {
+          if (record.api_key_id === id) {
+            this.shareGrants.delete(grantKey);
+          }
+        }
+      }
+
+      return deleted;
+    });
+  }
+
+  // --- Per-Share grants (T12, issue #36) ----------------------------------
+  //
+  // Mirrors the Postgres adapter: grant/revoke are gated publishing
+  // writes (the memory gate serializes writers, which is this adapter's
+  // form of the Key-then-Share lock order), grants belong to the
+  // logical Key ID and survive rotation, and deleting the Key or the
+  // Share removes them in the same step.
+
+  grantRecordKey(keyId, shareId) {
+    return `${keyId}\n${shareId}`;
+  }
+
+  normalizeMemoryGrant(record) {
+    return {
+      keyId: record.api_key_id,
+      shareId: record.share_id,
+      permissions: grantPermissionsFromRow(record),
+      createdAt: Number(record.created_at),
+      updatedAt: Number(record.updated_at)
+    };
+  }
+
+  async grantShareAccess({ keyId, shareId, permissions, now = Date.now() }) {
+    return this.publishingGate.runWrite(async () => {
+      if (!this.apiKeys.has(keyId)) {
+        return { status: 'key_not_found' };
+      }
+
+      if (!this.pages.has(shareId)) {
+        return { status: 'share_not_found' };
+      }
+
+      const grantKey = this.grantRecordKey(keyId, shareId);
+      const existing = this.shareGrants.get(grantKey);
+      const record = {
+        api_key_id: keyId,
+        share_id: shareId,
+        can_read: permissions.read,
+        can_update: permissions.update,
+        can_publish: permissions.publish,
+        created_at: existing ? existing.created_at : now,
+        updated_at: now
+      };
+
+      this.shareGrants.set(grantKey, record);
+
+      return {
+        status: 'ok',
+        created: !existing,
+        grant: this.normalizeMemoryGrant(record)
+      };
+    });
+  }
+
+  async revokeShareAccess({ keyId, shareId }) {
+    return this.publishingGate.runWrite(async () => {
+      if (!this.apiKeys.has(keyId)) {
+        return { status: 'key_not_found' };
+      }
+
+      const deleted = this.shareGrants.delete(this.grantRecordKey(keyId, shareId));
+
+      if (!deleted) {
+        return { status: 'grant_not_found' };
+      }
+
+      return { status: 'ok' };
+    });
+  }
+
+  async listShareGrants(keyId) {
+    return Array.from(this.shareGrants.values())
+      .filter(record => record.api_key_id === keyId)
+      .sort((left, right) => {
+        if (Number(left.created_at) !== Number(right.created_at)) {
+          return Number(left.created_at) - Number(right.created_at);
+        }
+        return left.share_id < right.share_id ? -1 : left.share_id > right.share_id ? 1 : 0;
+      })
+      .map(record => {
+        const page = this.pages.get(record.share_id);
+
+        return {
+          ...this.normalizeMemoryGrant(record),
+          shareExists: Boolean(page),
+          shareTitle: page ? (page.title ?? null) : null
+        };
+      });
+  }
+
+  async getShareGrant(keyId, shareId) {
+    const record = this.shareGrants.get(this.grantRecordKey(keyId, shareId));
+    return record ? this.normalizeMemoryGrant(record) : null;
+  }
+
+  // The granted-Share list for the v1 API. Sorting and cursor filtering
+  // use the SAME (created_at, id) comparison (compareShareListPosition,
+  // code-unit order): mixing two orders here is exactly how a cursor
+  // silently skips rows that share a timestamp.
+  async listGrantedShares({ keyId, limit = 20, cursor = null } = {}) {
+    const positions = [];
+
+    for (const record of this.shareGrants.values()) {
+      if (record.api_key_id !== keyId) {
+        continue;
+      }
+
+      const page = this.pages.get(record.share_id);
+
+      if (!page) {
+        continue;
+      }
+
+      positions.push({ record, page, createdAt: Number(page.created_at), id: page.id });
+    }
+
+    positions.sort((left, right) => compareShareListPosition(left, right));
+
+    const visible = cursor
+      ? positions.filter(position => compareShareListPosition(position, cursor) > 0)
+      : positions;
+    const pageSlice = visible.slice(0, limit);
+    const hasMore = visible.length > limit;
+    const last = pageSlice[pageSlice.length - 1];
+
+    return {
+      shares: pageSlice.map(({ record, page }) => ({
+        id: page.id,
+        codeType: page.code_type || 'html',
+        title: page.title ?? null,
+        description: page.description ?? null,
+        markdownTheme: page.markdown_theme ?? null,
+        createdAt: Number(page.created_at),
+        expiresAt: page.expires_at ?? null,
+        isProtected: Number(page.is_protected) === 1,
+        published: page.published !== false,
+        contentRevision: toContentRevisionString(page.current_revision),
+        accessRevision: toAccessRevisionString(page.access_revision),
+        permissions: grantPermissionsFromRow(record)
+      })),
+      nextPosition: hasMore && last
+        ? { createdAt: last.createdAt, id: last.id }
+        : null
+    };
+  }
+
+  // Content read for the v1 API (T12): same contract as the Postgres
+  // adapter — null when no grant (or no Share), never judged by public
+  // visibility.
+  async getGrantedShareContent({ keyId, shareId }) {
+    const record = this.shareGrants.get(this.grantRecordKey(keyId, shareId));
+    const page = this.pages.get(shareId);
+
+    if (!record || !page) {
+      return null;
+    }
+
+    const currentRevision = toContentRevisionString(page.current_revision);
+    const snapshot = currentRevision
+      ? await this.getContentSnapshot(shareId, currentRevision)
+      : null;
+
+    return {
+      permissions: grantPermissionsFromRow(record),
+      shareId: page.id,
+      currentRevision,
+      live: {
+        htmlContent: page.html_content,
+        codeType: page.code_type || 'html',
+        title: page.title ?? null,
+        description: page.description ?? null,
+        markdownTheme: page.markdown_theme ?? null
+      },
+      snapshot: snapshot
+        ? {
+            htmlContent: snapshot.html_content,
+            codeType: snapshot.code_type || 'html',
+            title: snapshot.title ?? null,
+            description: snapshot.description ?? null,
+            markdownTheme: snapshot.markdown_theme ?? null,
+            purgedAt: snapshot.purged_at ?? null
+          }
+        : null
+    };
+  }
+
+  // State read for the v1 API (T12): only the restricted state fields.
+  async getGrantedShareState({ keyId, shareId }) {
+    const record = this.shareGrants.get(this.grantRecordKey(keyId, shareId));
+    const page = this.pages.get(shareId);
+
+    if (!record || !page) {
+      return null;
+    }
+
+    return {
+      permissions: grantPermissionsFromRow(record),
+      share: {
+        id: page.id,
+        published: page.published !== false,
+        isProtected: Number(page.is_protected) === 1,
+        expiresAt: page.expires_at ?? null,
+        accessRevision: toAccessRevisionString(page.access_revision)
+      }
+    };
   }
 
   // Deliberately NOT gated (T04): background last-used bookkeeping for an
@@ -1416,11 +1682,23 @@ class MemoryPageRepository {
     return result.status === 'updated';
   }
 
+  // Full deletion clears the Share's grants in the same step (T12,
+  // parent spec #24 §3): no authorization may outlive the resource it
+  // names.
+  removeGrantsForShare(shareId) {
+    for (const [grantKey, record] of Array.from(this.shareGrants.entries())) {
+      if (record.share_id === shareId) {
+        this.shareGrants.delete(grantKey);
+      }
+    }
+  }
+
   async deletePage(id) {
     return this.publishingGate.runWrite(async () => {
       const deleted = this.pages.delete(id);
       if (deleted) {
         this.revisions.delete(id);
+        this.removeGrantsForShare(id);
         this.tombstoneOperationsForShares([id]);
       }
       return deleted;
@@ -1434,6 +1712,7 @@ class MemoryPageRepository {
       ids.forEach((id) => {
         if (this.pages.delete(id)) {
           this.revisions.delete(id);
+          this.removeGrantsForShare(id);
           deletedIds.push(id);
           count += 1;
         }
