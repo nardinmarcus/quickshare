@@ -169,7 +169,7 @@ test('PlayStation round-trips through preview, browser/API creation, metadata, a
 
   const update = await jsonRequest(`/admin/pages/${apiCreated.body.urlId}`, 'PUT', {
     markdownTheme: 'playstation'
-  });
+  }, { 'If-Match': `"content:${apiCreated.body.urlId}:1"` });
   assert.equal(update.status, 200);
   assert.equal(update.body.page.markdownTheme, 'playstation');
 

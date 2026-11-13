@@ -105,6 +105,8 @@ test('public view works without expiry and before a future expiry', async () => 
     description: null,
     isProtected: false,
     accessRevision: '1',
+    // T06: authorized metadata also carries the content Revision.
+    contentRevision: '1',
     markdownTheme: null
   });
 });

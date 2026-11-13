@@ -2501,6 +2501,89 @@ body:hover::-webkit-scrollbar,
   background: var(--bg-input) !important;
 }
 
+.admin-edit-group {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin: 0 0 1rem;
+  padding: 1rem;
+}
+
+.admin-edit-group legend {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0 0.4rem;
+}
+
+.admin-etag-value {
+  display: inline-block;
+  font-size: 0.75rem;
+  margin-left: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.admin-conflict-title {
+  color: var(--error-text);
+  font-size: 1.05rem;
+  margin: 0 0 0.5rem;
+}
+
+.admin-conflict-meta {
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+  width: 100%;
+}
+
+.admin-conflict-meta th,
+.admin-conflict-meta td {
+  border: 1px solid var(--border-color);
+  font-size: 0.8rem;
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.admin-conflict-meta tr.conflict-meta-changed td {
+  background: var(--error-bg);
+}
+
+.admin-conflict-diff {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  max-height: 480px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.admin-conflict-diff .diff-line {
+  padding: 0 0.6rem;
+}
+
+.admin-conflict-diff .diff-line-added {
+  background: rgba(34, 197, 94, 0.14);
+}
+
+.admin-conflict-diff .diff-line-removed {
+  background: var(--error-bg);
+}
+
+.admin-conflict-full pre {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  max-height: 320px;
+  overflow: auto;
+  padding: 0.6rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Admin password input in edit form */
 .admin-password-input-wrap {
   margin-top: 0.5rem;

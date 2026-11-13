@@ -307,8 +307,12 @@ test('Notion and Claude round-trip through preview, browser create, metadata, ad
 });
 
 test('Notion and Claude round-trip through the Share API without changing response shape', async () => {
+  // T06 adds exactly two keys to the create response: the baseline
+  // content Revision and its strong ETag. Nothing else changes shape.
   const expectedResponseKeys = [
     'codeType',
+    'contentEtag',
+    'contentRevision',
     'description',
     'expiresAt',
     'isProtected',
@@ -361,7 +365,7 @@ test('a Notion-to-Claude admin theme update preserves unrelated Share state', as
   const response = await jsonRequest(
     `/admin/pages/${id}`,
     { markdownTheme: 'claude' },
-    {},
+    { 'If-Match': `"content:${id}:1"` },
     'PUT'
   );
   const stored = await app.locals.pageRepository.getById(id);

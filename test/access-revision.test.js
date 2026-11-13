@@ -258,13 +258,15 @@ test('a credential minted from a pre-rotation read carries the old revision and 
   assert.doesNotMatch(view.text, /secret-body-t01-mint-race/);
 });
 
-test('admin save: content-only needs no precondition and does not advance; access changes require it and revoke', async () => {
+test('admin save: content-only needs no access precondition and does not advance it; access changes require it and revoke', async () => {
   await seedPage({ id: 't01-admin', password: 'First1!' });
   const oldCookie = await unlock('t01-admin', 'First1!');
 
+  // T06: the content save carries its own content If-Match (Revision 1);
+  // the access revision must stay untouched by it.
   const contentOnly = await jsonRequest('/admin/pages/t01-admin', 'PUT', {
     title: 'Renamed title'
-  });
+  }, { 'If-Match': '"content:t01-admin:1"' });
   assert.equal(contentOnly.status, 200);
   assert.equal(contentOnly.body.page.accessRevision, '1');
   assert.equal(await revisionOf('t01-admin'), '1');
