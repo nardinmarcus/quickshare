@@ -123,3 +123,58 @@ ETag），用既有 secret 加密机制（`secret-v1`）整体加密，不存正
 - 备份（T03）：`publish_operations` 纳入完整备份的快照与逐行摘要
   （回执密文按摘要处理，manifest 不含密文与明文），恢复核对逐行比
   对；演练覆盖其精确往返与墓碑翻转篡改拒绝。
+
+## 后台内容保存与历史恢复（T09）
+
+同一套操作账本在 T09 扩展到后台会话命名空间
+（`session:dashboard-owner`）的两个新动作，复用 `publish_operations`
+表与摘要/回执机制，不新增表：
+
+- `share.content.update`：`PUT /admin/pages/:id` 带 `Idempotency-Key`
+  头（UUID v4；16–128 字符，`[A-Za-z0-9_-]`，格式非法 400
+  `invalid_idempotency_key`，绝不静默降级为普通保存）。无头时保持
+  T01/T06 的既有行为不变。
+- `share.restore`：`POST /admin/pages/:id/revisions/:revision/restore`
+  （后台会话 + CSRF），标识可经 `Idempotency-Key` 头或请求体
+  `requestId` 字段提供；版本条件经 `If-Match` 给出（缺失 428
+  `content_precondition_required`，过期/不匹配 412
+  `content_conflict` 并返回当前版本）。
+
+**摘要**沿用 §8 规则：动作、目标 Share、双版本期望（内容
+If-Match 与访问 `expectedAccessRevision`，含畸形 If-Match 的原始
+字面值）、字段存在性与规范化输入值。摘要只由**请求本身**计算——不
+依赖派生值（密码哈希、自动生成密码）与当前状态，因此重试必然同摘
+要，且重试不会把「当前」的期望误当作原始期望。
+
+**处理顺序**与创建一致：纯格式校验（标识、密码格式、期望版本格
+式）→ 身份/权限 → 写维护闸（T04；暂停时 503 `maintenance`，连重放
+也拒绝，结果经操作查询确认）→ **操作结果查询先于一切版本比较**：
+命中且摘要一致直接返回已提交结果——哪怕当初的 If-Match 早已过
+期，也不会被误报为 412；摘要不同 409 `idempotency_conflict`；结果
+Share 已删除 410 `operation_result_unavailable`。未命中才在同一事
+务内依次做：访问前置条件 → 内容前置条件 → 内容投影与快照 → 审计
+→ 操作记录。**操作记录只在成功时写入**：首次尝试以
+401/403/409/410/412/428 失败不占用标识，后续同标识重试按新请求执
+行（已提交结果必先被命中这一前提只对成功成立）。内容无变化的成
+功（含恢复到与当前相同的内容）同样记账，但不产生新 Revision。
+
+**回执**只含标识与版本信息：保存回执为动作种类、Share ID、是否变
+更与结果内容/访问 Revision；恢复回执额外含来源 Revision 与恢复前
+的当前 Revision。回执**从不**含正文、密码或任何秘密——重放因此直
+接返回回执字段。`GET /admin/operations/:requestId` 可确认这两种新
+动作（动作名与结果版本照常报告）；API Key 的 capabilities 不因此
+扩张——保存/恢复是后台会话操作，不是 Key 的管理能力。
+
+**恢复语义**：来源快照的内容字段（正文、类型、标题、描述、主题）
+被写为一条**新的** Revision（`source: 'admin-restore'`，
+`restored_from_revision` 记录来源），历史本身永不改写；来源快照不
+存在返回 404 `revision_not_found`，内容已被清除（清除后的墓碑）返
+回 410 `revision_unavailable` 且永不作为有效恢复来源。恢复在内容写
+事务内完成（过维护闸、锁当前行、确保基线后读来源），与并发内容更
+新竞争同一期望版本时只有一个成功，失败方得到 412 并看到当前版
+本。恢复**不改变** URL、密码、有效期、`access_revision`、Key 授
+权、发布状态、收藏与浏览量。后台页面为内容保存与恢复各保留一个
+待确认意图（sessionStorage，只存标识与草稿指纹/期望版本，不存正
+文）：同草稿同基线（恢复为同来源同基线）重试沿用同一标识；错误状
+态永不自动重试、永不自动换基线；409 时清除意图并提示，成功后清
+除。
