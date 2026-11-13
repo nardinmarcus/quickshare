@@ -23,6 +23,7 @@ const { derivePageTitle } = require('./utils/pageTitle');
 const {
   accessRevisionMatches,
   formatAccessEtag,
+  parseAccessIfMatch,
   parseExpectedAccessRevision,
   toAccessRevisionString
 } = require('./utils/shareAccess');
@@ -1277,6 +1278,43 @@ function operationReceipt(operation) {
   }
 }
 
+// Parses the access-state If-Match of an unpublish/republish request
+// into the pair the repository judges inside its transaction (T15):
+// the expected access revision when the tag is one concrete strong
+// ACCESS tag for this Share, or the missing marker otherwise. The tag
+// family is the state family — a content tag can never stand in for it
+// (parent spec #24 §7: the two operation families' tags are not
+// interchangeable), and weak tags, wildcards and lists are invalid,
+// never a match (§4). `digestValue` binds the caller's expectation
+// into the request digest (§8) exactly like the content helper below:
+// the revision itself, null when absent, or the raw malformed header,
+// so a byte-identical retry digests identically in any state.
+function accessPreconditionState(req, shareId) {
+  const parsed = parseAccessIfMatch(req.get('if-match'), shareId);
+
+  if (parsed.status === 'missing') {
+    return {
+      expectedAccessRevision: null,
+      accessPreconditionMissing: true,
+      digestValue: null
+    };
+  }
+
+  if (parsed.status !== 'ok') {
+    return {
+      expectedAccessRevision: null,
+      accessPreconditionMissing: false,
+      digestValue: `invalid:${String(req.get('if-match'))}`
+    };
+  }
+
+  return {
+    expectedAccessRevision: parsed.revision,
+    accessPreconditionMissing: false,
+    digestValue: parsed.revision
+  };
+}
+
 // Parses the content If-Match of a save/restore request into the triple
 // the repository judges inside its transaction (T09): the expected
 // revision when the tag is one concrete strong content tag, or the
@@ -1821,20 +1859,17 @@ app.delete('/admin/apis/keys/:id', requireDashboardAdmin, requireDashboardCsrf, 
 });
 
 // Scope assignment (T12): the owner widens or narrows what a managed
-// Key may attempt. Only the scopes whose behavior this ticket
-// implements are assignable here — share:create (T05/T08) and
-// share:read (this ticket). share:update / share:publish are stored
-// vocabulary for their own tickets; accepting them now would hand the
-// owner a switch that changes nothing observable, so they are refused
-// as unsupported instead of silently stored. A scope by itself still
-// authorizes no specific Share: resource access needs the matching
-// grant as well.
+// Key may attempt. Only the scopes whose behavior exists are
+// assignable here; accepting a scope whose operation has not shipped
+// would hand the owner a switch that changes nothing observable, so
+// such scopes were refused as unsupported instead of silently stored
+// until their own tickets landed. A scope by itself still authorizes
+// no specific Share: resource access needs the matching grant as well.
 // The scopes the owner may assign from this dashboard. Every entry
-// has a live server-side consumer: create (T05/T08), read (T12) and
-// update (T13). share:publish stays unassignable until its own API
-// operations ship — an assignable scope with no behavior would be a
-// dead switch.
-const API_KEY_ASSIGNABLE_SCOPES = Object.freeze(['share:create', 'share:read', 'share:update']);
+// has a live server-side consumer: create (T05/T08), read (T12),
+// update (T13) and publish (T15) — the set is now the full stored
+// vocabulary, because the publish-state operations shipped with T15.
+const API_KEY_ASSIGNABLE_SCOPES = Object.freeze(['share:create', 'share:read', 'share:update', 'share:publish']);
 
 app.put('/admin/apis/keys/:id/scopes', requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
   try {
@@ -2009,14 +2044,16 @@ app.get('/admin/apis/keys/:id/grants', requireDashboardApiAdmin, async (req, res
   }
 });
 
-// Grant (T12, update added by T13): the owner authorizes one Key on
-// one Share. The dashboard grants the READ permission and — since the
-// content update endpoint shipped — the UPDATE permission (which the
-// grant model stores together with read: an editor must be able to
-// read back what it edits). The publish permission still has no API
-// behavior, so a request naming it is refused rather than stored as a
-// dead switch. The repository applies the Key-then-Share lock order
-// inside the publishing gate.
+// Grant (T12, update added by T13, publish added by T15): the owner
+// authorizes one Key on one Share. The dashboard grants the READ
+// permission, the UPDATE permission (which the grant model stores
+// together with read: an editor must be able to read back what it
+// edits) and — since the unpublish/republish endpoints shipped — the
+// PUBLISH permission, which is independent: it neither implies read
+// nor is implied by edit (parent spec #24 §6). Until T15 the publish
+// permission had no API behavior and a request naming it was refused
+// rather than stored as a dead switch. The repository applies the
+// Key-then-Share lock order inside the publishing gate.
 app.post('/admin/apis/keys/:id/grants', requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
   try {
     const shareId = typeof req.body?.shareId === 'string' ? req.body.shareId.trim() : '';
@@ -2027,15 +2064,6 @@ app.post('/admin/apis/keys/:id/grants', requireDashboardAdmin, parseSmallJson, r
         success: false,
         error: 'A grant requires a shareId and at least one permission',
         code: 'invalid_grant',
-        retryable: false
-      });
-    }
-
-    if (permissions.publish) {
-      return res.status(400).json({
-        success: false,
-        error: 'Only the read and update permissions can be granted from this dashboard yet',
-        code: 'grant_permission_not_available',
         retryable: false
       });
     }
@@ -5200,6 +5228,258 @@ app.post('/api/v1/shares/:id/restore', privateNoStore, requireApiKey, requireApi
     return res.status(500).json({ success: false, error: '服务器错误' });
   }
 });
+
+// Granted publish-state transitions (T15, issue #39): a managed Key
+// with the publish scope and a publish grant on this Share unpublishes
+// or republishes it. Edit rights never imply this operation — an
+// editor without a separate publish grant is refused exactly like any
+// other unauthorized caller — and a publish grant never implies read:
+// this surface returns only the restricted state fields the state
+// representation carries. The transition reuses the dashboard's
+// publish-state transaction wholesale (T11) — the same repository
+// operation protocol, access-version compare-and-swap, no-op rule and
+// audit — in the Key's own operation namespace; it is not a second
+// state machine. The precondition is the current STATE If-Match (the
+// access-family tag): a content tag can never stand in for it, and
+// neither can a weak tag, a wildcard or a list (parent spec #24 §4/§7).
+// Both the concrete state If-Match and an Idempotency-Key are
+// required. The write re-verifies, inside its transaction, both the
+// credential version and the caller's current publish grant before
+// any replay is honored, so a rotation or revocation that committed
+// first refuses the transition and a revoked Key cannot replay its
+// own earlier result (§8). Management authorization is judged
+// independently of public visibility: an expired Share transitions
+// exactly like a live one, and republishing never extends its expiry,
+// changes its password or touches its content or history.
+function grantedPublishStateHandler(targetPublished) {
+  const action = targetPublished ? 'share.republish' : 'share.unpublish';
+
+  return async (req, res) => {
+    const credential = req.apiCredential || legacyCredentialIdentity();
+    const shareId = req.params.id;
+
+    // The request identifier is mandatory on this surface (parent
+    // spec #24 §8): absent or malformed is a client error, never a
+    // silent downgrade to a non-idempotent write.
+    const idem = parseIdempotencyKey(req.get('idempotency-key'));
+
+    if (!idem.valid) {
+      return res.status(400).json({
+        success: false,
+        error: 'A valid Idempotency-Key header is required',
+        code: 'invalid_idempotency_key',
+        retryable: false
+      });
+    }
+
+    const requestId = idem.value;
+
+    try {
+      const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+        ? req.body
+        : null;
+
+      if (!body) {
+        return res.status(400).json({
+          success: false,
+          error: 'Request body must be a JSON object',
+          code: 'invalid_body',
+          retryable: false
+        });
+      }
+
+      // The target state is named by the endpoint itself; the request
+      // carries no fields at all. Anything named here would be a field
+      // this operation does not accept — refused, never ignored, so a
+      // caller cannot believe it set the password, the expiry or the
+      // content through a publish-state call.
+      for (const field of Object.keys(body)) {
+        return res.status(400).json({
+          success: false,
+          error: `Field cannot be set through the ${action} operation: ${field}`,
+          code: 'invalid_field',
+          field,
+          retryable: false
+        });
+      }
+
+      // The grant half of the authorization conjunction, judged before
+      // any state is read for validation: no publish grant — or no
+      // such Share — is the same 404, so this surface cannot probe
+      // which Shares exist. The repository re-verifies the grant
+      // inside the transition transaction; this check only fails fast.
+      const grant = await pageRepository.getShareGrant(credential.keyId, shareId);
+
+      if (!grant || !grant.permissions.publish) {
+        return res.status(404).json({
+          success: false,
+          error: 'Share not found',
+          code: 'share_not_found',
+          retryable: false
+        });
+      }
+
+      const page = await pageRepository.getById(shareId);
+
+      if (!page) {
+        return res.status(404).json({
+          success: false,
+          error: 'Share not found',
+          code: 'share_not_found',
+          retryable: false
+        });
+      }
+
+      // Write maintenance outranks precondition validation (T04):
+      // while paused, even a replay of this transition is refused at
+      // the gate, and the operation stays confirmable through the
+      // operations query.
+      if (typeof pageRepository.getPublishingWritesPaused === 'function'
+        && await pageRepository.getPublishingWritesPaused()) {
+        return sendPublishingMaintenance(res);
+      }
+
+      const accessState = accessPreconditionState(req, shareId);
+      const ip = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+
+      const outcome = await pageRepository.setPublishedState({
+        id: shareId,
+        published: targetPublished,
+        precondition: {
+          expectedAccessRevision: accessState.expectedAccessRevision,
+          accessPreconditionMissing: accessState.accessPreconditionMissing
+        },
+        operation: {
+          actorNamespace: managedKeyNamespace(credential.keyId),
+          requestId,
+          action,
+          targetId: shareId,
+          // The digest binds the identifier to this exact request
+          // (parent spec §8), computed from the request alone — the
+          // action and the caller's expected access version — so a
+          // byte-identical retry digests identically in any state,
+          // while the opposite transition or any other baseline under
+          // the same identifier is a conflict.
+          requestHmac: computeRequestHmac({
+            action,
+            targetId: shareId,
+            presence: {
+              expectedAccessRevision: accessState.digestValue !== null ? 1 : 0
+            },
+            values: {
+              expectedAccessRevision: accessState.digestValue
+            }
+          })
+        },
+        apiCredential: credential,
+        grantCheck: { keyId: credential.keyId, permission: 'publish' },
+        ip
+      });
+
+      if (outcome.outcome === 'unavailable') {
+        return respondOperationUnavailable(res, requestId);
+      }
+
+      if (outcome.outcome === 'replayed') {
+        const receipt = operationReceipt(outcome.operation);
+
+        if (!outcome.shareState || !receipt || receipt.kind !== action || receipt.shareId !== shareId) {
+          return respondOperationUnavailable(res, requestId);
+        }
+
+        return res.json({
+          success: true,
+          replayed: true,
+          requestId,
+          action,
+          shareId,
+          published: receipt.published === true,
+          changed: receipt.changed === true,
+          unchanged: receipt.changed !== true,
+          accessRevision: receipt.accessRevision,
+          accessEtag: formatAccessEtag(shareId, receipt.accessRevision)
+        });
+      }
+
+      const result = outcome.result;
+
+      if (result.status === 'grant_not_found' || result.status === 'not_found') {
+        return res.status(404).json({
+          success: false,
+          error: 'Share not found',
+          code: 'share_not_found',
+          retryable: false
+        });
+      }
+
+      if (result.status === 'access_precondition_required') {
+        return res.status(428).json({
+          success: false,
+          error: '缺少状态版本前置条件 If-Match，请刷新后重试',
+          code: 'access_precondition_required',
+          requestId,
+          accessRevision: result.accessRevision,
+          accessEtag: formatAccessEtag(shareId, result.accessRevision),
+          retryable: false
+        });
+      }
+
+      if (result.status === 'conflict') {
+        return res.status(412).json({
+          success: false,
+          error: '发布状态已被更新，请刷新后重试',
+          code: 'access_conflict',
+          requestId,
+          accessRevision: result.accessRevision,
+          accessEtag: formatAccessEtag(shareId, result.accessRevision),
+          retryable: false
+        });
+      }
+
+      return res.json({
+        success: true,
+        requestId,
+        action,
+        shareId,
+        published: result.published === true,
+        changed: result.changed === true,
+        unchanged: result.changed !== true,
+        accessRevision: result.accessRevision,
+        accessEtag: formatAccessEtag(shareId, result.accessRevision)
+      });
+    } catch (error) {
+      console.error('Granted share publish-state update failed:', error);
+      // The credential was rotated or deleted after this request
+      // verified it: the write was refused inside its transaction
+      // (T05/T15). From the client's side the presented credential is
+      // simply no longer valid.
+      if (isApiKeyCredentialChangedError(error)) {
+        return res.status(401).json({
+          success: false,
+          error: 'Invalid API key',
+          code: 'api_key_credential_changed',
+          retryable: false
+        });
+      }
+      if (isIdempotencyConflictError(error)) {
+        return res.status(409).json({
+          success: false,
+          error: 'Idempotency-Key was already used with a different request',
+          code: 'idempotency_conflict',
+          requestId,
+          retryable: false
+        });
+      }
+      if (respondIfPublishingGate(res, error)) {
+        return;
+      }
+      return res.status(500).json({ success: false, error: '服务器错误' });
+    }
+  };
+}
+
+app.post('/api/v1/shares/:id/unpublish', privateNoStore, requireApiKey, requireApiScope('share:publish'), parseSmallJsonBody, grantedPublishStateHandler(false));
+app.post('/api/v1/shares/:id/republish', privateNoStore, requireApiKey, requireApiScope('share:publish'), parseSmallJsonBody, grantedPublishStateHandler(true));
 
 app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (req, res) => {
 

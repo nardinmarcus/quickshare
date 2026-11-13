@@ -76,10 +76,52 @@ function formatAccessEtag(shareId, accessRevision) {
   return `"access:${shareId}:${toAccessRevisionString(accessRevision)}"`;
 }
 
+const ACCESS_ETAG_PATTERN = /^"access:([^"]+):(0|[1-9][0-9]*)"$/;
+
+// Strictly parse an If-Match header value as an access-state
+// precondition for one Share (T15, issue #39; parent spec #24 §4/§7).
+// The publish-state writes compare the STATE representation, so this
+// is the access-family counterpart of parseContentIfMatch — and the
+// two families are never interchangeable: a content tag presented here
+// is invalid, exactly like a wildcard, a list, a weak tag, a bare
+// token, a tag for another Share or a malformed revision. Returns one
+// of:
+//   { status: 'missing' }                        — header absent/blank (428)
+//   { status: 'invalid' }                        — present but not one
+//     concrete strong double-quoted access tag for this Share (412)
+//   { status: 'ok', revision }                   — the parsed access
+//     revision; the caller compares it against the current access
+//     revision (a mismatch is the stale case, also 412).
+function parseAccessIfMatch(headerValue, shareId) {
+  if (headerValue === undefined || headerValue === null
+    || (typeof headerValue === 'string' && headerValue.trim() === '')) {
+    return { status: 'missing', revision: null };
+  }
+
+  if (typeof headerValue !== 'string') {
+    return { status: 'invalid', revision: null };
+  }
+
+  const match = ACCESS_ETAG_PATTERN.exec(headerValue);
+
+  if (!match || match[1] !== shareId) {
+    return { status: 'invalid', revision: null };
+  }
+
+  const revision = BigInt(match[2]);
+
+  if (revision <= 0n) {
+    return { status: 'invalid', revision: null };
+  }
+
+  return { status: 'ok', revision: revision.toString() };
+}
+
 module.exports = {
   accessRevisionMatches,
   formatAccessEtag,
   nextAccessRevision,
+  parseAccessIfMatch,
   parseExpectedAccessRevision,
   toAccessRevisionString
 };

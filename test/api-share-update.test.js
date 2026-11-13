@@ -224,19 +224,24 @@ test('content update refuses missing, invalid, legacy and under-scoped credentia
   assert.deepEqual(noGrant.json, readGrant.json);
 });
 
-test('admin assigns the update scope and edit grant; publish stays refused', async () => {
+test('admin assigns the update scope and edit grant; publish scope and grant ship with T15', async () => {
   const cookie = await loginDashboard();
   const csrf = await dashboardCsrf(cookie);
   await seedKey('t13-admin-key');
   await seedPage({ id: 't13-admin-share' });
 
+  // Until T15 the publish scope was refused here — its API behavior
+  // did not exist, so the switch was refused rather than stored as a
+  // no-op. With the unpublish/republish endpoints shipped, both the
+  // scope and the grant are assignable; T15's own suite exercises the
+  // operations end to end.
   const publishScope = await jsonRequest('/admin/apis/keys/t13-admin-key/scopes', {
     method: 'PUT',
     headers: { Cookie: cookie, 'X-CSRF-Token': csrf },
     body: { scopes: ['share:create', 'share:publish'] }
   });
-  assert.equal(publishScope.status, 400);
-  assert.equal(publishScope.json.code, 'invalid_scopes');
+  assert.equal(publishScope.status, 200, publishScope.text);
+  assert.deepEqual(publishScope.json.apiKey.scopes, ['share:create', 'share:publish']);
 
   const updateScope = await jsonRequest('/admin/apis/keys/t13-admin-key/scopes', {
     method: 'PUT',
@@ -250,9 +255,13 @@ test('admin assigns the update scope and edit grant; publish stays refused', asy
   assert.equal(editGrant.status, 201, editGrant.text);
   assert.deepEqual(editGrant.json.grant.permissions, { read: true, update: true, publish: false });
 
+  // A grant replaces the permission set: naming publish alone stores
+  // exactly the publish permission — it neither rides along with the
+  // edit grant nor implies read.
   const publishGrant = await grantViaAdmin(cookie, csrf, 't13-admin-key', 't13-admin-share', { publish: true });
-  assert.equal(publishGrant.status, 400);
-  assert.equal(publishGrant.json.code, 'grant_permission_not_available');
+  assert.equal(publishGrant.status, 200, publishGrant.text);
+  assert.equal(publishGrant.json.created, false);
+  assert.deepEqual(publishGrant.json.grant.permissions, { read: false, update: false, publish: true });
 });
 
 test('granted key replaces the full snapshot; the original URL is returned', async () => {

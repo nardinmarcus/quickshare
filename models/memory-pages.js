@@ -760,10 +760,41 @@ class MemoryPageRepository {
   // step, while setting the state the Share already has records the
   // operation without advancing anything. Precondition failures record
   // nothing; replay resolution precedes every judgment.
-  async setPublishedState({ id, published, precondition = {}, operation = null, ip = null }) {
+  //
+  // `apiCredential` + `grantCheck` serve the Key-authenticated
+  // unpublish/republish (T15, issue #39), under the same discipline as
+  // the T13 content update and the T14 restore: inside the gate — this
+  // adapter's write transaction — the credential version and the
+  // caller's current grant on this Share are re-verified BEFORE a
+  // committed operation may replay, so a rotation, deletion or
+  // revocation that committed first refuses the in-flight transition,
+  // and a revoked Key cannot replay its own earlier result (parent
+  // spec #24 §8). Dashboard callers pass neither and keep the T11
+  // owner behavior unchanged.
+  async setPublishedState({ id, published, precondition = {}, operation = null, ip = null, apiCredential = null, grantCheck = null }) {
     const targetPublished = published === true;
 
     const execute = () => this.publishingGate.runWrite(async () => {
+      this.recheckManagedCredential(apiCredential);
+
+      if (grantCheck) {
+        const record = this.shareGrants.get(this.grantRecordKey(grantCheck.keyId, id));
+        const permissions = grantPermissionsFromRow(record);
+
+        if (!permissions[grantCheck.permission]) {
+          return {
+            outcome: 'executed',
+            result: {
+              status: 'grant_not_found',
+              published: null,
+              changed: false,
+              accessRevision: null,
+              contentRevision: null
+            }
+          };
+        }
+      }
+
       if (operation) {
         const resolved = this.resolveExistingOperation(operation);
 
