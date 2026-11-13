@@ -125,6 +125,12 @@
     </article>
 
     <article class="card api-doc-card">
+      <h2>幂等创建与操作确认</h2>
+      <p>创建请求可选带 <code>Idempotency-Key</code> 请求头（客户端生成 UUID v4）。带头后，同一 Key 以相同内容重试会重放原始结果，内容不同返回 <code>409</code>；不带头时创建与以往一致，且不是幂等创建。</p>
+      <p>响应丢失后，用同一把 Key 查询 <code>GET /api/v1/operations/:requestId</code> 按请求标识确认结果：只返回状态与 Share / 版本标识，不返回密码与正文。</p>
+    </article>
+
+    <article class="card api-doc-card">
       <h2>请求体</h2>
       <dl class="api-field-list">
         <div><dt><code>htmlContent</code> <span>必填</span></dt><dd>要分享的内容。</dd></div>

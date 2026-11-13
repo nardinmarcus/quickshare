@@ -103,6 +103,60 @@ document.addEventListener('DOMContentLoaded', () => {
   const shareExpiresInput = document.getElementById('share-expires');
   const shareExpiresHint = document.getElementById('share-expires-hint');
   const expiryDefaultHint = '将在所选日期结束后到期';
+  const orphanChoice = document.getElementById('publish-orphan-choice');
+  const orphanAbandonButton = document.getElementById('publish-orphan-abandon');
+  const orphanCancelButton = document.getElementById('publish-orphan-cancel');
+
+  // --- Pending publish intent (T08) ---------------------------------------
+  // One pending create intent lives in localStorage as
+  // { requestId, draftKey, sessionTag }: the request identifier is minted
+  // BEFORE the create is sent and kept until the server confirms the
+  // outcome, so a lost response, a timeout or an accidental double-click
+  // resubmits the same identifier and the server replays the original
+  // result instead of minting a second Share. The session tag binds the
+  // intent to the publish session that created it; an intent from
+  // another session is never silently claimed (see the orphan choice).
+  const publishIntentTools = window.PublishIntent || null;
+  const PUBLISH_PENDING_STORAGE_KEY = 'qs.publishPending.v1';
+  const publishSessionTag = (() => {
+    const meta = document.querySelector('meta[name="publish-session-tag"]');
+    return meta ? meta.getAttribute('content') || '' : '';
+  })();
+
+  function readPendingPublish() {
+    try {
+      const raw = window.localStorage.getItem(PUBLISH_PENDING_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      return parsed && typeof parsed.requestId === 'string' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function writePendingPublish(pending) {
+    try {
+      window.localStorage.setItem(PUBLISH_PENDING_STORAGE_KEY, JSON.stringify(pending));
+    } catch {
+      // Storage unavailable (private mode, quota): the create still goes
+      // out with its identifier; only cross-reload confirmation is lost.
+    }
+  }
+
+  function clearPendingPublish() {
+    try {
+      window.localStorage.removeItem(PUBLISH_PENDING_STORAGE_KEY);
+    } catch {
+      // Nothing to clean up when storage is unavailable.
+    }
+  }
+
+  function hideOrphanChoice() {
+    if (orphanChoice) orphanChoice.classList.add('hidden');
+  }
+
+  function showOrphanChoice() {
+    if (orphanChoice) orphanChoice.classList.remove('hidden');
+  }
 
   function localDateValue(date) {
     const year = date.getFullYear();
@@ -446,6 +500,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function resetCreationForm() {
+    // "继续发布" starts a genuinely new publish intent: any pending
+    // create intent is retired with the form (T08).
+    clearPendingPublish();
+    hideOrphanChoice();
     if (htmlInput) htmlInput.value = '';
     if (fileInput) fileInput.value = '';
     if (fileName) fileName.textContent = '';
@@ -988,7 +1046,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return requestBody;
   }
 
-  function buildPublishRequest() {
+  function buildPublishRequest({ forPendingRetry = false } = {}) {
     const requestBody = buildPreviewRequest();
     const isProtected = Boolean(passwordToggle && passwordToggle.checked);
 
@@ -1011,7 +1069,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (shareExpiresInput && shareExpiresInput.value) {
       expiresAt = expiryAtEndOfLocalDay(shareExpiresInput.value);
 
-      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      // The expiry-future check is a fresh-create validation. When this
+      // build serves a pending-intent retry, the check must NOT run
+      // locally first: the operation may already be committed (created
+      // while the expiry was still future), and only the server's
+      // replay can confirm that. A non-finite date is still a local
+      // format error in both cases.
+      if (!Number.isFinite(expiresAt) || (!forPendingRetry && expiresAt <= Date.now())) {
         if (shareExpiresHint) {
           shareExpiresHint.textContent = '请选择今天或之后的到期日期';
           shareExpiresHint.className = 'field-hint error';
@@ -1151,61 +1215,136 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  if (generateButton) {
-    generateButton.addEventListener('click', async () => {
-      if (isSubmitting || isPreviewing) return;
+  // One publish attempt (T08): resolves the pending intent first, then
+  // submits with the resolved request identifier in the Idempotency-Key
+  // header. Extracted from the click handler so the orphan choice's
+  // "abandon and publish as new" action re-enters the exact same flow.
+  async function attemptPublish() {
+    if (isSubmitting || isPreviewing) return;
 
-      let submittedDraftVersion = null;
+    let submittedDraftVersion = null;
 
-      try {
-        const requestBody = buildPublishRequest();
-        submittedDraftVersion = draftVersion;
-        isSubmitting = true;
-        closePublishPreview(false);
-        if (prepublishPreviewButton) prepublishPreviewButton.disabled = true;
-        setPublishState('busy', '正在发布并生成链接…');
-        setButtonBusy(
-          generateButton,
-          true,
-          '发布中…',
-          '<i class="fas fa-link mr-1" aria-hidden="true"></i>发布并生成链接'
-        );
+    try {
+      // Resolve the pending intent against a leniently built draft: the
+      // draft fingerprint needs the payload, and a same-draft retry must
+      // not be stopped by the local expiry-future check before the
+      // server has had its say.
+      const initialBody = buildPublishRequest({ forPendingRetry: true });
+      const draftKey = publishIntentTools
+        ? publishIntentTools.draftKeyFor(initialBody)
+        : null;
+      const resolution = publishIntentTools
+        ? publishIntentTools.resolvePublishIntent(readPendingPublish(), draftKey, publishSessionTag)
+        : { state: 'none' };
 
-        const response = await fetch('/api/pages/create', {
-          method: 'POST',
-          headers: jsonHeaders(),
-          body: JSON.stringify(requestBody)
-        });
-        const data = await response.json().catch(() => null);
-
-        if (!response.ok || !data?.success) {
-          throw userFacingError(data?.error || '发布失败，请稍后重试');
-        }
-
-        showPublishedResult(data);
-        if (submittedDraftVersion === draftVersion) {
-          setPublishState('success', '发布成功，分享链接已生成');
-        } else {
-          if (resultEyebrow) resultEyebrow.textContent = '上次发布结果';
-          if (resultSection) resultSection.dataset.status = 'previous';
-          setPublishState('idle', '发布已完成，但当前草稿随后有修改；下方链接对应提交时的内容');
-        }
-        showSuccessToast('发布成功');
-      } catch (error) {
-        reportPublishError(
-          error.userFacing ? error.message : '发布失败，请稍后重试',
-          error.focusTarget
-        );
-      } finally {
-        isSubmitting = false;
-        setButtonBusy(
-          generateButton,
-          false,
-          '发布中…',
-          '<i class="fas fa-link mr-1" aria-hidden="true"></i>发布并生成链接'
-        );
-        if (prepublishPreviewButton) prepublishPreviewButton.disabled = false;
+      if (resolution.state === 'orphan') {
+        // A pending intent from another publish session: never claim its
+        // identifier here. Show the explicit choice and send nothing.
+        showOrphanChoice();
+        setPublishState('idle', '有一条属于其他发布会话的未确认记录，请先选择如何处理');
+        return;
       }
+
+      let requestBody = initialBody;
+      let requestId = null;
+
+      if (resolution.state === 'retry') {
+        requestId = resolution.pending.requestId;
+      } else {
+        // 'none' starts a fresh intent; 'rotate' means the draft changed
+        // under the same session — clicking publish on the edited draft
+        // is itself the explicit new-intent signal. Both re-run the
+        // strict local validations before a fresh identifier is minted.
+        requestBody = buildPublishRequest();
+        if (publishIntentTools) {
+          requestId = publishIntentTools.generateRequestId();
+          writePendingPublish({ requestId, draftKey, sessionTag: publishSessionTag });
+        }
+      }
+
+      submittedDraftVersion = draftVersion;
+      isSubmitting = true;
+      hideOrphanChoice();
+      closePublishPreview(false);
+      if (prepublishPreviewButton) prepublishPreviewButton.disabled = true;
+      setPublishState('busy', '正在发布并生成链接…');
+      setButtonBusy(
+        generateButton,
+        true,
+        '发布中…',
+        '<i class="fas fa-link mr-1" aria-hidden="true"></i>发布并生成链接'
+      );
+
+      const headers = jsonHeaders();
+      if (requestId) headers['Idempotency-Key'] = requestId;
+
+      const response = await fetch('/api/pages/create', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody)
+      });
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok || !data?.success) {
+        if (data?.code === 'idempotency_conflict') {
+          // The identifier met different input on the server: it can
+          // never succeed as-is. Retire it (the next click mints a fresh
+          // intent) and say so plainly.
+          clearPendingPublish();
+          throw userFacingError('这次发布与先前未确认的请求内容不同，已作为新发布处理；请再次点击发布');
+        }
+        // Any other failure leaves the outcome unconfirmed from the
+        // client's side, so the pending intent stays: the next click
+        // retries with the same identifier and the server replays the
+        // committed result if the create actually landed.
+        throw userFacingError(data?.error || '发布失败，请稍后重试');
+      }
+
+      clearPendingPublish();
+      showPublishedResult(data);
+      if (submittedDraftVersion === draftVersion) {
+        setPublishState('success', data.replayed ? '已确认先前的发布结果，分享链接如下' : '发布成功，分享链接已生成');
+      } else {
+        if (resultEyebrow) resultEyebrow.textContent = '上次发布结果';
+        if (resultSection) resultSection.dataset.status = 'previous';
+        setPublishState('idle', '发布已完成，但当前草稿随后有修改；下方链接对应提交时的内容');
+      }
+      showSuccessToast('发布成功');
+    } catch (error) {
+      reportPublishError(
+        error.userFacing ? error.message : '发布失败，请稍后重试',
+        error.focusTarget
+      );
+    } finally {
+      isSubmitting = false;
+      setButtonBusy(
+        generateButton,
+        false,
+        '发布中…',
+        '<i class="fas fa-link mr-1" aria-hidden="true"></i>发布并生成链接'
+      );
+      if (prepublishPreviewButton) prepublishPreviewButton.disabled = false;
+    }
+  }
+
+  if (generateButton) {
+    generateButton.addEventListener('click', attemptPublish);
+  }
+
+  if (orphanAbandonButton) {
+    orphanAbandonButton.addEventListener('click', () => {
+      // The explicit new-intent choice: retire the foreign pending
+      // record, then publish the current draft under a fresh identifier.
+      clearPendingPublish();
+      hideOrphanChoice();
+      attemptPublish();
+    });
+  }
+
+  if (orphanCancelButton) {
+    orphanCancelButton.addEventListener('click', () => {
+      hideOrphanChoice();
+      setPublishState('idle', '已取消本次发布；那条未确认的记录仍保留，未做任何提交');
     });
   }
 

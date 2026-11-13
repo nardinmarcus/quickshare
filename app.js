@@ -45,6 +45,19 @@ const {
   toCredentialVersionString
 } = require('./utils/apiKeyIdentity');
 const {
+  browserOwnerNamespace,
+  computeRequestHmac,
+  dashboardNamespace,
+  isIdempotencyConflictError,
+  legacyKeyNamespace,
+  managedKeyNamespace,
+  namespaceKind,
+  namespaceTag,
+  parseIdempotencyKey,
+  publishSessionNamespace
+} = require('./utils/idempotency');
+const { normalizeTitle } = require('./utils/pageTitle');
+const {
   formatManagementDateTime,
   toManagementDateTimeLocal
 } = require('./utils/management-time');
@@ -358,6 +371,59 @@ function getDashboardAdminSession(req) {
     payload,
     token
   };
+}
+
+// --- Anonymous publish sessions (T08, issue #32) --------------------------
+//
+// The homepage's unsigned publishing flow still needs a stable identity
+// scope for idempotent creates, so the server mints a signed publish
+// session (scoped token, 24h) and hands the browser a short fingerprint
+// tag of the resulting namespace rather than the session value itself.
+// The session grants nothing but a dedup scope: it cannot read a Share
+// password, manage Shares, or call any Key-only endpoint — a request
+// identifier alone never becomes an access credential.
+const PUBLISH_SESSION_COOKIE = 'publish_session';
+const PUBLISH_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
+function getPublishSession(req) {
+  const token = req.cookies?.[PUBLISH_SESSION_COOKIE];
+  const payload = verifyScopedToken(token, 'publish-session');
+
+  if (!payload || typeof payload.sid !== 'string' || !payload.sid) {
+    return null;
+  }
+
+  return { sid: payload.sid };
+}
+
+function mintPublishSessionCookie(res) {
+  const sid = generateId(18);
+  const token = createScopedToken('publish-session', { sid }, PUBLISH_SESSION_TTL_MS);
+  res.cookie(PUBLISH_SESSION_COOKIE, token, {
+    maxAge: PUBLISH_SESSION_TTL_MS,
+    httpOnly: true,
+    secure: config.secureCookies,
+    sameSite: 'lax'
+  });
+  return { sid };
+}
+
+// The idempotency namespace + browser-visible tag for a homepage create:
+// the signed-in owner's scope when a homepage admin session is present,
+// else the anonymous publish session (minted on demand so even the very
+// first submission is already namespaced). Anonymous sessions rotate
+// when the cookie expires; a pending operation from an older session
+// rebinds only through the explicit orphan choice on the page, never by
+// silently claiming the old request identifier under a new namespace.
+function browserCreateContext(req, res) {
+  if (getAdminSession(req)) {
+    const namespace = browserOwnerNamespace();
+    return { namespace, sessionTag: namespaceTag(namespace) };
+  }
+
+  const session = getPublishSession(req) || mintPublishSessionCookie(res);
+  const namespace = publishSessionNamespace(session.sid);
+  return { namespace, sessionTag: namespaceTag(namespace) };
 }
 
 async function getHomepageAccessMode() {
@@ -827,7 +893,39 @@ function parseFutureExpiry(expiresAt, now) {
   return { value, error: null };
 }
 
-async function createPageFromInput(input, { apiCredential } = {}) {
+// --- Idempotent create pipeline (T08, issue #32) --------------------------
+//
+// A create is split into three deterministic stages:
+//   1. prepareCreateInput — format validation and the normalized request
+//      view (field presence + the exact values the create will store).
+//      Nothing derived exists yet: no Share ID, no generated password,
+//      no creation time. The request digest (parent spec §8) is computed
+//      over exactly this view, so a retry produces the same digest.
+//   2. deriveCreateValues — the only place derived values come into
+//      existence (creation time, expiry validation against that time,
+//      auto title, generated password + hashes). For an idempotent
+//      create it runs inside the repository transaction, after the
+//      operation lookup missed, so a replay never derives anything.
+//   3. The repository commits Share + Revision 1 + create audit +
+//      operation record atomically (or replays the committed record).
+//
+// The expiry FUTURE check deliberately lives in stage 2, not stage 1:
+// the spec's fixed order is format → permission → lookup → timeliness,
+// so an operation that committed while its expiry was still in the
+// future stays confirmable after the expiry passes.
+
+class CreateValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'CreateValidationError';
+  }
+}
+
+function isCreateValidationError(error) {
+  return Boolean(error) && error.name === 'CreateValidationError';
+}
+
+function prepareCreateInput(input) {
   const {
     htmlContent,
     codeType,
@@ -849,61 +947,274 @@ async function createPageFromInput(input, { apiCredential } = {}) {
     return { error: customPassword.error };
   }
 
-  const createdAt = Date.now();
-  const expiry = parseFutureExpiry(expiresAt, createdAt);
+  // Expiry FORMAT only at this stage (a present value must be an
+  // epoch-ms integer); whether it is still in the future is a stage-2
+  // timeliness check.
+  const expiryPresent = expiresAt !== undefined && expiresAt !== null && expiresAt !== '';
+  let expiryValue = null;
 
-  if (expiry.error) {
-    return { error: expiry.error };
+  if (expiryPresent) {
+    const parsed = Number(expiresAt);
+
+    if (!Number.isSafeInteger(parsed)) {
+      return { error: '到期时间必须晚于当前时间' };
+    }
+
+    expiryValue = parsed;
   }
 
+  const present = (value) => value !== undefined && value !== null;
   const normalizedCodeType = normalizeCodeType(htmlContent, codeType);
-  const pageTitle = derivePageTitle(htmlContent, normalizedCodeType, title, createdAt);
-  const pageDescription = description === undefined || description === null
-    ? null
-    : String(description).trim() || null;
-  const password = Boolean(isProtected)
-    ? (customPassword.provided ? customPassword.value : generateNumericPassword(DEFAULT_PASSWORD_LENGTH))
+  // The digest view mirrors exactly what the create stores: title in its
+  // normalized form, description trimmed, code type and markdown theme
+  // resolved. Presence is tracked separately from values so "field
+  // absent" and "field present with an empty/neutral value" do not fold
+  // into the same digest. A JSON null counts as absent for the optional
+  // fields (create treats null and absent identically today).
+  const presence = {
+    codeType: present(codeType) ? 1 : 0,
+    title: present(title) ? 1 : 0,
+    description: present(description) ? 1 : 0,
+    expiresAt: expiryPresent ? 1 : 0,
+    isProtected: present(isProtected) ? 1 : 0,
+    password: customPassword.provided ? 1 : 0,
+    markdownTheme: present(markdownTheme) ? 1 : 0
+  };
+  const values = {
+    htmlContent,
+    codeType: normalizedCodeType,
+    title: present(title) ? normalizeTitle(title) : null,
+    description: present(description) ? String(description).trim() || null : null,
+    expiresAt: expiryValue,
+    isProtected: Boolean(isProtected),
+    password: customPassword.provided ? customPassword.value : null,
+    markdownTheme: normalizedCodeType === 'markdown'
+      ? resolveMarkdownThemeId(markdownTheme)
+      : null
+  };
+
+  return { error: null, presence, values, customPassword };
+}
+
+async function deriveCreateValues(prepared) {
+  const { values } = prepared;
+  const createdAt = Date.now();
+  const expiry = parseFutureExpiry(values.expiresAt, createdAt);
+
+  if (expiry.error) {
+    throw new CreateValidationError(expiry.error);
+  }
+
+  const pageTitle = derivePageTitle(values.htmlContent, values.codeType, values.title, createdAt);
+  const password = values.isProtected
+    ? (prepared.customPassword.provided
+      ? prepared.customPassword.value
+      : generateNumericPassword(DEFAULT_PASSWORD_LENGTH))
     : null;
   const passwordHash = password ? await hashSecret(password) : null;
   const encryptedPassword = password ? encryptSecret(password) : null;
-  const resolvedTheme = normalizedCodeType === 'markdown'
-    ? resolveMarkdownThemeId(markdownTheme)
-    : null;
+
+  return {
+    pageData: {
+      htmlContent: values.htmlContent,
+      passwordHash,
+      encryptedPassword,
+      isProtected: Boolean(password),
+      codeType: values.codeType,
+      title: pageTitle,
+      description: values.description,
+      createdAt,
+      expiresAt: expiry.value,
+      markdownTheme: values.markdownTheme
+    },
+    password,
+    pageTitle
+  };
+}
+
+// The original-result receipt stored (encrypted) with the operation
+// record: exactly the fields the create response returns, never the
+// body. A replay serves these original values — not the Share's current
+// state — subject to the policy checks in replayedCreatePayload.
+function createResultReceipt(derived, id) {
+  return {
+    kind: 'share.create',
+    shareId: id,
+    password: derived.password,
+    isProtected: derived.pageData.isProtected,
+    codeType: derived.pageData.codeType,
+    title: derived.pageTitle,
+    description: derived.pageData.description,
+    expiresAt: derived.pageData.expiresAt,
+    markdownTheme: derived.pageData.markdownTheme,
+    contentRevision: '1',
+    contentEtag: formatContentEtag(id, '1')
+  };
+}
+
+function createRevisionMeta(apiCredential) {
   // Every creation entry writes the Revision 1 baseline with the new
   // Share (T06); the snapshot provenance records which entry and actor
   // produced it.
-  const revisionMeta = apiCredential
+  return apiCredential
     ? {
       source: 'api-create',
       actorType: 'api_key',
       actorId: apiCredential.keyId || null
     }
     : { source: 'web-create', actorType: 'owner', actorId: null };
-  const id = await createPageWithRetry({
-    htmlContent,
-    passwordHash,
-    encryptedPassword,
-    isProtected: Boolean(password),
-    codeType: normalizedCodeType,
-    title: pageTitle,
-    description: pageDescription,
-    createdAt,
-    expiresAt: expiry.value,
-    markdownTheme: resolvedTheme
-  }, { apiCredential, revisionMeta });
+}
+
+// Runs an idempotent create through the repository. Returns the
+// repository outcome: { outcome: 'created', result } for a first
+// execution, { outcome: 'replayed' | 'unavailable', operation,
+// shareState } for a repeat submission.
+async function executeIdempotentCreate(req, { namespace, requestId, source, apiCredential }) {
+  const prepared = prepareCreateInput(req.body);
+
+  if (prepared.error) {
+    throw new CreateValidationError(prepared.error);
+  }
+
+  const requestHmac = computeRequestHmac({
+    action: 'share.create',
+    targetId: null,
+    presence: prepared.presence,
+    values: prepared.values
+  });
+
+  return pageRepository.createIdempotent({
+    operation: {
+      actorNamespace: namespace,
+      requestId,
+      action: 'share.create',
+      targetId: null,
+      requestHmac
+    },
+    apiCredential,
+    revisionMeta: createRevisionMeta(apiCredential),
+    audit: {
+      action: 'page.create',
+      details: JSON.stringify({
+        codeType: prepared.values.codeType,
+        isProtected: prepared.values.isProtected,
+        source,
+        requestId
+      }),
+      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+    },
+    prepare: async () => {
+      const derived = await deriveCreateValues(prepared);
+      const id = generateId();
+      return {
+        page: { ...derived.pageData, id },
+        result: createResultReceipt(derived, id)
+      };
+    }
+  });
+}
+
+// Turns a repository outcome into the create response payload, or null
+// when the original result is no longer available (the caller answers
+// 410). Replay payloads come from the encrypted receipt — the ORIGINAL
+// result — re-checked against current state (parent spec §8):
+//   - result Share gone / record tombstoned → unavailable;
+//   - the result Revision's snapshot is gone (history storage cleared)
+//     → the version's title/description are withheld, and so is the
+//     password, which describes that protected version;
+//   - access policy changed since (unprotected now, or the access
+//     revision moved) → the generated password is NOT returned again;
+//     only an untouched policy gets it back, per "敏感字段先核对当前
+//     身份、目标和策略状态再决定是否重显".
+function createOutcomePayload(outcome) {
+  if (!outcome) {
+    return null;
+  }
+
+  if (outcome.outcome === 'created') {
+    return { ...outcome.result };
+  }
+
+  if (outcome.outcome !== 'replayed' || !outcome.shareState || !outcome.operation) {
+    return null;
+  }
+
+  let receipt = null;
+
+  try {
+    const decrypted = outcome.operation.receiptEncrypted
+      ? decryptSecret(outcome.operation.receiptEncrypted)
+      : null;
+    receipt = decrypted ? JSON.parse(decrypted) : null;
+  } catch {
+    receipt = null;
+  }
+
+  if (!receipt || receipt.kind !== 'share.create' || !receipt.shareId) {
+    return null;
+  }
+
+  const payload = { ...receipt };
+
+  if (!outcome.shareState.revisionExists) {
+    payload.title = null;
+    payload.description = null;
+    payload.password = null;
+    return payload;
+  }
+
+  if (payload.password) {
+    const policyIntact = outcome.shareState.isProtected
+      && accessRevisionMatches(
+        outcome.shareState.accessRevision,
+        outcome.operation.resultAccessRevision
+      );
+
+    if (!policyIntact) {
+      payload.password = null;
+    }
+  }
+
+  return payload;
+}
+
+async function createPageFromInput(input, { apiCredential } = {}) {
+  const prepared = prepareCreateInput(input);
+
+  if (prepared.error) {
+    return { error: prepared.error };
+  }
+
+  let derived;
+
+  try {
+    derived = await deriveCreateValues(prepared);
+  } catch (error) {
+    if (isCreateValidationError(error)) {
+      return { error: error.message };
+    }
+
+    throw error;
+  }
+
+  const id = await createPageWithRetry(derived.pageData, {
+    apiCredential,
+    revisionMeta: createRevisionMeta(apiCredential)
+  });
+  const receipt = createResultReceipt(derived, id);
 
   return {
     error: null,
     id,
-    password,
-    isProtected: Boolean(password),
-    codeType: normalizedCodeType,
-    title: pageTitle,
-    description: pageDescription,
-    expiresAt: expiry.value,
-    markdownTheme: resolvedTheme,
-    contentRevision: '1',
-    contentEtag: formatContentEtag(id, '1')
+    password: receipt.password,
+    isProtected: receipt.isProtected,
+    codeType: receipt.codeType,
+    title: receipt.title,
+    description: receipt.description,
+    expiresAt: receipt.expiresAt,
+    markdownTheme: receipt.markdownTheme,
+    contentRevision: receipt.contentRevision,
+    contentEtag: receipt.contentEtag
   };
 }
 
@@ -1174,13 +1485,17 @@ app.get('/admin/logout', (req, res) => {
 
 app.get('/', privateNoStore, requireHomepageAccess, (req, res) => {
   const sessionToken = req.adminSession?.token || req.cookies?.[ADMIN_COOKIE] || '';
+  // The publish-session tag lets the homepage client bind a pending
+  // create to this namespace and detect when the session rotated (T08).
+  const publishContext = browserCreateContext(req, res);
 
   return res.render('index', {
     title: 'QuickShare | 粘贴代码，一键分享',
     page: 'home-page',
     csrfToken: req.homepageAccessMode === 'locked' ? createCsrfToken(sessionToken) : '',
     markdownThemeOptions: getMarkdownThemeOptions(),
-    socialImageUrl: socialImageUrl(req)
+    socialImageUrl: socialImageUrl(req),
+    publishSessionTag: publishContext.sessionTag
   });
 });
 
@@ -2160,7 +2475,47 @@ app.delete('/admin/pages/:id', requireDashboardAdmin, requireDashboardCsrf, asyn
   }
 });
 
+// Clone completion marker (T08): after any successful clone — first
+// execution or replay — the server sets this readable cookie so the
+// admin client can retire the persisted clone intent for that request
+// identifier even when the response was a redirect it never inspected.
+const CLONE_INTENT_DONE_COOKIE = 'clone_intent_done';
+
+function setCloneIntentDoneCookie(res, requestId) {
+  res.cookie(CLONE_INTENT_DONE_COOKIE, requestId, {
+    maxAge: PUBLISH_SESSION_TTL_MS,
+    httpOnly: false,
+    secure: config.secureCookies,
+    sameSite: 'lax'
+  });
+}
+
+function respondOperationUnavailable(res, requestId) {
+  return res.status(410).json({
+    success: false,
+    error: '该请求已提交，但其结果已不可用',
+    code: 'operation_result_unavailable',
+    requestId,
+    retryable: false
+  });
+}
+
 app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requireDashboardCsrf, async (req, res) => {
+  // A clone retry carries its request identifier either as the
+  // Idempotency-Key header or as the form's requestId field (T08); the
+  // dashboard client persists one intent per clone target so a lost or
+  // unknown-outcome submission can be safely repeated.
+  const idem = parseIdempotencyKey(req.get('idempotency-key') || req.body?.requestId);
+
+  if (idem.provided && !idem.valid) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid Idempotency-Key',
+      code: 'invalid_idempotency_key',
+      retryable: false
+    });
+  }
+
   try {
     const page = await pageRepository.getById(req.params.id);
 
@@ -2168,26 +2523,76 @@ app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requir
       return res.status(404).json({ success: false, error: 'Page not found' });
     }
 
-    const newId = await createPageWithRetry({
-      htmlContent: page.html_content,
-      passwordHash: null,
-      encryptedPassword: null,
-      isProtected: false,
-      codeType: page.code_type,
-      title: (page.title || page.id) + ' (Copy)',
-      description: page.description,
-      createdAt: Date.now(),
-      expiresAt: null,
-      markdownTheme: page.code_type === 'markdown'
-        ? resolveMarkdownThemeId(page.markdown_theme)
+    const buildClone = (row) => ({
+      htmlContent: row.html_content,
+      codeType: row.code_type,
+      title: (row.title || row.id) + ' (Copy)',
+      description: row.description,
+      markdownTheme: row.code_type === 'markdown'
+        ? resolveMarkdownThemeId(row.markdown_theme)
         : null
-    }, {
-      revisionMeta: { source: 'admin-clone', actorType: 'owner', actorId: null }
+    });
+    const audit = {
+      action: 'page.clone',
+      details: JSON.stringify({
+        sourceId: req.params.id,
+        ...(idem.provided ? { requestId: idem.value } : {})
+      }),
+      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+    };
+
+    if (idem.provided) {
+      const outcome = await pageRepository.clonePage({
+        sourceId: req.params.id,
+        operation: {
+          actorNamespace: dashboardNamespace(),
+          requestId: idem.value,
+          action: 'share.clone',
+          targetId: req.params.id,
+          requestHmac: computeRequestHmac({
+            action: 'share.clone',
+            targetId: req.params.id,
+            presence: {},
+            values: {}
+          })
+        },
+        buildClone,
+        audit
+      });
+
+      if (outcome.outcome === 'unavailable'
+        || (outcome.outcome === 'replayed' && !outcome.shareState)) {
+        return respondOperationUnavailable(res, idem.value);
+      }
+
+      const targetId = outcome.outcome === 'created'
+        ? outcome.id
+        : outcome.operation.resultShareId;
+      setCloneIntentDoneCookie(res, idem.value);
+      return res.redirect('/admin/pages/' + encodeURIComponent(targetId));
+    }
+
+    const outcome = await pageRepository.clonePage({
+      sourceId: req.params.id,
+      buildClone,
+      audit
     });
 
-    return res.redirect('/admin/pages/' + encodeURIComponent(newId));
+    return res.redirect('/admin/pages/' + encodeURIComponent(outcome.id));
   } catch (error) {
     console.error('Clone page failed:', error);
+    if (error && error.code === 'share_not_found') {
+      return res.status(404).json({ success: false, error: 'Page not found' });
+    }
+    if (isIdempotencyConflictError(error)) {
+      return res.status(409).json({
+        success: false,
+        error: '该请求标识已用于另一个克隆目标',
+        code: 'idempotency_conflict',
+        requestId: idem.provided ? idem.value : null,
+        retryable: false
+      });
+    }
     if (respondIfPublishingGate(res, error)) {
       return;
     }
@@ -2196,7 +2601,53 @@ app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requir
 });
 
 app.post('/api/pages/create', privateNoStore, requireBrowserPublishAccess, parseShareJson, requireBrowserPublishCsrf, async (req, res) => {
+  // Idempotency-Key (T08): the homepage client sends a per-publish-intent
+  // request identifier; retries of the same intent replay the original
+  // result instead of minting a second Share. Requests without the
+  // header keep the historical behavior exactly.
+  const idem = parseIdempotencyKey(req.get('idempotency-key'));
+
+  if (idem.provided && !idem.valid) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid Idempotency-Key',
+      code: 'invalid_idempotency_key',
+      retryable: false
+    });
+  }
+
   try {
+    if (idem.provided) {
+      const context = browserCreateContext(req, res);
+      const outcome = await executeIdempotentCreate(req, {
+        namespace: context.namespace,
+        requestId: idem.value,
+        source: 'web',
+        apiCredential: undefined
+      });
+      const payload = createOutcomePayload(outcome);
+
+      if (!payload) {
+        return respondOperationUnavailable(res, idem.value);
+      }
+
+      return res.json({
+        success: true,
+        urlId: payload.shareId,
+        password: payload.password,
+        isProtected: payload.isProtected,
+        codeType: payload.codeType,
+        title: payload.title,
+        description: payload.description,
+        expiresAt: payload.expiresAt,
+        markdownTheme: payload.markdownTheme,
+        contentRevision: payload.contentRevision,
+        contentEtag: payload.contentEtag,
+        requestId: idem.value,
+        ...(outcome.outcome === 'replayed' ? { replayed: true } : {})
+      });
+    }
+
     const result = await createPageFromInput(req.body);
 
     if (result.error) {
@@ -2228,6 +2679,18 @@ app.post('/api/pages/create', privateNoStore, requireBrowserPublishAccess, parse
     });
   } catch (error) {
     console.error('Create page failed:', error);
+    if (isCreateValidationError(error)) {
+      return res.status(400).json({ success: false, error: error.message });
+    }
+    if (isIdempotencyConflictError(error)) {
+      return res.status(409).json({
+        success: false,
+        error: '该请求标识已用于不同的创建内容，请作为新的发布重新提交',
+        code: 'idempotency_conflict',
+        requestId: idem.provided ? idem.value : null,
+        retryable: false
+      });
+    }
     if (respondIfPublishingGate(res, error)) {
       return;
     }
@@ -2305,8 +2768,162 @@ app.get('/api/v1/capabilities', privateNoStore, requireApiKey, (req, res) => {
   });
 });
 
-app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (req, res) => {
+// Operation confirmation (T08): after a create response is lost, the
+// caller confirms the outcome by its request identifier. The lookup is
+// scoped to the caller's own credential namespace — a legacy Key can
+// confirm its own creates, and this confirmation belongs to the create
+// capability rather than granting any Share management. Only status and
+// resource/version identifiers are returned: never a password, title,
+// description or body, and never under a share-access authorization.
+// This is a read: it stays available while writes are paused.
+app.get('/api/v1/operations/:requestId', privateNoStore, requireApiKey, async (req, res) => {
+  const parsed = parseIdempotencyKey(req.params.requestId);
+
+  if (!parsed.provided || !parsed.valid) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid request id',
+      code: 'invalid_request_id',
+      retryable: false
+    });
+  }
+
   try {
+    const credential = req.apiCredential || legacyCredentialIdentity();
+    const namespace = credential.type === 'managed'
+      ? managedKeyNamespace(credential.keyId)
+      : legacyKeyNamespace(config.shareApiKey);
+    const record = await pageRepository.getOperation(namespace, parsed.value);
+
+    if (!record) {
+      return res.status(404).json({
+        success: false,
+        error: 'Operation not found',
+        code: 'operation_not_found',
+        requestId: parsed.value,
+        retryable: false
+      });
+    }
+
+    return res.json({
+      success: true,
+      requestId: record.requestId,
+      action: record.action,
+      status: record.resultState,
+      shareId: record.resultShareId,
+      contentRevision: record.resultRevision,
+      accessRevision: record.resultAccessRevision,
+      createdAt: record.createdAt
+    });
+  } catch (error) {
+    console.error('Operation lookup failed:', error);
+    return res.status(500).json({ success: false, error: '服务器错误' });
+  }
+});
+
+// Owner operation lookup (T08): the signed-in owner confirms an
+// operation by request identifier across namespaces from the dashboard
+// API. Reports only the actor KIND (never a credential identity beyond
+// its kind) plus the same restricted identifiers as the Key endpoint.
+app.get('/admin/operations/:requestId', requireDashboardApiAdmin, async (req, res) => {
+  const parsed = parseIdempotencyKey(req.params.requestId);
+
+  if (!parsed.provided || !parsed.valid) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid request id',
+      code: 'invalid_request_id',
+      retryable: false
+    });
+  }
+
+  try {
+    const record = await pageRepository.getOperationByRequestId(parsed.value);
+
+    if (!record) {
+      return res.status(404).json({
+        success: false,
+        error: 'Operation not found',
+        code: 'operation_not_found',
+        requestId: parsed.value,
+        retryable: false
+      });
+    }
+
+    return res.json({
+      success: true,
+      requestId: record.requestId,
+      action: record.action,
+      actorKind: namespaceKind(record.actorNamespace),
+      status: record.resultState,
+      shareId: record.resultShareId,
+      targetId: record.targetId,
+      contentRevision: record.resultRevision,
+      accessRevision: record.resultAccessRevision,
+      createdAt: record.createdAt
+    });
+  } catch (error) {
+    console.error('Admin operation lookup failed:', error);
+    return res.status(500).json({ success: false, error: '服务器错误' });
+  }
+});
+
+app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (req, res) => {
+  // Idempotency-Key (T08): with the header, the create runs in the
+  // caller's credential namespace — same key + same input replays the
+  // original result, same key + different input is a 409. Without the
+  // header the historical create runs unchanged (HTTP 200, same fields)
+  // and is NOT idempotent.
+  const idem = parseIdempotencyKey(req.get('idempotency-key'));
+
+  if (idem.provided && !idem.valid) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid Idempotency-Key',
+      code: 'invalid_idempotency_key',
+      retryable: false
+    });
+  }
+
+  try {
+    if (idem.provided) {
+      const credential = req.apiCredential || legacyCredentialIdentity();
+      const namespace = credential.type === 'managed'
+        ? managedKeyNamespace(credential.keyId)
+        : legacyKeyNamespace(config.shareApiKey);
+      const outcome = await executeIdempotentCreate(req, {
+        namespace,
+        requestId: idem.value,
+        source: 'api',
+        apiCredential: credential
+      });
+      const payload = createOutcomePayload(outcome);
+
+      if (!payload) {
+        return respondOperationUnavailable(res, idem.value);
+      }
+
+      const base = config.shareBaseUrl || `${req.protocol}://${req.get('host')}`;
+      const url = `${base.replace(/\/+$/, '')}/view/${payload.shareId}`;
+
+      return res.json({
+        success: true,
+        url,
+        urlId: payload.shareId,
+        password: payload.password,
+        isProtected: payload.isProtected,
+        codeType: payload.codeType,
+        title: payload.title,
+        description: payload.description,
+        expiresAt: payload.expiresAt,
+        markdownTheme: payload.markdownTheme,
+        contentRevision: payload.contentRevision,
+        contentEtag: payload.contentEtag,
+        requestId: idem.value,
+        ...(outcome.outcome === 'replayed' ? { replayed: true } : {})
+      });
+    }
+
     const result = await createPageFromInput(req.body, { apiCredential: req.apiCredential });
 
     if (result.error) {
@@ -2347,6 +2964,18 @@ app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (
         success: false,
         error: 'Invalid API key',
         code: 'api_key_credential_changed',
+        retryable: false
+      });
+    }
+    if (isCreateValidationError(error)) {
+      return res.status(400).json({ success: false, error: error.message });
+    }
+    if (isIdempotencyConflictError(error)) {
+      return res.status(409).json({
+        success: false,
+        error: 'Idempotency-Key was already used with a different request',
+        code: 'idempotency_conflict',
+        requestId: idem.provided ? idem.value : null,
         retryable: false
       });
     }

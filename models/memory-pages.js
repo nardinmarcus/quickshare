@@ -26,6 +26,11 @@ const {
   nextCredentialVersion,
   toCredentialVersionString
 } = require('../utils/apiKeyIdentity');
+const {
+  IdempotencyConflictError,
+  requestHmacMatches
+} = require('../utils/idempotency');
+const { encryptSecret, generateId } = require('../utils/security');
 
 function filterAdminPages(pages, options = {}) {
   const search = options.search || '';
@@ -84,6 +89,14 @@ function currentContentFields(page) {
 class MemoryPageRepository {
   constructor() {
     this.pages = new Map();
+    // Publish operation records (T08): `${actorNamespace}\n${requestId}`
+    // -> committed operation record. Mirrors public.publish_operations.
+    this.operations = new Map();
+    // Per-operation promise chains serializing idempotent writes for one
+    // identifier, mirroring the Postgres advisory transaction lock. The
+    // chains are runtime coordination only — nothing about an in-flight
+    // operation is persisted, so a crash leaves no "running" record.
+    this.operationChains = new Map();
     // Immutable content snapshots (T06): share id -> Map of revision
     // decimal string -> snapshot record. Mirrors public.share_revisions.
     this.revisions = new Map();
@@ -270,26 +283,295 @@ class MemoryPageRepository {
     });
   }
 
+  // A managed-Key API write re-verifies, inside the gate (the memory
+  // Adapter's write transaction), the credential version the request
+  // first authenticated with (T05). The gate serializes this check
+  // against rotation/delete, mirroring the Postgres row lock: if either
+  // committed first, the recorded version no longer matches and the
+  // write is refused instead of publishing under a revoked credential.
+  recheckManagedCredential(credential) {
+    if (!credential || credential.type !== 'managed') {
+      return;
+    }
+
+    const apiKey = this.apiKeys.get(credential.keyId);
+
+    if (!apiKey || !credentialVersionMatches(apiKey.credential_version, credential.credentialVersion)) {
+      throw new ApiKeyCredentialChangedError();
+    }
+  }
+
   async create(page, options = {}) {
     return this.publishingGate.runWrite(async () => {
-      // A managed-Key API write re-verifies, inside the gate (the memory
-      // Adapter's write transaction), the credential version the request
-      // first authenticated with (T05). The gate serializes this check
-      // against rotation/delete, mirroring the Postgres row lock: if either
-      // committed first, the recorded version no longer matches and the
-      // write is refused instead of publishing under a revoked credential.
-      const credential = options.apiCredential;
+      this.recheckManagedCredential(options.apiCredential);
+      return this.createUnlocked(page, options.revisionMeta);
+    });
+  }
 
-      if (credential && credential.type === 'managed') {
-        const apiKey = this.apiKeys.get(credential.keyId);
+  // --- Publish operation records (T08, issue #32) -------------------------
+  //
+  // Mirrors the Postgres implementation: one committed record per
+  // (namespace, requestId), written in the same gated step as the Share,
+  // its Revision 1 snapshot and the create audit. Concurrent submissions
+  // of one identifier are serialized on a per-identifier promise chain
+  // (the advisory-lock analogue); the Map key is the final dedup guard.
 
-        if (!apiKey || !credentialVersionMatches(apiKey.credential_version, credential.credentialVersion)) {
-          throw new ApiKeyCredentialChangedError();
+  operationKey(operation) {
+    return `${operation.actorNamespace}\n${operation.requestId}`;
+  }
+
+  runOperationExclusive(operation, fn) {
+    const key = this.operationKey(operation);
+    const previous = this.operationChains.get(key) || Promise.resolve();
+    const task = previous.then(() => fn(), () => fn());
+    this.operationChains.set(key, task.catch(() => {}));
+
+    return task;
+  }
+
+  findOperationRecord(actorNamespace, requestId) {
+    return this.operations.get(`${actorNamespace}\n${requestId}`) || null;
+  }
+
+  // Replay-time availability/policy view of a committed record's result:
+  // whether the Share still exists, its CURRENT access revision and
+  // protection flag, and whether the result Revision snapshot survives.
+  resultShareState(record) {
+    const page = this.pages.get(record.resultShareId);
+
+    if (!page) {
+      return null;
+    }
+
+    return {
+      exists: true,
+      accessRevision: toAccessRevisionString(page.access_revision),
+      isProtected: page.is_protected === 1,
+      revisionExists: Boolean(
+        this.revisions.get(record.resultShareId)?.has(record.resultRevision)
+      )
+    };
+  }
+
+  // Returns null when the caller should proceed as a first execution;
+  // throws IdempotencyConflictError for same identifier / different
+  // input; otherwise returns the replay outcome for an existing record.
+  resolveExistingOperation(operation) {
+    const existing = this.findOperationRecord(operation.actorNamespace, operation.requestId);
+
+    if (!existing) {
+      return null;
+    }
+
+    if (!requestHmacMatches(existing.requestHmac, operation.requestHmac)) {
+      throw new IdempotencyConflictError();
+    }
+
+    if (existing.resultState !== 'committed') {
+      return { outcome: 'unavailable', operation: { ...existing }, shareState: null };
+    }
+
+    return {
+      outcome: 'replayed',
+      operation: { ...existing },
+      shareState: this.resultShareState(existing)
+    };
+  }
+
+  storeOperationRecord(operation, { resultShareId, receipt }) {
+    const record = {
+      actorNamespace: operation.actorNamespace,
+      requestId: operation.requestId,
+      action: operation.action,
+      targetId: operation.targetId ?? null,
+      requestHmac: operation.requestHmac,
+      resultShareId,
+      resultRevision: '1',
+      resultAccessRevision: '1',
+      receiptEncrypted: receipt ? encryptSecret(JSON.stringify(receipt)) : null,
+      resultState: 'committed',
+      createdAt: Date.now()
+    };
+    this.operations.set(this.operationKey(operation), record);
+    return { ...record };
+  }
+
+  // Idempotent create (T08): same contract as the Postgres Adapter.
+  // `prepare()` runs only on a first execution and returns
+  // { page, result }; Share, Revision 1 snapshot, create audit and the
+  // operation record land together inside the gate, and same-identifier
+  // submissions are serialized on the operation chain, so check and
+  // insert can never interleave for one identifier.
+  async createIdempotent({ operation = null, apiCredential, revisionMeta, audit, prepare }) {
+    const execute = () => this.publishingGate.runWrite(async () => {
+      this.recheckManagedCredential(apiCredential);
+
+      if (operation) {
+        const resolved = this.resolveExistingOperation(operation);
+
+        if (resolved) {
+          return resolved;
         }
       }
 
-      return this.createUnlocked(page, options.revisionMeta);
+      let lastError = null;
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        const prepared = await prepare();
+
+        try {
+          this.createUnlocked(prepared.page, revisionMeta);
+        } catch (error) {
+          lastError = error;
+
+          if (!String(error.message || '').includes('UNIQUE')) {
+            throw error;
+          }
+
+          continue;
+        }
+
+        if (audit) {
+          await this.createAuditLog({
+            action: audit.action,
+            pageId: prepared.page.id,
+            details: audit.details,
+            ip: audit.ip
+          });
+        }
+
+        const record = operation
+          ? this.storeOperationRecord(operation, {
+            resultShareId: prepared.page.id,
+            receipt: prepared.result
+          })
+          : null;
+
+        return {
+          outcome: 'created',
+          page: prepared.page,
+          result: prepared.result,
+          operation: record
+        };
+      }
+
+      throw lastError || new Error('Failed to create a unique page id');
     });
+
+    return operation ? this.runOperationExclusive(operation, execute) : execute();
+  }
+
+  // Clone with optional idempotency (T08). The source is read and the
+  // copy written inside one gated step; `buildClone(sourceRow)` returns
+  // the copy's content fields from the stored row.
+  async clonePage({ sourceId, operation = null, buildClone, audit }) {
+    const execute = () => this.publishingGate.runWrite(async () => {
+      if (operation) {
+        const resolved = this.resolveExistingOperation(operation);
+
+        if (resolved) {
+          return resolved;
+        }
+      }
+
+      const source = this.pages.get(sourceId);
+
+      if (!source) {
+        const error = new Error('Clone source not found');
+        error.code = 'share_not_found';
+        throw error;
+      }
+
+      const fields = buildClone(source);
+      let lastError = null;
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const newId = generateId();
+
+        try {
+          this.createUnlocked({
+            id: newId,
+            htmlContent: fields.htmlContent,
+            passwordHash: null,
+            encryptedPassword: null,
+            isProtected: false,
+            codeType: fields.codeType || 'html',
+            title: fields.title || null,
+            description: fields.description ?? null,
+            createdAt: Date.now(),
+            expiresAt: null,
+            markdownTheme: fields.markdownTheme ?? null
+          }, { source: 'admin-clone', actorType: 'owner' });
+        } catch (error) {
+          lastError = error;
+
+          if (!String(error.message || '').includes('UNIQUE')) {
+            throw error;
+          }
+
+          continue;
+        }
+
+        if (audit) {
+          await this.createAuditLog({
+            action: audit.action,
+            pageId: newId,
+            details: audit.details,
+            ip: audit.ip
+          });
+        }
+
+        const record = operation
+          ? this.storeOperationRecord(operation, {
+            resultShareId: newId,
+            receipt: { kind: 'share.clone', shareId: newId }
+          })
+          : null;
+
+        return { outcome: 'created', id: newId, operation: record };
+      }
+
+      throw lastError || new Error('Failed to create a unique page id');
+    });
+
+    return operation ? this.runOperationExclusive(operation, execute) : execute();
+  }
+
+  // Operation status lookup within one credential namespace (T08). A
+  // read: never gated, so operations stay confirmable during write
+  // maintenance.
+  async getOperation(actorNamespace, requestId) {
+    const record = this.findOperationRecord(actorNamespace, requestId);
+    return record ? { ...record } : null;
+  }
+
+  // Owner confirmation by request identifier across namespaces (T08).
+  async getOperationByRequestId(requestId) {
+    let latest = null;
+
+    for (const record of this.operations.values()) {
+      if (record.requestId === requestId
+        && (!latest || record.createdAt > latest.createdAt)) {
+        latest = record;
+      }
+    }
+
+    return latest ? { ...latest } : null;
+  }
+
+  // Full deletion retires operation results pointing at the Share: the
+  // record stays as a content-free dedup tombstone (receipt cleared,
+  // result unavailable), mirroring the Postgres delete path.
+  tombstoneOperationsForShares(ids) {
+    const targets = new Set(ids);
+
+    for (const record of this.operations.values()) {
+      if (targets.has(record.resultShareId) && record.resultState === 'committed') {
+        record.receiptEncrypted = null;
+        record.resultState = 'result_unavailable';
+      }
+    }
   }
 
   async createUnlocked(page, revisionMeta = {}) {
@@ -769,6 +1051,7 @@ class MemoryPageRepository {
       const deleted = this.pages.delete(id);
       if (deleted) {
         this.revisions.delete(id);
+        this.tombstoneOperationsForShares([id]);
       }
       return deleted;
     });
@@ -777,12 +1060,15 @@ class MemoryPageRepository {
   async deletePages(ids) {
     return this.publishingGate.runWrite(async () => {
       let count = 0;
+      const deletedIds = [];
       ids.forEach((id) => {
         if (this.pages.delete(id)) {
           this.revisions.delete(id);
+          deletedIds.push(id);
           count += 1;
         }
       });
+      this.tombstoneOperationsForShares(deletedIds);
       return count;
     });
   }

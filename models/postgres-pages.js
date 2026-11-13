@@ -22,6 +22,11 @@ const {
 } = require('../utils/apiKeyIdentity');
 const { isPublishingPausedError } = require('../utils/publishing');
 const {
+  IdempotencyConflictError,
+  requestHmacMatches
+} = require('../utils/idempotency');
+const { encryptSecret, generateId } = require('../utils/security');
+const {
   acquirePublishingWriteGate,
   getPublishingWritesPaused,
   mapPublishingError,
@@ -143,6 +148,215 @@ async function ensureContentBaseline(client, pageRow, capturedAt = Date.now()) {
   );
   pageRow.current_revision = '1';
   return true;
+}
+
+// Re-verifies, inside a publishing write transaction, the managed-Key
+// credential version the request first authenticated with (T05). The
+// spec's lock order is fixed: maintenance gate first (held by
+// withPublishingWrite before this runs), then the managed Key row.
+// Locking the Key row FOR UPDATE and comparing the stored
+// credential_version means a rotation or delete that committed first
+// refuses this write, and a rotation that arrives later waits for this
+// transaction instead of slipping in underneath it. Legacy credentials
+// have no row and nothing to re-verify.
+async function recheckManagedCredential(client, credential) {
+  if (!credential || credential.type !== 'managed') {
+    return;
+  }
+
+  const keyResult = await client.query(
+    `
+      SELECT credential_version::text AS credential_version
+      FROM api_keys
+      WHERE id = $1
+      FOR UPDATE
+    `,
+    [credential.keyId]
+  );
+  const currentVersion = keyResult.rows[0]?.credential_version;
+
+  if (currentVersion === undefined
+    || !credentialVersionMatches(currentVersion, credential.credentialVersion)) {
+    throw new ApiKeyCredentialChangedError();
+  }
+}
+
+// Inserts the Share row itself (no snapshot). The caller owns the
+// transaction and writes the Revision baseline right after, so a Share
+// never exists without its baseline once this code writes it.
+async function insertPageRow(client, page) {
+  await client.query(
+    `
+      INSERT INTO pages (
+        id, html_content, created_at, password_hash, encrypted_password, is_protected,
+        code_type, title, description, expires_at, markdown_theme, access_revision,
+        current_revision, published
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, 1, TRUE)
+    `,
+    [
+      page.id,
+      page.htmlContent,
+      page.createdAt,
+      page.passwordHash || null,
+      page.encryptedPassword || null,
+      page.isProtected ? 1 : 0,
+      page.codeType || 'html',
+      page.title || null,
+      page.description || null,
+      page.expiresAt || null,
+      page.markdownTheme || null
+    ]
+  );
+}
+
+// --- Publish operation records (T08, issue #32) ---------------------------
+//
+// One row per committed create/clone, keyed by (actor_namespace,
+// request_id). The row is written in the same transaction as the Share,
+// its Revision 1 snapshot and the create audit. A per-request advisory
+// transaction lock — taken after the maintenance gate and the managed
+// Key lock, per the parent spec's fixed lock order — serializes
+// concurrent submissions of the same identifier, so the second one
+// observes the committed record and replays it; the PRIMARY KEY remains
+// the final dedup guard underneath.
+
+function operationLockKey(operation) {
+  return `quickshare:publish-operation:${operation.actorNamespace}:${operation.requestId}`;
+}
+
+async function acquireOperationLock(client, operation) {
+  await client.query(
+    'SELECT pg_advisory_xact_lock(hashtext($1))',
+    [operationLockKey(operation)]
+  );
+}
+
+function normalizeOperationRow(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    actorNamespace: row.actor_namespace,
+    requestId: row.request_id,
+    action: row.action,
+    targetId: row.target_id ?? null,
+    requestHmac: row.request_hmac,
+    resultShareId: row.result_share_id ?? null,
+    resultRevision: row.result_revision == null ? null : String(row.result_revision),
+    resultAccessRevision: row.result_access_revision == null
+      ? null
+      : String(row.result_access_revision),
+    receiptEncrypted: row.receipt_encrypted ?? null,
+    resultState: row.result_state,
+    createdAt: Number(row.created_at)
+  };
+}
+
+async function findOperationRow(client, actorNamespace, requestId) {
+  const result = await client.query(
+    `
+      SELECT actor_namespace, request_id, action, target_id, request_hmac,
+        result_share_id, result_revision::text AS result_revision,
+        result_access_revision::text AS result_access_revision,
+        receipt_encrypted, result_state, created_at
+      FROM public.publish_operations
+      WHERE actor_namespace = $1 AND request_id = $2
+      LIMIT 1
+    `,
+    [actorNamespace, requestId]
+  );
+
+  return normalizeOperationRow(result.rows[0]);
+}
+
+async function insertOperationRow(client, operation) {
+  await client.query(
+    `
+      INSERT INTO public.publish_operations (
+        actor_namespace, request_id, action, target_id, request_hmac,
+        result_share_id, result_revision, result_access_revision,
+        receipt_encrypted, result_state, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7::bigint, $8::bigint, $9, $10, $11)
+    `,
+    [
+      operation.actorNamespace,
+      operation.requestId,
+      operation.action,
+      operation.targetId ?? null,
+      operation.requestHmac,
+      operation.resultShareId ?? null,
+      operation.resultRevision ?? null,
+      operation.resultAccessRevision ?? null,
+      operation.receipt ? encryptSecret(JSON.stringify(operation.receipt)) : null,
+      operation.resultState || 'committed',
+      operation.createdAt
+    ]
+  );
+}
+
+// The replay-time availability/policy view of a committed operation's
+// result (parent spec §8): whether the Share still exists, its CURRENT
+// access revision and protection flag, and whether the result Revision's
+// snapshot still exists. The receipt is only honored as far as this
+// current state allows — a changed access policy never gets the old
+// password back.
+async function loadResultShareState(client, operation) {
+  const result = await client.query(
+    `
+      SELECT p.access_revision::text AS access_revision, p.is_protected,
+        EXISTS (
+          SELECT 1 FROM public.share_revisions r
+          WHERE r.share_id = p.id AND r.revision = $2::bigint
+        ) AS revision_exists
+      FROM public.pages p
+      WHERE p.id = $1
+      LIMIT 1
+    `,
+    [operation.resultShareId, operation.resultRevision]
+  );
+  const row = result.rows[0];
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    exists: true,
+    accessRevision: row.access_revision,
+    isProtected: row.is_protected === 1,
+    revisionExists: row.revision_exists === true
+  };
+}
+
+// Shared lookup discipline for an idempotent write: with the operation
+// lock held, an existing record decides the outcome before any new work
+// happens. Returns null when the caller should proceed as a first
+// execution; throws IdempotencyConflictError for same identifier /
+// different input; otherwise returns the replay outcome.
+async function resolveExistingOperation(client, operation) {
+  const existing = await findOperationRow(client, operation.actorNamespace, operation.requestId);
+
+  if (!existing) {
+    return null;
+  }
+
+  if (!requestHmacMatches(existing.requestHmac, operation.requestHmac)) {
+    throw new IdempotencyConflictError();
+  }
+
+  if (existing.resultState !== 'committed') {
+    return { outcome: 'unavailable', operation: existing, shareState: null };
+  }
+
+  const shareState = await loadResultShareState(client, existing);
+  return {
+    outcome: 'replayed',
+    operation: existing,
+    shareState
+  };
 }
 
 function buildAdminPageFilter(options = {}) {
@@ -289,57 +503,10 @@ class PostgresPageRepository {
 
   async create(page, options = {}) {
     await withPublishingWrite(this.pool, async (client) => {
-      // A managed-Key API write re-verifies its credential inside the write
-      // transaction (T05). The spec's lock order is fixed: maintenance gate
-      // first (already held by withPublishingWrite), then the managed Key
-      // row. Locking the Key row FOR UPDATE and comparing the stored
-      // credential_version against the version the request first
-      // authenticated with means a rotation or delete that committed first
-      // refuses this write, and a rotation that arrives later waits for
-      // this transaction instead of slipping in underneath it.
-      const credential = options.apiCredential;
-
-      if (credential && credential.type === 'managed') {
-        const keyResult = await client.query(
-          `
-            SELECT credential_version::text AS credential_version
-            FROM api_keys
-            WHERE id = $1
-            FOR UPDATE
-          `,
-          [credential.keyId]
-        );
-        const currentVersion = keyResult.rows[0]?.credential_version;
-
-        if (currentVersion === undefined
-          || !credentialVersionMatches(currentVersion, credential.credentialVersion)) {
-          throw new ApiKeyCredentialChangedError();
-        }
-      }
-
-      await client.query(
-        `
-          INSERT INTO pages (
-            id, html_content, created_at, password_hash, encrypted_password, is_protected,
-            code_type, title, description, expires_at, markdown_theme, access_revision,
-            current_revision, published
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, 1, TRUE)
-        `,
-        [
-          page.id,
-          page.htmlContent,
-          page.createdAt,
-          page.passwordHash || null,
-          page.encryptedPassword || null,
-          page.isProtected ? 1 : 0,
-          page.codeType || 'html',
-          page.title || null,
-          page.description || null,
-          page.expiresAt || null,
-          page.markdownTheme || null
-        ]
-      );
+      // A managed-Key API write re-verifies its credential inside the
+      // write transaction (T05), under the fixed lock order: gate, Key.
+      await recheckManagedCredential(client, options.apiCredential);
+      await insertPageRow(client, page);
 
       // Content Revision baseline (T06): the Revision 1 snapshot is part
       // of the same gated transaction as the Share itself, so a Share can
@@ -355,6 +522,229 @@ class PostgresPageRepository {
     });
 
     return { id: page.id };
+  }
+
+  // Idempotent create (T08): when `operation` is present, the create runs
+  // under the per-request lock and either replays the previously
+  // committed result for the same identifier + input digest, refuses a
+  // digest mismatch with IdempotencyConflictError, reports a tombstoned
+  // result as 'unavailable', or executes exactly once — Share, Revision
+  // 1 snapshot, create audit and the operation record committing
+  // atomically in one gated transaction.
+  //
+  // `prepare()` is invoked ONLY on a first execution, inside the
+  // transaction: every derived value (Share ID, generated password and
+  // its hash, creation time, auto title) comes into existence after the
+  // digest was computed and after the lookup missed, so a retry can
+  // never produce different derived values for the same operation. It
+  // returns { page, result } where result is the response payload stored
+  // (encrypted) as the operation receipt.
+  async createIdempotent({ operation = null, apiCredential, revisionMeta, audit, prepare }) {
+    let lastError = null;
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        return await withPublishingWrite(this.pool, async (client) => {
+          if (operation) {
+            await acquireOperationLock(client, operation);
+          }
+
+          await recheckManagedCredential(client, apiCredential);
+
+          if (operation) {
+            const resolved = await resolveExistingOperation(client, operation);
+
+            if (resolved) {
+              return resolved;
+            }
+          }
+
+          const prepared = await prepare();
+          await insertPageRow(client, prepared.page);
+          await insertContentSnapshotRow(client, {
+            id: prepared.page.id,
+            html_content: prepared.page.htmlContent,
+            code_type: prepared.page.codeType || 'html',
+            title: prepared.page.title || null,
+            description: prepared.page.description || null,
+            markdown_theme: prepared.page.markdownTheme || null
+          }, '1', revisionMeta || { source: 'web-create', actorType: 'owner' }, prepared.page.createdAt);
+
+          if (audit) {
+            await client.query(
+              'INSERT INTO audit_logs (action, page_id, details, ip, created_at) VALUES ($1, $2, $3, $4, $5)',
+              [audit.action, prepared.page.id, audit.details, audit.ip || null, Date.now()]
+            );
+          }
+
+          let record = null;
+
+          if (operation) {
+            record = {
+              ...operation,
+              resultShareId: prepared.page.id,
+              resultRevision: '1',
+              resultAccessRevision: '1',
+              receipt: prepared.result,
+              resultState: 'committed',
+              createdAt: Date.now()
+            };
+            await insertOperationRow(client, record);
+          }
+
+          return {
+            outcome: 'created',
+            page: prepared.page,
+            result: prepared.result,
+            operation: record
+          };
+        });
+      } catch (error) {
+        lastError = error;
+
+        // Only a Share-ID collision is retried (with a freshly prepared
+        // ID); every other failure — validation, conflict, gate — is
+        // final for this attempt and propagates unchanged.
+        if (error?.code !== '23505' || error?.constraint !== 'pages_pkey') {
+          throw error;
+        }
+      }
+    }
+
+    throw lastError || new Error('Failed to create a unique page id');
+  }
+
+  // Clone with optional idempotency (T08). The source row is read FOR
+  // UPDATE inside the same gated transaction that writes the copy, its
+  // Revision 1 baseline and (when an operation identifier is present)
+  // the operation record, so a cloned result and its dedup record can
+  // never diverge. `buildClone(sourceRow)` returns the copy's content
+  // fields ({ htmlContent, codeType, title, description, markdownTheme }).
+  async clonePage({ sourceId, operation = null, buildClone, audit }) {
+    let lastError = null;
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        return await withPublishingWrite(this.pool, async (client) => {
+          if (operation) {
+            await acquireOperationLock(client, operation);
+
+            const resolved = await resolveExistingOperation(client, operation);
+
+            if (resolved) {
+              return resolved;
+            }
+          }
+
+          const sourceResult = await client.query(
+            'SELECT * FROM pages WHERE id = $1 FOR UPDATE',
+            [sourceId]
+          );
+          const source = sourceResult.rows[0];
+
+          if (!source) {
+            const error = new Error('Clone source not found');
+            error.code = 'share_not_found';
+            throw error;
+          }
+
+          const fields = buildClone(source);
+          const newId = generateId();
+          const createdAt = Date.now();
+          const page = {
+            id: newId,
+            htmlContent: fields.htmlContent,
+            passwordHash: null,
+            encryptedPassword: null,
+            isProtected: false,
+            codeType: fields.codeType || 'html',
+            title: fields.title || null,
+            description: fields.description ?? null,
+            createdAt,
+            expiresAt: null,
+            markdownTheme: fields.markdownTheme ?? null
+          };
+
+          await insertPageRow(client, page);
+          await insertContentSnapshotRow(client, {
+            id: newId,
+            html_content: page.htmlContent,
+            code_type: page.codeType,
+            title: page.title,
+            description: page.description,
+            markdown_theme: page.markdownTheme
+          }, '1', { source: 'admin-clone', actorType: 'owner' }, createdAt);
+
+          if (audit) {
+            await client.query(
+              'INSERT INTO audit_logs (action, page_id, details, ip, created_at) VALUES ($1, $2, $3, $4, $5)',
+              [audit.action, newId, audit.details, audit.ip || null, Date.now()]
+            );
+          }
+
+          let record = null;
+
+          if (operation) {
+            record = {
+              ...operation,
+              resultShareId: newId,
+              resultRevision: '1',
+              resultAccessRevision: '1',
+              receipt: { kind: 'share.clone', shareId: newId },
+              resultState: 'committed',
+              createdAt: Date.now()
+            };
+            await insertOperationRow(client, record);
+          }
+
+          return { outcome: 'created', id: newId, operation: record };
+        });
+      } catch (error) {
+        lastError = error;
+
+        if (error?.code !== '23505' || error?.constraint !== 'pages_pkey') {
+          throw error;
+        }
+      }
+    }
+
+    throw lastError || new Error('Failed to create a unique page id');
+  }
+
+  // Operation status lookup within one credential namespace (T08). A
+  // read: it never passes the publishing gate, so an operation can be
+  // confirmed while writes are paused for maintenance.
+  async getOperation(actorNamespace, requestId) {
+    const client = await this.pool.connect();
+
+    try {
+      return await findOperationRow(client, actorNamespace, requestId);
+    } finally {
+      client.release();
+    }
+  }
+
+  // Owner confirmation by request identifier across namespaces (T08):
+  // the dashboard reports the most recent operation recorded under the
+  // identifier, whichever credential namespace committed it.
+  async getOperationByRequestId(requestId) {
+    const result = await this.pool.query(
+      `
+        SELECT actor_namespace, request_id, action, target_id, request_hmac,
+          result_share_id, result_revision::text AS result_revision,
+          result_access_revision::text AS result_access_revision,
+          receipt_encrypted, result_state, created_at
+        FROM public.publish_operations
+        WHERE request_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      [requestId]
+    );
+
+    return normalizeOperationRow(result.rows[0]);
   }
 
   async getById(id) {
@@ -984,19 +1374,47 @@ class PostgresPageRepository {
   }
 
   async deletePage(id) {
-    const result = await withPublishingWrite(this.pool, client => client.query(
-      'DELETE FROM pages WHERE id = $1',
-      [id]
-    ));
+    const result = await withPublishingWrite(this.pool, async (client) => {
+      const deleted = await client.query('DELETE FROM pages WHERE id = $1', [id]);
+
+      // Full deletion retires any publish-operation result pointing at
+      // the Share in the same transaction (T08): the record stays as a
+      // content-free dedup tombstone — receipt cleared, result marked
+      // unavailable — so a late retry of the original create can neither
+      // resurrect the Share nor mint a replacement under the old
+      // identifier.
+      await client.query(
+        `
+          UPDATE public.publish_operations
+          SET receipt_encrypted = NULL, result_state = 'result_unavailable'
+          WHERE result_share_id = $1 AND result_state = 'committed'
+        `,
+        [id]
+      );
+
+      return deleted;
+    });
     return result.rowCount > 0;
   }
 
   async deletePages(ids) {
     if (!Array.isArray(ids) || ids.length === 0) return 0;
-    const result = await withPublishingWrite(this.pool, client => client.query(
-      'DELETE FROM pages WHERE id = ANY($1)',
-      [ids]
-    ));
+    const result = await withPublishingWrite(this.pool, async (client) => {
+      const deleted = await client.query(
+        'DELETE FROM pages WHERE id = ANY($1)',
+        [ids]
+      );
+      await client.query(
+        `
+          UPDATE public.publish_operations
+          SET receipt_encrypted = NULL, result_state = 'result_unavailable'
+          WHERE result_share_id = ANY($1) AND result_state = 'committed'
+        `,
+        [ids]
+      );
+
+      return deleted;
+    });
     return result.rowCount;
   }
 

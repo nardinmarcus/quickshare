@@ -135,6 +135,14 @@
 
             <p id="publish-status" class="publish-status" role="status" aria-live="polite" aria-atomic="true" data-state="idle">准备发布</p>
             <p id="publish-error" class="publish-error hidden" role="alert" tabindex="-1"></p>
+            <div id="publish-orphan-choice" class="publish-orphan-choice hidden" role="group" aria-labelledby="publish-orphan-title">
+              <p id="publish-orphan-title" class="publish-orphan-title">上一次发布的结果还没有确认</p>
+              <p class="publish-orphan-text">浏览器里留有一条结果未知的发布记录，但它属于另一个发布会话，无法在当前会话下安全重试。请明确选择：放弃这条旧记录并按一次全新发布提交，或取消本次发布。</p>
+              <div class="button-row">
+                <button id="publish-orphan-abandon" type="button" class="cyber-btn cyber-btn-secondary">放弃旧记录，按新发布提交</button>
+                <button id="publish-orphan-cancel" type="button" class="cyber-btn cyber-btn-secondary">取消发布</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
