@@ -63,6 +63,7 @@
           <tr>
             <th scope="col">名称</th>
             <th scope="col">前缀</th>
+            <th scope="col">凭据版本</th>
             <th scope="col">创建时间</th>
             <th scope="col">最近使用</th>
             <th scope="col" class="admin-actions-col">操作</th>
@@ -71,13 +72,14 @@
         <tbody id="api-keys-body">
           <% if (apiKeys.length === 0) { %>
             <tr id="api-keys-empty">
-              <td colspan="5" class="api-key-empty">尚未创建托管密钥。</td>
+              <td colspan="6" class="api-key-empty">尚未创建托管密钥。</td>
             </tr>
           <% } %>
           <% apiKeys.forEach((apiKey) => { %>
             <tr data-api-key-id="<%= apiKey.id %>">
               <td><strong><%= apiKey.name %></strong></td>
               <td><code class="api-key-prefix"><%= apiKey.key_prefix %></code></td>
+              <td class="api-key-version"><%= apiKey.credential_version || '1' %></td>
               <td><time datetime="<%= new Date(Number(apiKey.created_at)).toISOString() %>"><%= formatManagementDateTime(apiKey.created_at) %></time></td>
               <td>
                 <% if (apiKey.last_used_at) { %>
@@ -87,6 +89,10 @@
                 <% } %>
               </td>
               <td class="admin-actions-col">
+                <button type="button" class="admin-rotate-btn api-key-rotate-btn" data-api-key-id="<%= apiKey.id %>" data-api-key-name="<%= apiKey.name %>" aria-label="轮换 API 密钥 <%= apiKey.name %>">
+                  <i class="fas fa-sync-alt" aria-hidden="true"></i>
+                  <span class="sr-only">轮换</span>
+                </button>
                 <button type="button" class="admin-delete-btn api-key-delete-btn" data-api-key-id="<%= apiKey.id %>" data-api-key-name="<%= apiKey.name %>" aria-label="删除 API 密钥 <%= apiKey.name %>">
                   <i class="fas fa-trash-alt" aria-hidden="true"></i>
                   <span class="sr-only">删除</span>

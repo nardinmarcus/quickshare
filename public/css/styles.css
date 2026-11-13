@@ -2164,6 +2164,33 @@ body:hover::-webkit-scrollbar,
   color: #fff;
 }
 
+/* Rotate button (API key management, T05): neutral counterpart of the
+   delete button; rotation keeps the Key and replaces its secret. */
+.admin-rotate-btn {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.admin-rotate-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.admin-rotate-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
 .admin-actions-col {
   width: 172px;
   min-width: 172px;
@@ -2173,6 +2200,7 @@ body:hover::-webkit-scrollbar,
 .admin-actions-col form,
 .admin-actions-col .admin-list-favorite-toggle,
 .admin-actions-col .admin-clone-btn,
+.admin-actions-col .admin-rotate-btn,
 .admin-actions-col .admin-delete-btn {
   display: inline-flex;
   vertical-align: middle;

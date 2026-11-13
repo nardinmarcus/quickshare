@@ -28,6 +28,18 @@ const {
 const { projectPublicMetadata } = require('./utils/publicProjection');
 const { isPublishingGateError } = require('./utils/publishing');
 const {
+  API_CONTENT_TYPES,
+  CREATE_ONLY_SCOPES,
+  buildCapabilities
+} = require('./utils/apiCapabilities');
+const {
+  isApiKeyCredentialChangedError,
+  legacyCredentialIdentity,
+  managedCredentialIdentity,
+  parseManagedApiKeyCredential,
+  toCredentialVersionString
+} = require('./utils/apiKeyIdentity');
+const {
   formatManagementDateTime,
   toManagementDateTimeLocal
 } = require('./utils/management-time');
@@ -51,7 +63,10 @@ const ADMIN_COOKIE = 'admin_session';
 const DASHBOARD_ADMIN_COOKIE = 'dashboard_admin_session';
 const ADMIN_TTL_MS = 24 * 60 * 60 * 1000;
 const PAGE_ACCESS_TTL_MS = 24 * 60 * 60 * 1000;
-const VALID_CODE_TYPES = new Set(['html', 'markdown', 'svg', 'mermaid']);
+// The accepted Share content types come from the shared capabilities
+// definition (T05), so /api/v1/capabilities can never advertise a type the
+// creation route would reject.
+const VALID_CODE_TYPES = new Set(API_CONTENT_TYPES);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const FAVICON_PATH = path.join(PUBLIC_DIR, 'icon/web/favicon.ico');
 const STATIC_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
@@ -535,19 +550,22 @@ async function requireApiKey(req, res, next) {
     const provided = Buffer.from(key);
 
     if (expected.length === provided.length && timingSafeEqual(expected, provided)) {
+      // The legacy environment credential has no database identity; the
+      // request records only its kind (T05).
+      req.apiCredential = legacyCredentialIdentity();
       return next();
     }
   }
 
-  const match = /^qs\.([A-Za-z0-9_-]{1,64})\.([A-Za-z0-9_-]{20,})$/.exec(key);
+  const parsed = parseManagedApiKeyCredential(key);
 
-  if (!match) {
+  if (!parsed) {
     return res.status(401).json({ success: false, error: 'Invalid API key' });
   }
 
   try {
-    const apiKey = await pageRepository.getApiKeyById(match[1]);
-    const isValid = apiKey && await verifySecret(match[2], apiKey.key_hash);
+    const apiKey = await pageRepository.getApiKeyById(parsed.id);
+    const isValid = apiKey && await verifySecret(parsed.secret, apiKey.key_hash);
 
     if (!isValid) {
       return res.status(401).json({ success: false, error: 'Invalid API key' });
@@ -557,6 +575,11 @@ async function requireApiKey(req, res, next) {
       id: apiKey.id,
       name: apiKey.name
     };
+    // Record the credential identity exactly as first verified, including
+    // the credential version. Publishing writes re-check this version
+    // inside their transaction (T05), so a rotation or delete that commits
+    // after this point invalidates the pending write.
+    req.apiCredential = managedCredentialIdentity(apiKey);
 
     pageRepository.touchApiKey(apiKey.id).catch((error) => {
       console.error('API key usage update failed:', error);
@@ -567,6 +590,17 @@ async function requireApiKey(req, res, next) {
     console.error('API key validation failed:', error);
     return res.status(503).json({ success: false, error: 'API authentication unavailable' });
   }
+}
+
+// The instance's canonical origin for identity responses (T05): the
+// configured public base URL when one exists, otherwise the origin this
+// request actually arrived on.
+function instanceOrigin(req) {
+  if (config.baseUrl) {
+    return config.baseUrl.replace(/\/+$/, '');
+  }
+
+  return `${req.protocol}://${req.get('host')}`;
 }
 
 async function verifyAdminPassword(password) {
@@ -748,7 +782,7 @@ function normalizeCodeType(content, requestedCodeType) {
   return VALID_CODE_TYPES.has(detectedType) ? detectedType : 'html';
 }
 
-async function createPageWithRetry(data) {
+async function createPageWithRetry(data, apiCredential) {
   let lastError = null;
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -758,7 +792,7 @@ async function createPageWithRetry(data) {
       await pageRepository.create({
         ...data,
         id
-      });
+      }, { apiCredential });
 
       return id;
     } catch (error) {
@@ -788,7 +822,7 @@ function parseFutureExpiry(expiresAt, now) {
   return { value, error: null };
 }
 
-async function createPageFromInput(input) {
+async function createPageFromInput(input, { apiCredential } = {}) {
   const {
     htmlContent,
     codeType,
@@ -841,7 +875,7 @@ async function createPageFromInput(input) {
     createdAt,
     expiresAt: expiry.value,
     markdownTheme: resolvedTheme
-  });
+  }, apiCredential);
 
   return {
     error: null,
@@ -1199,6 +1233,7 @@ app.post('/admin/apis/keys', requireDashboardAdmin, parseSmallJson, requireDashb
         key_prefix: apiKey.key_prefix,
         created_at: apiKey.created_at,
         last_used_at: apiKey.last_used_at,
+        credential_version: toCredentialVersionString(apiKey.credential_version),
         secret: `qs.${id}.${secret}`
       }
     });
@@ -1210,6 +1245,62 @@ app.post('/admin/apis/keys', requireDashboardAdmin, parseSmallJson, requireDashb
     return res.status(500).json({
       success: false,
       error: 'Failed to create API key'
+    });
+  }
+});
+
+// Rotation (T05): the logical Key keeps its ID, name and creation time; a
+// fresh secret replaces the old one and the credential version advances in
+// the same gated write, so the old secret stops working the moment this
+// succeeds — including for requests that already verified it but have not
+// written yet. The new secret is shown only in this success response. A Key
+// is a credential, not a Share owner: rotation changes nothing about any
+// Share.
+app.post('/admin/apis/keys/:id/rotate', requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
+  try {
+    const secret = randomBytes(32).toString('base64url');
+    const rotated = await pageRepository.rotateApiKey(req.params.id, {
+      keyHash: await hashSecret(secret),
+      keyPrefix: `qs.${req.params.id.slice(0, 8)}…`
+    });
+
+    if (!rotated) {
+      return res.status(404).json({
+        success: false,
+        error: 'API key not found'
+      });
+    }
+
+    pageRepository.createAuditLog({
+      action: 'api_key.rotate',
+      pageId: null,
+      details: JSON.stringify({
+        apiKeyId: rotated.id,
+        credentialVersion: toCredentialVersionString(rotated.credential_version)
+      }),
+      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+    }).catch((err) => { console.error('Audit log failed:', err); });
+
+    return res.json({
+      success: true,
+      apiKey: {
+        id: rotated.id,
+        name: rotated.name,
+        key_prefix: rotated.key_prefix,
+        created_at: rotated.created_at,
+        last_used_at: rotated.last_used_at,
+        credential_version: toCredentialVersionString(rotated.credential_version),
+        secret: `qs.${rotated.id}.${secret}`
+      }
+    });
+  } catch (error) {
+    console.error('Rotate API key failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to rotate API key'
     });
   }
 });
@@ -1933,9 +2024,45 @@ app.post('/api/pages/preview', privateNoStore, requireBrowserPublishAccess, pars
   }
 });
 
+// Connection identity (T05): who this credential is, verified at request
+// start. Returns the instance origin, the credential kind and — for managed
+// Keys — the logical Key ID, name and current credential version. Never
+// returns any secret or hash. This is a read: it stays available while
+// publishing writes are paused for maintenance.
+app.get('/api/v1/me', privateNoStore, requireApiKey, (req, res) => {
+  const credential = req.apiCredential || legacyCredentialIdentity();
+
+  return res.json({
+    success: true,
+    origin: instanceOrigin(req),
+    credential: {
+      type: credential.type,
+      keyId: credential.keyId,
+      name: credential.name,
+      credentialVersion: credential.credentialVersion,
+      scopes: [...CREATE_ONLY_SCOPES]
+    }
+  });
+});
+
+// Connection capabilities (T05): the API surface this instance and
+// credential actually support, serialized from the single definition in
+// utils/apiCapabilities.js that the routes themselves enforce. Contains no
+// secret material and no per-resource data. Also a read: available during
+// write maintenance, so an agent can still check its connection.
+app.get('/api/v1/capabilities', privateNoStore, requireApiKey, (req, res) => {
+  const credential = req.apiCredential || legacyCredentialIdentity();
+
+  return res.json({
+    success: true,
+    origin: instanceOrigin(req),
+    capabilities: buildCapabilities({ credentialType: credential.type })
+  });
+});
+
 app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (req, res) => {
   try {
-    const result = await createPageFromInput(req.body);
+    const result = await createPageFromInput(req.body, { apiCredential: req.apiCredential });
 
     if (result.error) {
       return res.status(400).json({ success: false, error: result.error });
@@ -1965,6 +2092,17 @@ app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (
     });
   } catch (error) {
     console.error('Share API failed:', error);
+    // The credential was rotated or deleted after this request verified
+    // it: the write was refused inside its transaction (T05). From the
+    // client's side the presented credential is simply no longer valid.
+    if (isApiKeyCredentialChangedError(error)) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid API key',
+        code: 'api_key_credential_changed',
+        retryable: false
+      });
+    }
     if (respondIfPublishingGate(res, error)) {
       return;
     }
