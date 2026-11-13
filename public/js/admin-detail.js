@@ -643,6 +643,150 @@
     });
   }
 
+  // --- Publish-state toggle (T11) -------------------------------------
+  //
+  // Unpublish / republish runs the same intent discipline as the save:
+  // one pending intent { requestId, intentKey } in sessionStorage, where
+  // the key binds the target state and the access-revision baseline the
+  // request is judged against. A retry after a lost response reuses the
+  // requestId and replays the recorded result; a moved baseline (a 412
+  // resyncs originalData.accessRevision) makes the next click a fresh
+  // intent. A confirmed result retires the intent.
+  const publishToggleBtn = document.getElementById('publish-toggle-btn');
+  const publishToggleLabel = document.getElementById('publish-toggle-label');
+  const publishToggleIcon = document.getElementById('publish-toggle-icon');
+  const publishedDisplay = document.getElementById('published-display');
+  const publishIntentStorageKey = 'quickshare-admin-publish-intent:' + (originalData.id || '');
+  let publishIntent = null;
+
+  try {
+    const storedPublishIntent = window.sessionStorage.getItem(publishIntentStorageKey);
+    if (storedPublishIntent) {
+      publishIntent = JSON.parse(storedPublishIntent);
+    }
+  } catch (error) {
+    publishIntent = null;
+  }
+
+  function persistPublishIntent() {
+    try {
+      if (publishIntent) {
+        window.sessionStorage.setItem(publishIntentStorageKey, JSON.stringify(publishIntent));
+      } else {
+        window.sessionStorage.removeItem(publishIntentStorageKey);
+      }
+    } catch (error) {
+      // Storage unavailable: the in-memory intent still applies.
+    }
+  }
+
+  function publishIntentKeyFor(targetPublished) {
+    return 'publish:' + (targetPublished ? 'true' : 'false')
+      + ':access:' + (originalData.accessRevision || '');
+  }
+
+  function requestIdForPublish(targetPublished) {
+    const intentKey = publishIntentKeyFor(targetPublished);
+
+    if (publishIntent && publishIntent.intentKey === intentKey && publishIntent.requestId) {
+      return publishIntent.requestId;
+    }
+
+    publishIntent = {
+      requestId: window.PublishIntent
+        ? window.PublishIntent.generateRequestId()
+        : 'publish-' + Date.now() + '-' + Math.random().toString(36).slice(2),
+      intentKey
+    };
+    persistPublishIntent();
+    return publishIntent.requestId;
+  }
+
+  function clearPublishIntent() {
+    publishIntent = null;
+    persistPublishIntent();
+  }
+
+  function updatePublishedDisplay() {
+    if (publishToggleBtn) {
+      publishToggleBtn.setAttribute('aria-pressed', originalData.published ? 'true' : 'false');
+    }
+
+    if (publishToggleLabel) {
+      publishToggleLabel.textContent = originalData.published ? '下架' : '重新发布';
+    }
+
+    if (publishToggleIcon) {
+      publishToggleIcon.className = 'fas ' + (originalData.published ? 'fa-eye-slash' : 'fa-eye');
+    }
+
+    if (publishedDisplay) {
+      publishedDisplay.textContent = '';
+      const badge = document.createElement('span');
+      badge.className = 'admin-status ' + (originalData.published ? 'public' : 'protected');
+      badge.textContent = originalData.published ? '已发布' : '已下架';
+      publishedDisplay.append(badge);
+    }
+  }
+
+  if (publishToggleBtn) {
+    publishToggleBtn.addEventListener('click', async function () {
+      const targetPublished = !originalData.published;
+      const requestId = requestIdForPublish(targetPublished);
+      publishToggleBtn.disabled = true;
+
+      try {
+        const response = await fetch('/admin/pages/' + encodeURIComponent(originalData.id) + '/publish-state', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            'X-CSRF-Token': csrfToken()
+          },
+          body: JSON.stringify({
+            published: targetPublished,
+            expectedAccessRevision: originalData.accessRevision,
+            requestId
+          })
+        });
+        const data = await response.json();
+
+        if (response.status === 412 && data.accessRevision) {
+          originalData = { ...originalData, accessRevision: data.accessRevision };
+          Toast.error('访问策略已被更新，已同步最新版本，请检查后重试');
+          return;
+        }
+
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || '更新发布状态失败');
+        }
+
+        clearPublishIntent();
+        originalData = {
+          ...originalData,
+          published: data.published === true,
+          accessRevision: data.accessRevision || originalData.accessRevision
+        };
+        updatePublishedDisplay();
+        // The rendered preview loads the public URL; after a state
+        // change it must not keep showing the pre-change document.
+        resetRenderedPreview();
+
+        if (data.unchanged) {
+          Toast.success('已是该状态，未做变更');
+        } else if (data.published) {
+          Toast.success('已重新发布，公开链接恢复访问；此前解锁的访客需要重新输入密码');
+        } else {
+          Toast.success('已下架，公开链接将返回 404；密码、有效期与历史版本保持不变');
+        }
+      } catch (error) {
+        Toast.error(error.message || '更新发布状态失败');
+      } finally {
+        publishToggleBtn.disabled = false;
+      }
+    });
+  }
+
   clearExpiresBtn.addEventListener('click', function () {
     expiresInput.value = '';
     expiresHint.textContent = '';

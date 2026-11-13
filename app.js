@@ -2338,6 +2338,175 @@ app.post('/admin/pages/:id/revisions/:revision/restore', requireDashboardApiAdmi
   }
 });
 
+// Unpublish / republish a Share (T11, issue #35). Dashboard session +
+// CSRF only — deliberately no API-Key entry, mirroring the purge: this
+// is an owner console action. The request carries the T01 access-version
+// precondition (expectedAccessRevision: missing 428, stale 412, judged
+// inside the repository transaction against the locked row) and may
+// carry the T08/T09 request identifier (Idempotency-Key header or body
+// requestId); a keyed transition commits its operation record and audit
+// atomically with the state change, so a lost response is confirmable
+// through GET /admin/operations/:requestId and a retry with the same
+// identifier replays the recorded result instead of re-judging the (now
+// stale) precondition. A real transition advances access_revision — old
+// unlock cookies die on unpublish AND on republish — while password,
+// expiry and content version are never written. Setting the state the
+// Share already has is a recorded success that changes nothing.
+app.post('/admin/pages/:id/publish-state', requireDashboardApiAdmin, parseSmallJsonBody, requireDashboardCsrf, async (req, res) => {
+  try {
+    const idem = parseIdempotencyKey(req.get('idempotency-key') || req.body?.requestId);
+
+    if (idem.provided && !idem.valid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid Idempotency-Key',
+        code: 'invalid_idempotency_key',
+        retryable: false
+      });
+    }
+
+    if (typeof req.body?.published !== 'boolean') {
+      return res.status(400).json({
+        success: false,
+        error: 'published must be a boolean',
+        code: 'invalid_published_state',
+        retryable: false
+      });
+    }
+
+    const expected = parseExpectedAccessRevision(req.body?.expectedAccessRevision);
+
+    if (expected.provided && !expected.valid) {
+      return res.status(400).json({
+        success: false,
+        error: 'expectedAccessRevision 必须为十进制字符串'
+      });
+    }
+
+    const targetPublished = req.body.published;
+    const action = targetPublished ? 'share.republish' : 'share.unpublish';
+    const page = await pageRepository.getById(req.params.id);
+
+    // Write maintenance outranks precondition validation (T04): while
+    // paused, even a replay is refused at the gate, and the operation
+    // stays confirmable through the operations query instead.
+    if (page
+      && typeof pageRepository.getPublishingWritesPaused === 'function'
+      && await pageRepository.getPublishingWritesPaused()) {
+      return sendPublishingMaintenance(res);
+    }
+
+    const ip = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+
+    const outcome = await pageRepository.setPublishedState({
+      id: req.params.id,
+      published: targetPublished,
+      precondition: {
+        expectedAccessRevision: expected.valid ? expected.value : null,
+        accessPreconditionMissing: !expected.provided
+      },
+      operation: idem.valid
+        ? {
+          actorNamespace: dashboardNamespace(),
+          requestId: idem.value,
+          action,
+          targetId: req.params.id,
+          requestHmac: computeRequestHmac({
+            action,
+            targetId: req.params.id,
+            presence: {
+              published: 1,
+              expectedAccessRevision: expected.provided ? 1 : 0
+            },
+            values: {
+              published: targetPublished ? 'true' : 'false',
+              expectedAccessRevision: expected.provided ? expected.value : null
+            }
+          })
+        }
+        : null,
+      ip
+    });
+
+    if (outcome.outcome === 'unavailable') {
+      return respondOperationUnavailable(res, idem.valid ? idem.value : null);
+    }
+
+    if (outcome.outcome === 'replayed') {
+      const receipt = operationReceipt(outcome.operation);
+
+      if (!outcome.shareState || !receipt || receipt.kind !== action) {
+        return respondOperationUnavailable(res, idem.valid ? idem.value : null);
+      }
+
+      return res.json({
+        success: true,
+        replayed: true,
+        requestId: idem.valid ? idem.value : null,
+        action,
+        shareId: req.params.id,
+        published: receipt.published === true,
+        changed: receipt.changed === true,
+        unchanged: receipt.changed !== true,
+        accessRevision: receipt.accessRevision
+      });
+    }
+
+    const result = outcome.result;
+
+    if (result.status === 'not_found') {
+      return res.status(404).json({
+        success: false,
+        error: 'Share not found'
+      });
+    }
+
+    if (result.status === 'access_precondition_required') {
+      return res.status(428).json({
+        success: false,
+        error: '缺少 expectedAccessRevision，请刷新后重试'
+      });
+    }
+
+    if (result.status === 'conflict') {
+      return res.status(412).json({
+        success: false,
+        error: '访问策略已被更新，请刷新后重试',
+        accessRevision: result.accessRevision
+      });
+    }
+
+    return res.json({
+      success: true,
+      ...(idem.valid ? { requestId: idem.value } : {}),
+      action,
+      shareId: req.params.id,
+      published: result.published === true,
+      changed: result.changed === true,
+      unchanged: result.changed !== true,
+      accessRevision: result.accessRevision
+    });
+  } catch (error) {
+    console.error('Publish state update failed:', error);
+    if (isIdempotencyConflictError(error)) {
+      return res.status(409).json({
+        success: false,
+        error: 'Idempotency-Key was already used with a different request',
+        code: 'idempotency_conflict',
+        requestId: parseIdempotencyKey(req.get('idempotency-key') || req.body?.requestId).value,
+        retryable: false
+      });
+    }
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to update publish state'
+    });
+  }
+});
+
 // Permanent purge of one non-current Revision (T10, issue #34). This
 // is the one explicitly destructive exception to snapshot immutability
 // and it is deliberately narrow: dashboard session + CSRF only (no
@@ -3727,6 +3896,17 @@ app.get('/api/pages/:id', async (req, res) => {
       });
     }
 
+    // Unpublished is indistinguishable from nonexistent on every public
+    // surface (T11, parent spec §5), and the judgment outranks expiry:
+    // an unpublished Share answers 404 even with a valid access cookie,
+    // and even when it is also expired.
+    if (publicPage.page.published === false) {
+      return res.status(404).json({
+        success: false,
+        error: '页面不存在'
+      });
+    }
+
     if (publicPage.expired) {
       return res.status(410).json({
         success: false,
@@ -3879,6 +4059,15 @@ app.post('/view/:id/password', privateNoStore, parseSmallJson, async (req, res) 
       });
     }
 
+    // Unpublished answers exactly like nonexistent here too (T11), so
+    // no new unlock credential can be minted while a Share is down —
+    // and the unpublished judgment outranks expiry.
+    if (publicPage.page.published === false) {
+      return res.status(404).json({
+        valid: false
+      });
+    }
+
     if (publicPage.expired) {
       return res.status(410).json({
         valid: false,
@@ -3990,6 +4179,19 @@ app.get('/view/:id', async (req, res) => {
     const { page } = publicPage;
     metrics.contentType = safeContentType(page.code_type);
     metrics.protected = page.is_protected === 1;
+
+    // Unpublished renders the same 404 page as a missing Share (T11),
+    // ahead of the expiry judgment — for every requester, including one
+    // holding a still-current access cookie or a dashboard preview.
+    if (page.published === false) {
+      metrics.outcome = 'not_found';
+      setTrustedUiCsp(res, { allowFraming: true });
+      return res.status(404).render('error', {
+        title: '页面未找到',
+        page: 'error-page',
+        message: '您请求的页面不存在或已被删除'
+      });
+    }
 
     if (publicPage.expired) {
       metrics.outcome = 'expired';

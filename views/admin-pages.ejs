@@ -172,6 +172,9 @@
                     <% } else { %>
                       <span class="admin-status public">公开</span>
                     <% } %>
+                    <% if (sharedPage.published === false) { %>
+                      <span class="admin-status protected">已下架</span>
+                    <% } %>
                   </td>
                   <td><%= sharedPage.view_count || 0 %></td>
                   <td>
@@ -203,6 +206,19 @@
                     >
                       <i class="<%= sharedPage.is_favorite ? 'fas' : 'far' %> fa-star admin-favorite-icon" aria-hidden="true"></i>
                       <span class="sr-only admin-favorite-label"><%= sharedPage.is_favorite ? '取消收藏' : '收藏' %></span>
+                    </button>
+                    <button
+                      type="button"
+                      class="admin-publish-toggle"
+                      data-publish-toggle
+                      data-page-id="<%= sharedPage.id %>"
+                      data-page-title="<%= sharedPage.title || sharedPage.id %>"
+                      data-published="<%= sharedPage.published === false ? 'false' : 'true' %>"
+                      data-access-revision="<%= sharedPage.access_revision || '1' %>"
+                      aria-pressed="<%= sharedPage.published === false ? 'false' : 'true' %>"
+                      aria-label="<%= sharedPage.published === false ? `重新发布分享 ${sharedPage.title || sharedPage.id}` : `下架分享 ${sharedPage.title || sharedPage.id}` %>"
+                    >
+                      <i class="<%= sharedPage.published === false ? 'fas fa-eye' : 'fas fa-eye-slash' %>" aria-hidden="true"></i>
                     </button>
                     <form method="post" action="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>/clone" class="admin-inline-form">
                       <input type="hidden" name="_csrf" value="<%= csrfToken %>">

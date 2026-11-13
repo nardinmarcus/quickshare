@@ -35,6 +35,10 @@
       <span>撤销已解锁访问</span>
     </button>
     <% } %>
+    <button type="button" class="cyber-btn cyber-btn-secondary" id="publish-toggle-btn" aria-pressed="<%= sharedPage.published ? 'true' : 'false' %>">
+      <i class="fas <%= sharedPage.published ? 'fa-eye-slash' : 'fa-eye' %>" aria-hidden="true" id="publish-toggle-icon"></i>
+      <span id="publish-toggle-label"><%= sharedPage.published ? '下架' : '重新发布' %></span>
+    </button>
     <form method="post" action="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>/clone" class="admin-inline-form">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <button type="submit" class="cyber-btn cyber-btn-secondary">

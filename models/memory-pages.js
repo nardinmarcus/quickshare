@@ -683,6 +683,103 @@ class MemoryPageRepository {
     return operation ? this.runOperationExclusive(operation, execute) : execute();
   }
 
+  // Publish-state transition (T11, issue #35): the memory counterpart
+  // of the Postgres method, under the same contract. The publishing
+  // gate serializes the judgment and the write; a real transition flips
+  // `published` and advances the access revision together (old unlock
+  // cookies die on both transitions) and writes the audit in the same
+  // step, while setting the state the Share already has records the
+  // operation without advancing anything. Precondition failures record
+  // nothing; replay resolution precedes every judgment.
+  async setPublishedState({ id, published, precondition = {}, operation = null, ip = null }) {
+    const targetPublished = published === true;
+
+    const execute = () => this.publishingGate.runWrite(async () => {
+      if (operation) {
+        const resolved = this.resolveExistingOperation(operation);
+
+        if (resolved) {
+          return resolved;
+        }
+      }
+
+      const page = this.pages.get(id);
+
+      if (!page) {
+        return { outcome: 'executed', result: { status: 'not_found' } };
+      }
+
+      const currentAccessRevision = toAccessRevisionString(page.access_revision);
+      const currentPublished = page.published !== false;
+      const expected = precondition.expectedAccessRevision == null
+        ? null
+        : toAccessRevisionString(precondition.expectedAccessRevision);
+
+      if (precondition.accessPreconditionMissing) {
+        return {
+          outcome: 'executed',
+          result: { status: 'access_precondition_required', accessRevision: currentAccessRevision }
+        };
+      }
+
+      if (expected === null || !accessRevisionMatches(currentAccessRevision, expected)) {
+        return {
+          outcome: 'executed',
+          result: { status: 'conflict', accessRevision: currentAccessRevision }
+        };
+      }
+
+      const changed = currentPublished !== targetPublished;
+      let resultingAccessRevision = currentAccessRevision;
+
+      if (changed) {
+        page.published = targetPublished;
+        page.access_revision = nextAccessRevision(currentAccessRevision);
+        resultingAccessRevision = toAccessRevisionString(page.access_revision);
+
+        await this.createAuditLog({
+          action: 'page.publish.update',
+          pageId: id,
+          details: JSON.stringify({
+            from: currentPublished,
+            to: targetPublished,
+            accessRevision: resultingAccessRevision
+          }),
+          ip
+        });
+      }
+
+      const result = {
+        status: changed ? 'updated' : 'unchanged',
+        published: targetPublished,
+        changed,
+        accessRevision: resultingAccessRevision,
+        contentRevision: toContentRevisionString(page.current_revision)
+      };
+
+      if (!operation) {
+        return { outcome: 'executed', result };
+      }
+
+      const record = this.storeOperationRecord(operation, {
+        resultShareId: id,
+        resultRevision: null,
+        resultAccessRevision: resultingAccessRevision,
+        receipt: {
+          kind: operation.action,
+          shareId: id,
+          published: targetPublished,
+          changed,
+          accessRevision: resultingAccessRevision
+        }
+      });
+
+      return { outcome: 'executed', result, operation: record };
+    });
+
+    return operation ? this.runOperationExclusive(operation, execute) : execute();
+  }
+
   // Permanent purge of one non-current Revision (T10, issue #34): the
   // memory counterpart of the Postgres method, under the same contract.
   // The publishing gate serializes the whole judgment + tombstone write
@@ -988,7 +1085,9 @@ class MemoryPageRepository {
         is_protected: page.is_protected,
         is_favorite: page.is_favorite,
         encrypted_password: page.encrypted_password,
-        expires_at: page.expires_at
+        expires_at: page.expires_at,
+        published: page.published !== false,
+        access_revision: toAccessRevisionString(page.access_revision)
       }));
   }
 
@@ -1352,6 +1451,12 @@ class MemoryPageRepository {
         const page = this.pages.get(id);
 
         if (!page) {
+          return 'not_found';
+        }
+
+        // Unpublished is indistinguishable from missing on public
+        // surfaces (T11) and outranks expiry.
+        if (page.published === false) {
           return 'not_found';
         }
 
