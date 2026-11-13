@@ -42,6 +42,12 @@
 //     scopes is rejected as a named "scopes differ" failure and a
 //     restored-only grant flip is rejected by name (explicitly skipped
 //     on a legacy 001-003 schema, where neither exists)
+//   - granted content update state (T13) round-trips: the fixture Key
+//     also carries the update scope, the auto-edit opt-in switched ON,
+//     one read+update grant, and a committed share.content.update
+//     operation record with its encrypted receipt, all restored
+//     exactly; a restored-only flip of the grant's can_update flag is
+//     rejected by name
 //
 // No production data is involved; both fixture databases are dropped at the
 // end unless --keep is passed.
@@ -256,15 +262,18 @@ async function seedFixtures(pool, { hasAccessRevision }) {
     await pool.query(
       `INSERT INTO public.api_keys (id, name, key_hash, key_prefix, created_at, last_used_at, credential_version, scopes, auto_grant_new_share_edit)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      ['drillkey1', 'Drill key', await hashSecret('drill-api-secret'), 'qs_drill', BASE_TIME + 5, null, 7, '["share:create","share:read"]', false]
+      ['drillkey1', 'Drill key', await hashSecret('drill-api-secret'), 'qs_drill', BASE_TIME + 5, null, 7, '["share:create","share:read","share:update"]', true]
     );
 
-    // Per-Share read grants for the fixture Key (T12): authorization
-    // state is part of the backup, so the drill proves the grant rows
-    // themselves round-trip exactly.
+    // Per-Share grants for the fixture Key (T12, update grant added by
+    // T13): authorization state is part of the backup, so the drill
+    // proves the grant rows themselves round-trip exactly — drill-public
+    // read-only, drill-protected read+update. The fixture Key's
+    // auto-edit opt-in is also ON (above) so its non-default value is
+    // part of what restore must reproduce.
     await pool.query(
       `INSERT INTO public.share_grants (api_key_id, share_id, can_read, can_update, can_publish, created_at, updated_at)
-       VALUES ($1, $2, true, false, false, $3, $3), ($1, $4, true, false, false, $5, $5)`,
+       VALUES ($1, $2, true, false, false, $3, $3), ($1, $4, true, true, false, $5, $5)`,
       ['drillkey1', 'drill-public', BASE_TIME + 40, 'drill-protected', BASE_TIME + 41]
     );
   } else {
@@ -311,6 +320,27 @@ async function seedFixtures(pool, { hasAccessRevision }) {
        ) VALUES ($1, $2, 'share.create', NULL, $3, 'drill-public', 1, 1, $4, 'committed', $5)`,
       ['key:managed:drillkey1', 'drill-request-0001', 'a'.repeat(64), receipt, BASE_TIME + 30]
     );
+
+    // A committed content-update operation by the same Key (T13): the
+    // drill proves a share.content.update record — target, result
+    // version pointers and its (body-free) encrypted receipt —
+    // round-trips exactly like a create record.
+    const updateReceipt = encryptSecret(JSON.stringify({
+      kind: 'share.content.update',
+      shareId: 'drill-protected',
+      contentChanged: true,
+      contentRevision: BIG_CONTENT_REVISION,
+      accessRevision: BIG_ACCESS_REVISION
+    }));
+
+    await pool.query(
+      `INSERT INTO public.publish_operations (
+         actor_namespace, request_id, action, target_id, request_hmac,
+         result_share_id, result_revision, result_access_revision,
+         receipt_encrypted, result_state, created_at
+       ) VALUES ($1, $2, 'share.content.update', $3, $4, $3, $5::bigint, $6::bigint, $7, 'committed', $8)`,
+      ['key:managed:drillkey1', 'drill-request-0002', 'drill-protected', 'b'.repeat(64), BIG_CONTENT_REVISION, BIG_ACCESS_REVISION, updateReceipt, BASE_TIME + 31]
+    );
   }
 
   await audit('page.create', 'drill-public', {}, 10);
@@ -327,7 +357,8 @@ async function seedFixtures(pool, { hasAccessRevision }) {
     // exactly the evidence the verify report's detector must surface,
     // because restoring an older backup would revive that grant.
     await audit('api_key.grant', 'drill-public', { apiKeyId: 'drillkey1', shareId: 'drill-public', permissions: { read: true, update: false, publish: false } }, 42);
-    await audit('api_key.grant', 'drill-protected', { apiKeyId: 'drillkey1', shareId: 'drill-protected', permissions: { read: true, update: false, publish: false } }, 43);
+    await audit('api_key.grant', 'drill-protected', { apiKeyId: 'drillkey1', shareId: 'drill-protected', permissions: { read: true, update: true, publish: false } }, 43);
+    await audit('api_key.auto_grant', null, { apiKeyId: 'drillkey1', enabled: true }, 45);
     await audit('api_key.grant_revoke', 'drill-expired', { apiKeyId: 'drillkey1', shareId: 'drill-expired' }, 44);
   }
 
@@ -681,8 +712,8 @@ async function main() {
       const operationCount = await restorePool.query(
         'SELECT COUNT(*)::int AS count FROM public.publish_operations'
       );
-      check('restored publish_operations carries the seeded operation record',
-        operationCount.rows[0].count === 1);
+      check('restored publish_operations carries both seeded operation records',
+        operationCount.rows[0].count === 2);
 
       await restorePool.query(
         "UPDATE public.publish_operations SET result_state = 'result_unavailable', receipt_encrypted = NULL WHERE request_id = 'drill-request-0001'"
@@ -726,17 +757,41 @@ async function main() {
          WHERE api_key_id = 'drillkey1'
          ORDER BY share_id`
       );
-      check('restored share_grants carries both seeded read grants exactly', grantResult.rows.length === 2
-        && grantResult.rows.every(row => row.can_read === true
-          && row.can_update === false
-          && row.can_publish === false)
+      check('restored share_grants carries both seeded grants exactly', grantResult.rows.length === 2
+        && grantResult.rows.every(row => row.can_read === true && row.can_publish === false)
+        && grantResult.rows.find(row => row.share_id === 'drill-public')?.can_update === false
+        && grantResult.rows.find(row => row.share_id === 'drill-protected')?.can_update === true
         && grantResult.rows.map(row => row.share_id).join(',') === 'drill-protected,drill-public');
 
       const scopesResult = await restorePool.query(
-        "SELECT scopes FROM public.api_keys WHERE id = 'drillkey1'"
+        "SELECT scopes, auto_grant_new_share_edit FROM public.api_keys WHERE id = 'drillkey1'"
       );
       check('non-default Key scopes restored exactly',
-        scopesResult.rows[0].scopes === '["share:create","share:read"]');
+        scopesResult.rows[0].scopes === '["share:create","share:read","share:update"]');
+      check('Key auto-edit opt-in restored exactly (T13)',
+        scopesResult.rows[0].auto_grant_new_share_edit === true);
+
+      await restorePool.query(
+        "UPDATE public.share_grants SET can_update = FALSE WHERE api_key_id = 'drillkey1' AND share_id = 'drill-protected'"
+      );
+
+      const updateGrantTamperResult = await runScript('verify-backup.js', verifyArgs, childEnv);
+      let updateGrantTamperReport = null;
+
+      try {
+        updateGrantTamperReport = parseStdoutJson(updateGrantTamperResult, 'verify-backup.js (can_update tampered)');
+      } catch (error) {
+        // handled by the check below
+      }
+
+      check('verify rejects a restored-only can_update tamper', updateGrantTamperResult.code !== 0
+        && updateGrantTamperReport !== null
+        && updateGrantTamperReport.ok === false
+        && updateGrantTamperReport.failures.some(failure => failure.includes('share_grants')));
+
+      await restorePool.query(
+        "UPDATE public.share_grants SET can_update = TRUE WHERE api_key_id = 'drillkey1' AND share_id = 'drill-protected'"
+      );
 
       await restorePool.query(
         "UPDATE public.share_grants SET can_read = FALSE WHERE api_key_id = 'drillkey1' AND share_id = 'drill-public'"

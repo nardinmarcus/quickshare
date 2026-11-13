@@ -214,13 +214,14 @@ test('a create-only managed Key is refused with 403 until the owner assigns the 
     ['share.create', 'connection.me', 'connection.capabilities', 'operation.status']
   );
 
-  // The update/publish scopes are not assignable from this ticket's
-  // dashboard: their behavior does not exist yet, so the switch is
-  // refused rather than stored as a no-op.
+  // The publish scope is not assignable from the dashboard yet: its
+  // API behavior does not exist, so the switch is refused rather than
+  // stored as a no-op. (The update scope became assignable with T13,
+  // when its endpoint shipped; T13's own suite covers assigning it.)
   const premature = await jsonRequest('/admin/apis/keys/t12-scope-key/scopes', {
     method: 'PUT',
     headers: { Cookie: cookie, 'X-CSRF-Token': csrf },
-    body: { scopes: ['share:create', 'share:update'] }
+    body: { scopes: ['share:create', 'share:publish'] }
   });
   assert.equal(premature.status, 400);
   assert.equal(premature.json.code, 'invalid_scopes');
@@ -298,8 +299,9 @@ test('admin grant makes exactly one Share readable: list, content and state with
   const unknownKey = await grantViaAdmin(cookie, csrf, 'no-such-key', 't12-main-share');
   assert.equal(unknownKey.status, 404);
 
-  // The dashboard of this ticket grants read only; asking it to store
-  // an edit/publish grant is refused rather than faked.
+  // The publish permission has no API behavior yet; asking the
+  // dashboard to store a publish grant is refused rather than faked.
+  // (Edit grants became available with T13; its suite covers them.)
   const deadSwitch = await grantViaAdmin(cookie, csrf, 't12-main-key', 't12-main-share', { publish: true });
   assert.equal(deadSwitch.status, 400);
   assert.equal(deadSwitch.json.code, 'grant_permission_not_available');

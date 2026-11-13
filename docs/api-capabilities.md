@@ -105,15 +105,16 @@ ID、体积限制与条件写规则。T05 阶段两类凭据均为 **create-only
 托管 Key 持有**范围（scopes）**，站点所有者另行给 Key 逐条**授权
 （grant）**到具体 Share。Share 不归 Key「所有」：Key 只是凭据，授权是
 「哪把凭据能碰哪些资源」的单独关系。全部范围只有四个：
-`share:create`、`share:read`、`share:update`、`share:publish`；本票可用
-并可分配的只有 `create` 与 `read`（`update`/`publish` 的操作面随各自
-后续票落地，后台不显示不存在的操作开关）。
+`share:create`、`share:read`、`share:update`、`share:publish`；T12 阶段
+可用并可分配的只有 `create` 与 `read`（`update`/`publish` 的操作面随
+各自后续票落地，后台不显示不存在的操作开关）。`update` 已随 T13 启用
+（见文末 T13 一节），`publish` 仍未启用。
 
 - **迁移**：迁移 010 给已有托管 Key 规范化为 create-only；
   `auto_grant_new_share_edit`（「新创建 Share 自动给可编辑授权」）以字段
-  形式引入、默认 `false`，仅存储——其行为随 update 能力在后续票启用，
-  本票没有对应的后台开关（不展示无效开关）。旧版单 Key 恒为
-  create-only，永远不能持有管理范围或授权。
+  形式引入、默认 `false`，T12 阶段仅存储，其行为与后台开关已随 T13
+  启用（见文末 T13 一节）。旧版单 Key 恒为 create-only，永远不能持有
+  管理范围或授权。
 - **轮换保留**：轮换保留逻辑 Key ID、范围与全部授权；删除 Key 在同一
   事务内撤销其全部授权。删除 Share 同理清除以它为目标的授权。
 - **后台管理**（仅站点所有者的网页会话 + CSRF）：在「API 管理」页给
@@ -170,3 +171,66 @@ ID、体积限制与条件写规则。T05 阶段两类凭据均为 **create-only
   逐条授权，恢复侧缺失/漂移会指名判失败。恢复早于某次授权撤销的旧
   备份会把该授权带回来，恢复后须由所有者人工核对授权清单（见
   [备份与恢复手册](backup-restore.md)）。
+
+## 授权更新与自动编辑授权（T13）
+
+T13 启用 `share:update` 范围与 grant 的 `update` 权限：后台「API 管理」
+页现在可分配 `share:update` 范围、可授予**编辑授权**（read+update），
+`share:publish` 仍不在可分配集合内（其操作面尚未落地）。
+
+### `PUT /api/v1/shares/:id/content`
+
+更新原 Share 的当前内容，与后台保存共用同一个仓库事务（操作台账、
+内容 CAS、无操作判定、审计），不另立规则：
+
+- **前提**：凭据须同时持有 `share:read` 与 `share:update` 范围
+  （update 蕴含 read 是 grant 侧的规则，范围侧两者都要），且对目标
+  Share 持有 update 授权。判定违例：缺范围 403 `insufficient_scope`；
+  无授权/Share 不存在 404 `share_not_found`。事务内部还会以 Key 行锁
+  复核凭据版本与授权行（先提交的轮换/撤销先行生效），且复核在回放
+  判定之前——已撤销或已轮换的凭据不能凭旧请求标识回放。
+- **请求体（严格）**：完整四字段快照 `htmlContent`（非空、原文逐字
+  存储）、`title`、`description`、`markdownTheme` 均为必填；
+  `codeType` 可提交但必须与当前一致（固定不可改）；任何其他字段——
+  包括访问策略、收藏、计数、下架状态类字段——以 400 `invalid_field`
+  拒绝并指名字段；缺字段 400 `missing_field`。Markdown Share 的主题
+  必须是已知 Preset ID（未知 400 `invalid_markdown_theme`，不静默
+  替换）；非 Markdown Share 的主题必须为 `null`。
+- **强制条件头**：`If-Match` 必须是当前内容 Revision 的强标签
+  `"content:<Share ID>:<Revision>"`（缺失 428；过期/弱标签/通配/访问
+  家族标签 412 `content_conflict`，响应附 `current` 当前快照供合并）；
+  `Idempotency-Key` 必填（缺失/格式非法 400
+  `invalid_idempotency_key`）。同一 Key 命名空间内同标识同输入重放
+  原始结果，同标识换输入或换基线 409 `idempotency_conflict`，结果不
+  可用 410；维护暂停时（连同重放）503 `maintenance`。写完后可经
+  `GET /api/v1/operations/:requestId` 在本 Key 命名空间内确认结果
+  （其他 Key 的命名空间返回 404）。
+- **语义**：真实变更写一条新 Revision（`source: "api-update"`、主体
+  类型 `api_key`）与审计 `page.content.update`，访问 Revision 不受
+  影响；候选与当前完全一致时是无操作成功（不写 Revision），响应
+  `contentChanged: false`。响应回执含原 Share URL、内容 Revision 与
+  强 ETag、访问 Revision 与本次应用的快照；任何响应与错误都不含
+  密码材料。
+- **与可见性解耦**：管理授权不等于公开可见——已下架、已过期的
+  Share 在授权下仍可更新（公开面不变），此操作不恢复任何旧访问
+  Cookie。
+- **能力**：`GET /api/v1/capabilities` 仅当当前凭据为托管 Key 且同
+  时持有 read+update 范围时才列 `share.content.update` 并在
+  `conditionalWrites` 附其 `If-Match` + 幂等键规则；只持其一或 legacy
+  凭据不列。
+
+### 自动编辑授权（`auto_grant_new_share_edit`）
+
+每把托管 Key 一个布尔开关（后台「Share 授权」面板内，PUT
+`/admin/apis/keys/:id/auto-grant`，审计 `api_key.auto_grant`）：
+
+- 默认 `false`；开启要求该 Key 已具备 `share:read` + `share:update`
+  范围，否则 400 `auto_grant_requires_scopes`。
+- 开启后，仅对**该 Key 在开启之后新建**的 Share，在创建事务内原子
+  写入 read+update 授权（不含 publish、不追溯既有 Share）；创建与
+  授权同成同败——授权写入失败则整个创建回滚。幂等创建的重放不
+  产生第二条授权。
+- 轮换保留该开关（与范围、授权一起）；删除 Key 时授权随之清除。
+- 备份覆盖：开关原样随备份走；恢复演练固件含开启开关的 Key、一条
+  update 授权与一条 API 更新操作记录，并对 `can_update` 做篡改
+  判失败（见 [备份与恢复手册](backup-restore.md)）。
