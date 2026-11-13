@@ -5,6 +5,14 @@ const {
   managementRecentStart
 } = require('../utils/management-time');
 const { toAccessRevisionString } = require('../utils/shareAccess');
+const { isPublishingPausedError } = require('../utils/publishing');
+const {
+  acquirePublishingWriteGate,
+  getPublishingWritesPaused,
+  mapPublishingError,
+  setPublishingWritesPaused,
+  withPublishingWrite
+} = require('./publishing');
 
 function buildPageUpdateFields(options, startIndex = 1) {
   const fields = [];
@@ -129,6 +137,14 @@ class PostgresPageRepository {
     return passwordRequired;
   }
 
+  async getPublishingWritesPaused() {
+    return getPublishingWritesPaused(this.pool);
+  }
+
+  async setPublishingWritesPaused({ paused, ip } = {}) {
+    return setPublishingWritesPaused(this.pool, { paused, ip });
+  }
+
   async setHomepagePasswordRequired({ passwordRequired, ip }) {
     if (typeof passwordRequired !== 'boolean') {
       throw new TypeError('passwordRequired must be a boolean');
@@ -138,6 +154,9 @@ class PostgresPageRepository {
 
     try {
       await client.query('BEGIN');
+      // A management write: it passes the publishing maintenance gate
+      // before touching the settings row (T04).
+      await acquirePublishingWriteGate(client);
       const result = await client.query(
         'SELECT homepage_password_required FROM site_settings WHERE id = 1 FOR UPDATE'
       );
@@ -176,14 +195,14 @@ class PostgresPageRepository {
       } catch {
         // Preserve the original transaction error.
       }
-      throw error;
+      throw mapPublishingError(error);
     } finally {
       client.release();
     }
   }
 
   async create(page) {
-    await this.pool.query(
+    await withPublishingWrite(this.pool, client => client.query(
       `
         INSERT INTO pages (
           id, html_content, created_at, password_hash, encrypted_password, is_protected,
@@ -204,7 +223,7 @@ class PostgresPageRepository {
         page.expiresAt || null,
         page.markdownTheme || null
       ]
-    );
+    ));
 
     return { id: page.id };
   }
@@ -299,42 +318,55 @@ class PostgresPageRepository {
   }
 
   async recordViewEvent(id, now = Date.now(), hasAccess = false, accessRevision = null) {
-    // The success path is a single conditional UPDATE against the current
-    // access policy (T01): a protected Share counts only when the caller's
-    // credential revision still equals the stored access_revision. No body
-    // content is read on this path.
+    // A view event is a controlled write: while publishing writes are
+    // paused it is not counted at all and reports 'maintenance' (T04).
+    // Otherwise the success path is a single conditional UPDATE against
+    // the current access policy (T01): a protected Share counts only when
+    // the caller's credential revision still equals the stored
+    // access_revision. No body content is read on this path.
     const revisionParam = accessRevision == null ? null : toAccessRevisionString(accessRevision);
-    const updateResult = await this.pool.query(
-      `
-        UPDATE pages
-        SET view_count = COALESCE(view_count, 0) + 1
-        WHERE id = $1
-          AND (expires_at IS NULL OR expires_at > $2)
-          AND (COALESCE(is_protected, 0) <> 1 OR ($3 AND access_revision = $4::bigint))
-        RETURNING id
-      `,
-      [id, now, hasAccess, revisionParam]
-    );
 
-    if (updateResult.rowCount > 0) {
-      return 'counted';
+    try {
+      return await withPublishingWrite(this.pool, async (client) => {
+        const updateResult = await client.query(
+          `
+            UPDATE pages
+            SET view_count = COALESCE(view_count, 0) + 1
+            WHERE id = $1
+              AND (expires_at IS NULL OR expires_at > $2)
+              AND (COALESCE(is_protected, 0) <> 1 OR ($3 AND access_revision = $4::bigint))
+            RETURNING id
+          `,
+          [id, now, hasAccess, revisionParam]
+        );
+
+        if (updateResult.rowCount > 0) {
+          return 'counted';
+        }
+
+        const stateResult = await client.query(
+          'SELECT is_protected, expires_at FROM pages WHERE id = $1 LIMIT 1',
+          [id]
+        );
+        const page = stateResult.rows[0];
+
+        if (!page) {
+          return 'not_found';
+        }
+
+        if (page.expires_at !== null && Number(page.expires_at) <= now) {
+          return 'expired';
+        }
+
+        return page.is_protected === 1 ? 'protected' : 'not_found';
+      });
+    } catch (error) {
+      if (isPublishingPausedError(error)) {
+        return 'maintenance';
+      }
+
+      throw error;
     }
-
-    const stateResult = await this.pool.query(
-      'SELECT is_protected, expires_at FROM pages WHERE id = $1 LIMIT 1',
-      [id]
-    );
-    const page = stateResult.rows[0];
-
-    if (!page) {
-      return 'not_found';
-    }
-
-    if (page.expires_at !== null && Number(page.expires_at) <= now) {
-      return 'expired';
-    }
-
-    return page.is_protected === 1 ? 'protected' : 'not_found';
   }
 
   async getAdminStats() {
@@ -393,7 +425,7 @@ class PostgresPageRepository {
   }
 
   async updateProtection(id, options) {
-    const result = await this.pool.query(
+    const result = await withPublishingWrite(this.pool, client => client.query(
       `
         UPDATE pages
         SET is_protected = $1, password_hash = $2, encrypted_password = $3,
@@ -401,7 +433,7 @@ class PostgresPageRepository {
         WHERE id = $4
       `,
       [options.isProtected ? 1 : 0, options.passwordHash || null, options.encryptedPassword || null, id]
-    );
+    ));
 
     return result.rowCount > 0;
   }
@@ -414,30 +446,33 @@ class PostgresPageRepository {
     const expected = precondition.expectedAccessRevision == null
       ? null
       : toAccessRevisionString(precondition.expectedAccessRevision);
-    const result = await this.pool.query(
-      `
-        UPDATE pages
-        SET is_protected = $1, password_hash = $2, encrypted_password = $3,
-            access_revision = CASE WHEN $4 THEN access_revision + 1 ELSE access_revision END
-        WHERE id = $5
-          AND ($6::bigint IS NULL OR access_revision = $6::bigint)
-        RETURNING access_revision::text AS access_revision
-      `,
-      [
-        options.isProtected ? 1 : 0,
-        options.passwordHash || null,
-        options.encryptedPassword || null,
-        Boolean(precondition.advanceAccessRevision),
-        id,
-        expected
-      ]
-    );
 
-    if (result.rowCount > 0) {
-      return { status: 'updated', accessRevision: result.rows[0].access_revision };
-    }
+    return withPublishingWrite(this.pool, async (client) => {
+      const result = await client.query(
+        `
+          UPDATE pages
+          SET is_protected = $1, password_hash = $2, encrypted_password = $3,
+              access_revision = CASE WHEN $4 THEN access_revision + 1 ELSE access_revision END
+          WHERE id = $5
+            AND ($6::bigint IS NULL OR access_revision = $6::bigint)
+          RETURNING access_revision::text AS access_revision
+        `,
+        [
+          options.isProtected ? 1 : 0,
+          options.passwordHash || null,
+          options.encryptedPassword || null,
+          Boolean(precondition.advanceAccessRevision),
+          id,
+          expected
+        ]
+      );
 
-    return this.accessPreconditionMiss(id);
+      if (result.rowCount > 0) {
+        return { status: 'updated', accessRevision: result.rows[0].access_revision };
+      }
+
+      return this.accessPreconditionMiss(id, client);
+    });
   }
 
   // Admin save that may combine content fields with access-policy fields
@@ -453,22 +488,24 @@ class PostgresPageRepository {
     params.push(id);
     params.push(expected);
 
-    const result = await this.pool.query(
-      `
-        UPDATE pages
-        SET ${fields.join(', ')}
-        WHERE id = $${nextParamIndex + 1}
-          AND ($${nextParamIndex + 2}::bigint IS NULL OR access_revision = $${nextParamIndex + 2}::bigint)
-        RETURNING access_revision::text AS access_revision
-      `,
-      params
-    );
+    return withPublishingWrite(this.pool, async (client) => {
+      const result = await client.query(
+        `
+          UPDATE pages
+          SET ${fields.join(', ')}
+          WHERE id = $${nextParamIndex + 1}
+            AND ($${nextParamIndex + 2}::bigint IS NULL OR access_revision = $${nextParamIndex + 2}::bigint)
+          RETURNING access_revision::text AS access_revision
+        `,
+        params
+      );
 
-    if (result.rowCount > 0) {
-      return { status: 'updated', accessRevision: result.rows[0].access_revision };
-    }
+      if (result.rowCount > 0) {
+        return { status: 'updated', accessRevision: result.rows[0].access_revision };
+      }
 
-    return this.accessPreconditionMiss(id);
+      return this.accessPreconditionMiss(id, client);
+    });
   }
 
   // Explicit admin revocation entry (T01): advances the access revision
@@ -477,26 +514,29 @@ class PostgresPageRepository {
     const expected = expectedAccessRevision == null
       ? null
       : toAccessRevisionString(expectedAccessRevision);
-    const result = await this.pool.query(
-      `
-        UPDATE pages
-        SET access_revision = access_revision + 1
-        WHERE id = $1
-          AND ($2::bigint IS NULL OR access_revision = $2::bigint)
-        RETURNING access_revision::text AS access_revision
-      `,
-      [id, expected]
-    );
 
-    if (result.rowCount > 0) {
-      return { status: 'updated', accessRevision: result.rows[0].access_revision };
-    }
+    return withPublishingWrite(this.pool, async (client) => {
+      const result = await client.query(
+        `
+          UPDATE pages
+          SET access_revision = access_revision + 1
+          WHERE id = $1
+            AND ($2::bigint IS NULL OR access_revision = $2::bigint)
+          RETURNING access_revision::text AS access_revision
+        `,
+        [id, expected]
+      );
 
-    return this.accessPreconditionMiss(id);
+      if (result.rowCount > 0) {
+        return { status: 'updated', accessRevision: result.rows[0].access_revision };
+      }
+
+      return this.accessPreconditionMiss(id, client);
+    });
   }
 
-  async accessPreconditionMiss(id) {
-    const result = await this.pool.query(
+  async accessPreconditionMiss(id, client = this.pool) {
+    const result = await client.query(
       'SELECT access_revision::text AS access_revision FROM pages WHERE id = $1 LIMIT 1',
       [id]
     );
@@ -514,7 +554,7 @@ class PostgresPageRepository {
       throw new TypeError('isFavorite must be a boolean');
     }
 
-    const result = await this.pool.query(
+    const result = await withPublishingWrite(this.pool, client => client.query(
       `
         WITH existing AS MATERIALIZED (
           SELECT id, is_favorite
@@ -540,7 +580,7 @@ class PostgresPageRepository {
           (SELECT is_favorite FROM existing) AS previous_value
       `,
       [id, isFavorite]
-    );
+    ));
     const row = result.rows[0];
 
     return {
@@ -559,34 +599,40 @@ class PostgresPageRepository {
     }
 
     params.push(id);
-    const result = await this.pool.query(
+    const result = await withPublishingWrite(this.pool, client => client.query(
       `UPDATE pages SET ${fields.join(', ')} WHERE id = $${nextParamIndex}`,
       params
-    );
+    ));
 
     return result.rowCount > 0;
   }
 
   async deletePage(id) {
-    const result = await this.pool.query('DELETE FROM pages WHERE id = $1', [id]);
+    const result = await withPublishingWrite(this.pool, client => client.query(
+      'DELETE FROM pages WHERE id = $1',
+      [id]
+    ));
     return result.rowCount > 0;
   }
 
   async deletePages(ids) {
     if (!Array.isArray(ids) || ids.length === 0) return 0;
-    const result = await this.pool.query('DELETE FROM pages WHERE id = ANY($1)', [ids]);
+    const result = await withPublishingWrite(this.pool, client => client.query(
+      'DELETE FROM pages WHERE id = ANY($1)',
+      [ids]
+    ));
     return result.rowCount;
   }
 
   async createApiKey(apiKey) {
-    const result = await this.pool.query(
+    const result = await withPublishingWrite(this.pool, client => client.query(
       `
         INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at)
         VALUES ($1, $2, $3, $4, $5)
         RETURNING id, name, key_prefix, created_at, last_used_at
       `,
       [apiKey.id, apiKey.name, apiKey.keyHash, apiKey.keyPrefix, apiKey.createdAt]
-    );
+    ));
 
     return result.rows[0];
   }
@@ -613,10 +659,16 @@ class PostgresPageRepository {
   }
 
   async deleteApiKey(id) {
-    const result = await this.pool.query('DELETE FROM api_keys WHERE id = $1', [id]);
+    const result = await withPublishingWrite(this.pool, client => client.query(
+      'DELETE FROM api_keys WHERE id = $1',
+      [id]
+    ));
     return result.rowCount > 0;
   }
 
+  // Deliberately NOT gated (T04): the last-used timestamp is background
+  // bookkeeping for an already-authorized read and must never block or be
+  // blocked by read access during a maintenance window.
   async touchApiKey(id, usedAt = Date.now()) {
     await this.pool.query('UPDATE api_keys SET last_used_at = $2 WHERE id = $1', [id, usedAt]);
   }

@@ -42,7 +42,7 @@ npm run hash-password -- "your-admin-password"
    ```
 
    首次执行应列出 applied；紧接着的第二次必须全部 skipped。命令结束后立即移除该 job 的 secret 和环境变量。
-4. 核对 `public.quickshare_schema_migrations`、`pages`、`audit_logs`、`api_keys`、`site_settings`、记录数和索引。当前迁移台账应包含 `001`、`002`、`003`、`004`；`pages.is_favorite` 必须为 `BOOLEAN NOT NULL DEFAULT FALSE`，且不存在 `NULL`；`pages.access_revision` 必须为 `BIGINT NOT NULL DEFAULT 1`。`site_settings.id=1` 必须存在，`homepage_password_required` 应与迁移前保持一致。
+4. 核对 `public.quickshare_schema_migrations`、`pages`、`audit_logs`、`api_keys`、`site_settings`、记录数和索引。当前迁移台账应包含 `001`、`002`、`003`、`004`、`005`；`pages.is_favorite` 必须为 `BOOLEAN NOT NULL DEFAULT FALSE`，且不存在 `NULL`；`pages.access_revision` 必须为 `BIGINT NOT NULL DEFAULT 1`；`site_settings.publishing_writes_paused` 必须为 `BOOLEAN NOT NULL DEFAULT FALSE`。`site_settings.id=1` 必须存在，`homepage_password_required` 应与迁移前保持一致。涉及写入切换的发布应先按 [写维护手册](maintenance.md) 进入维护并排空在途写入，确认旧部署退出可写路径后再迁移，无法确认则维持维护状态。
 5. 在本地创建已审查的 release commit，但先不要 push `main`；从该 commit 部署 Preview 并完成下方 smoke。
 6. Preview 通过后才把同一 commit push 到 `main`，等待 CI 和 Vercel Production 自动部署，再用 `vercel inspect` 核对自定义域名指向该修订。
 
@@ -51,7 +51,7 @@ npm run hash-password -- "your-admin-password"
 ### 回滚与恢复
 
 - 迁移命令在 `COMMIT` 前失败：整批事务自动回滚，不会留下迁移记录；修正原因后重跑即可，无需数据恢复。
-- 新代码部署后需要回滚：重新部署上一稳定应用版本；当前迁移只做兼容性新增，保留 `site_settings`、`pages.is_favorite`、迁移记录和已经产生的 Favorite Share 数据，不执行破坏性 down migration。
+- 新代码部署后需要回滚：重新部署上一稳定应用版本；当前迁移只做兼容性新增，保留 `site_settings`、`pages.is_favorite`、迁移记录和已经产生的 Favorite Share 数据，不执行破坏性 down migration。注意写维护语义：若实例处于写维护暂停状态，回滚目标必须是认识维护闸的版本，不要回滚到会绕过维护闸写入的旧版本（见 [写维护手册](maintenance.md)）。
 - `COMMIT` 后确认发生数据异常：先停止写入，再从迁移前的 provider branch / PITR 检查点恢复到新分支；核对表结构和记录数后才切换运行时连接。不要在未核验的生产主库上直接覆盖恢复。
 - 完整数据库备份与隔离恢复（区别于后台的清单导出）使用仓库内脚本 `npm run db:backup` / `db:restore` / `db:verify-backup`，流程、清单格式与「恢复库默认不对外服务」的规则见 [备份与恢复](backup-restore.md)。恢复点之后的撤销与清除无法核对时，恢复出的 Share 与 managed Key 不得直接重新上线。
 

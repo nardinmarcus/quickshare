@@ -12,6 +12,10 @@
 //     a legacy 001-003 schema, where the column does not exist)
 //   - a restored-only tamper of access_revision is rejected by verify
 //   - the restored database reports safeToServe: false
+//   - the write-maintenance switch (migration 005, T04) round-trips: the
+//     full-schema fixture is seeded with publishing_writes_paused = true
+//     and the restored database must still be paused (explicitly skipped
+//     on a legacy 001-003 schema, where the column does not exist)
 //
 // No production data is involved; both fixture databases are dropped at the
 // end unless --keep is passed.
@@ -153,6 +157,15 @@ async function seedFixtures(pool, { hasAccessRevision }) {
     'UPDATE public.site_settings SET homepage_password_required = false, updated_at = $1 WHERE id = 1',
     [BASE_TIME + 20]
   );
+
+  if (hasAccessRevision) {
+    // Full schema includes migration 005: seed the instance mid-maintenance
+    // so the drill proves the pause switch itself is backed up and restored
+    // (a restored instance must not silently resume serving writes).
+    await pool.query(
+      'UPDATE public.site_settings SET publishing_writes_paused = true WHERE id = 1'
+    );
+  }
 }
 
 async function main() {
@@ -177,6 +190,8 @@ async function main() {
   if (!hasAccessRevision) {
     skipped.push('access_revision assertions skipped: schema 004 absent (legacy 001-003 fixture)');
     log('SKIP access_revision assertions: schema 004 absent (legacy 001-003 fixture)');
+    skipped.push('publishing_writes_paused assertions skipped: schema 005 absent (legacy 001-003 fixture)');
+    log('SKIP publishing_writes_paused assertions: schema 005 absent (legacy 001-003 fixture)');
   }
 
   if (!process.env.SESSION_SECRET) {
@@ -302,6 +317,16 @@ async function main() {
     check('revocation detector sees the access revoke for drill-revoked', detectedTypes.includes('drill-revoked:access-revoke'));
 
     restorePool = createPostgresPool(restoreUrl, { max: 1 });
+
+    if (hasAccessRevision) {
+      const pausedResult = await restorePool.query(
+        'SELECT publishing_writes_paused FROM public.site_settings WHERE id = 1'
+      );
+      check(
+        'restored database keeps publishing writes paused (migration 005 switch round-trips)',
+        pausedResult.rows[0].publishing_writes_paused === true
+      );
+    }
 
     if (hasAccessRevision) {
       const revisionResult = await restorePool.query(
