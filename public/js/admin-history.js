@@ -14,8 +14,11 @@
   // target discards the previous run's late results instead of painting
   // them over the newer target. T09 adds restore: a Revision can be
   // written forward as the new current Revision behind an explicit
-  // confirmation that names the source and the current version. Purge
-  // remains a later ticket — there is deliberately no purge control.
+  // confirmation that names the source and the current version. T10
+  // adds purge: a non-current Revision can be permanently cleared
+  // behind a verbatim confirmation (the owner types the target
+  // version number); a purged Revision renders as its tombstone —
+  // metadata only, no source, preview, compare or restore actions.
 
   const section = document.getElementById('history-section');
   if (!section) return;
@@ -53,6 +56,13 @@
   const restoreStatus = document.getElementById('history-restore-status');
   const restoreConfirmBtn = document.getElementById('history-restore-confirm');
   const restoreCancelBtn = document.getElementById('history-restore-cancel');
+  const purgePanel = document.getElementById('history-purge');
+  const purgeTitle = document.getElementById('history-purge-title');
+  const purgeStatus = document.getElementById('history-purge-status');
+  const purgeTargetEl = document.getElementById('history-purge-target');
+  const purgeConfirmInput = document.getElementById('history-purge-confirm-input');
+  const purgeConfirmBtn = document.getElementById('history-purge-confirm');
+  const purgeCancelBtn = document.getElementById('history-purge-cancel');
   const pageDataElement = document.getElementById('page-data');
 
   const PAGE_LIMIT = 20;
@@ -141,58 +151,88 @@
       title.textContent = 'Revision ' + item.revision;
       heading.appendChild(title);
 
-      if (currentRevision && item.revision === currentRevision) {
+      const isCurrent = Boolean(currentRevision && item.revision === currentRevision);
+      const isPurged = item.purged === true;
+
+      if (isCurrent) {
         const badge = document.createElement('span');
         badge.className = 'admin-status public';
         badge.textContent = '当前版本';
         heading.appendChild(badge);
       }
 
+      if (isPurged) {
+        const badge = document.createElement('span');
+        badge.className = 'admin-status protected';
+        badge.textContent = '已清除';
+        heading.appendChild(badge);
+      }
+
       const meta = document.createElement('div');
       meta.className = 'admin-history-item-meta';
       meta.textContent = item.createdAtText + ' · 来源：' + sourceLabel(item)
-        + (item.restoredFromRevision ? ' · 恢复自 Revision ' + item.restoredFromRevision : '');
+        + (item.restoredFromRevision ? ' · 恢复自 Revision ' + item.restoredFromRevision : '')
+        + (isPurged ? ' · 内容已于 ' + (item.purgedAtText || '') + ' 清除' : '');
 
       main.append(heading, meta);
 
       const actions = document.createElement('div');
       actions.className = 'admin-history-item-actions';
 
-      const previewBtn = document.createElement('button');
-      previewBtn.type = 'button';
-      previewBtn.className = 'cyber-btn cyber-btn-secondary';
-      previewBtn.textContent = '预览';
-      previewBtn.addEventListener('click', function () {
-        showPreview(item.revision);
-      });
+      // A tombstone offers no content actions at all: its source and
+      // preview answer 410, it cannot be restored from, and comparing
+      // it would compare nothing. Only its metadata remains.
+      if (!isPurged) {
+        const previewBtn = document.createElement('button');
+        previewBtn.type = 'button';
+        previewBtn.className = 'cyber-btn cyber-btn-secondary';
+        previewBtn.textContent = '预览';
+        previewBtn.addEventListener('click', function () {
+          showPreview(item.revision);
+        });
 
-      const sourceBtn = document.createElement('button');
-      sourceBtn.type = 'button';
-      sourceBtn.className = 'cyber-btn cyber-btn-secondary';
-      sourceBtn.textContent = '源码';
-      sourceBtn.addEventListener('click', function () {
-        showSource(item.revision);
-      });
+        const sourceBtn = document.createElement('button');
+        sourceBtn.type = 'button';
+        sourceBtn.className = 'cyber-btn cyber-btn-secondary';
+        sourceBtn.textContent = '源码';
+        sourceBtn.addEventListener('click', function () {
+          showSource(item.revision);
+        });
 
-      const restoreBtn = document.createElement('button');
-      restoreBtn.type = 'button';
-      restoreBtn.className = 'cyber-btn cyber-btn-secondary';
-      restoreBtn.textContent = '恢复';
-      restoreBtn.addEventListener('click', function () {
-        showRestore(item.revision);
-      });
+        const restoreBtn = document.createElement('button');
+        restoreBtn.type = 'button';
+        restoreBtn.className = 'cyber-btn cyber-btn-secondary';
+        restoreBtn.textContent = '恢复';
+        restoreBtn.addEventListener('click', function () {
+          showRestore(item.revision);
+        });
 
-      const compareBtn = document.createElement('button');
-      compareBtn.type = 'button';
-      compareBtn.className = 'cyber-btn cyber-btn-secondary';
-      compareBtn.dataset.compareToggle = item.revision;
-      compareBtn.setAttribute('aria-pressed', 'false');
-      compareBtn.textContent = '加入对比';
-      compareBtn.addEventListener('click', function () {
-        toggleCompareSelection(item.revision);
-      });
+        const compareBtn = document.createElement('button');
+        compareBtn.type = 'button';
+        compareBtn.className = 'cyber-btn cyber-btn-secondary';
+        compareBtn.dataset.compareToggle = item.revision;
+        compareBtn.setAttribute('aria-pressed', 'false');
+        compareBtn.textContent = '加入对比';
+        compareBtn.addEventListener('click', function () {
+          toggleCompareSelection(item.revision);
+        });
 
-      actions.append(previewBtn, sourceBtn, restoreBtn, compareBtn);
+        actions.append(previewBtn, sourceBtn, restoreBtn, compareBtn);
+
+        // The current version can never be purged (the server also
+        // refuses with 409), so it gets no purge control either.
+        if (!isCurrent) {
+          const purgeBtn = document.createElement('button');
+          purgeBtn.type = 'button';
+          purgeBtn.className = 'cyber-btn cyber-btn-secondary';
+          purgeBtn.textContent = '清除';
+          purgeBtn.addEventListener('click', function () {
+            showPurge(item.revision);
+          });
+          actions.appendChild(purgeBtn);
+        }
+      }
+
       row.append(main, actions);
       listEl.appendChild(row);
     });
@@ -663,6 +703,132 @@
     }
   }
 
+  // --- Purge (T10) ----------------------------------------------------------
+  //
+  // Purging permanently clears one non-current Revision's stored
+  // payload and leaves a content-free tombstone. The confirmation is
+  // verbatim: the owner types the target Revision number, the confirm
+  // button stays disabled until the input matches it exactly, and the
+  // request repeats it as confirmRevision, which the server checks
+  // against the path target again. The panel names the exact Share and
+  // version; the copy promises only that the copy of this version
+  // stored online here is cleared — identical fragments in other
+  // Revisions, offline backups and downloaded copies are out of scope,
+  // and the client never claims otherwise. A repeat purge of the same
+  // version is a no-op success on the server, so a lost response can
+  // simply be confirmed again.
+  let pendingPurge = null;
+  let purgeBusy = false;
+
+  function renderPurgePanel() {
+    if (!pendingPurge) {
+      purgePanel.hidden = true;
+      return;
+    }
+
+    purgePanel.hidden = false;
+    purgeTitle.textContent = 'Revision ' + pendingPurge.revision + ' · 分享 ' + shareId;
+    purgeTargetEl.textContent = 'Revision ' + pendingPurge.revision;
+    purgeConfirmBtn.disabled = purgeBusy
+      || purgeConfirmInput.value.trim() !== pendingPurge.revision;
+  }
+
+  function showPurge(revision) {
+    pendingPurge = { revision };
+    purgeStatus.textContent = '';
+    purgeConfirmInput.value = '';
+    renderPurgePanel();
+    purgePanel.scrollIntoView({ block: 'nearest' });
+    purgeConfirmInput.focus();
+  }
+
+  function hidePurge() {
+    pendingPurge = null;
+    purgeConfirmInput.value = '';
+    renderPurgePanel();
+  }
+
+  async function confirmPurge() {
+    if (!pendingPurge || purgeBusy) return;
+
+    const revision = pendingPurge.revision;
+
+    if (purgeConfirmInput.value.trim() !== revision) {
+      purgeStatus.textContent = '输入的版本号与要清除的版本不一致，清除未执行。';
+      return;
+    }
+
+    purgeBusy = true;
+    purgeConfirmBtn.disabled = true;
+    purgeStatus.textContent = '正在清除…';
+
+    try {
+      const response = await fetch(apiUrl('/revisions/' + encodeURIComponent(revision) + '/purge'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-CSRF-Token': csrfToken()
+        },
+        body: JSON.stringify({ confirmRevision: revision })
+      });
+      const data = await response.json().catch(() => null);
+
+      if (response.status === 409) {
+        purgeStatus.textContent = '不能清除当前版本，清除未执行。';
+        return;
+      }
+
+      if (response.status === 404) {
+        purgeStatus.textContent = '该版本不存在，清除未执行。';
+        return;
+      }
+
+      if (response.status === 400) {
+        purgeStatus.textContent = '清除确认不匹配，清除未执行。请重新输入版本号确认。';
+        return;
+      }
+
+      if (response.status === 503) {
+        purgeStatus.textContent = '发布维护中，暂时无法清除，请稍后再试。';
+        return;
+      }
+
+      if (!response.ok || !data || !data.success) {
+        throw new Error((data && data.error) || '清除失败');
+      }
+
+      hidePurge();
+
+      // A comparison selecting the purged version can no longer run.
+      const selectionIndex = selectedRevisions.indexOf(revision);
+
+      if (selectionIndex >= 0) {
+        selectedRevisions.splice(selectionIndex, 1);
+        invalidateCompare();
+        compareResult.hidden = true;
+      }
+
+      // Refresh the list first, then report: loadList owns the status
+      // line while it runs and would wipe a message set before it.
+      await loadList();
+
+      statusEl.textContent = data.alreadyPurged
+        ? 'Revision ' + revision + ' 的内容此前已被清除，仅保留墓碑记录。'
+        : 'Revision ' + revision + ' 保存在线上的内容已永久清除，仅保留墓碑记录。';
+    } catch (error) {
+      // A network failure leaves the outcome unknown: purge is
+      // idempotent on the server, so confirming again is safe and
+      // reports the already-purged state instead of failing.
+      purgeStatus.textContent = '网络异常，清除结果未知。可再次点击确认清除：重复清除不会产生额外影响。';
+    } finally {
+      purgeBusy = false;
+      if (pendingPurge) {
+        renderPurgePanel();
+      }
+    }
+  }
+
   // --- Wiring ---------------------------------------------------------------
 
   retryBtn.addEventListener('click', loadList);
@@ -670,6 +836,12 @@
   restoreConfirmBtn.addEventListener('click', confirmRestore);
 
   restoreCancelBtn.addEventListener('click', hideRestore);
+
+  purgeConfirmBtn.addEventListener('click', confirmPurge);
+
+  purgeCancelBtn.addEventListener('click', hidePurge);
+
+  purgeConfirmInput.addEventListener('input', renderPurgePanel);
 
   prevBtn.addEventListener('click', function () {
     if (listPageIndex <= 0) return;

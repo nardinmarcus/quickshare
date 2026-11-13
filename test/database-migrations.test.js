@@ -56,7 +56,8 @@ test('migrations contain every runtime table, column, index, and site setting', 
     '005_publishing_writes_paused.sql',
     '006_api_key_credential_version.sql',
     '007_share_revisions.sql',
-    '008_publish_operations.sql'
+    '008_publish_operations.sql',
+    '009_share_revision_purge.sql'
   ]);
   assert.match(migrations[0].sql, /CREATE TABLE IF NOT EXISTS public\.pages/i);
   assert.match(migrations[0].sql, /ADD COLUMN IF NOT EXISTS password_hash/i);
@@ -100,6 +101,12 @@ test('migrations contain every runtime table, column, index, and site setting', 
   assert.match(migrations[7].sql, /result_state TEXT NOT NULL DEFAULT 'committed'/i);
   assert.match(migrations[7].sql, /idx_publish_operations_result_share/i);
   assert.doesNotMatch(migrations[7].sql, /REFERENCES public\.pages/i);
+  // T10: the purge tombstone becomes representable — the payload and
+  // its derived hash become nullable together, and purged_at records
+  // the clearing. Nothing else about the snapshot table changes.
+  assert.match(migrations[8].sql, /ALTER COLUMN html_content DROP NOT NULL/i);
+  assert.match(migrations[8].sql, /ALTER COLUMN snapshot_hash DROP NOT NULL/i);
+  assert.match(migrations[8].sql, /ADD COLUMN IF NOT EXISTS purged_at BIGINT/i);
 });
 
 test('migration runner applies pending files once and releases its client', async () => {
@@ -116,8 +123,8 @@ test('migration runner applies pending files once and releases its client', asyn
   const second = await runMigrations(fake.pool, { logger: { info() {} } });
   const migrationSql = loadMigrations().map(migration => migration.sql.trim());
 
-  assert.deepEqual(first, { applied: ['001', '002', '003', '004', '005', '006', '007', '008'], skipped: [] });
-  assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007', '008'] });
+  assert.deepEqual(first, { applied: ['001', '002', '003', '004', '005', '006', '007', '008', '009'], skipped: [] });
+  assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007', '008', '009'] });
   for (const sql of migrationSql) {
     assert.equal(fake.queries.filter(query => query.sql === sql).length, 1);
   }

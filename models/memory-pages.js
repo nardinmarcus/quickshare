@@ -130,7 +130,8 @@ class MemoryPageRepository {
       actor_type: meta.actorType || 'owner',
       actor_id: meta.actorId ?? null,
       restored_from_revision: meta.restoredFromRevision ?? null,
-      created_at: capturedAt
+      created_at: capturedAt,
+      purged_at: null
     };
 
     if (!this.revisions.has(page.id)) {
@@ -198,7 +199,8 @@ class MemoryPageRepository {
         created_at: record.created_at,
         source: record.source,
         actor_type: record.actor_type,
-        restored_from_revision: record.restored_from_revision ?? null
+        restored_from_revision: record.restored_from_revision ?? null,
+        purged_at: record.purged_at ?? null
       }))
     };
   }
@@ -335,7 +337,9 @@ class MemoryPageRepository {
 
   // Replay-time availability/policy view of a committed record's result:
   // whether the Share still exists, its CURRENT access revision and
-  // protection flag, and whether the result Revision snapshot survives.
+  // protection flag, and whether the result Revision snapshot payload
+  // survives. A purged snapshot (T10) leaves a tombstone record behind,
+  // but its payload is gone, so the version counts as cleared here.
   resultShareState(record) {
     const page = this.pages.get(record.resultShareId);
 
@@ -343,12 +347,14 @@ class MemoryPageRepository {
       return null;
     }
 
+    const snapshot = this.revisions.get(record.resultShareId)?.get(record.resultRevision);
+
     return {
       exists: true,
       accessRevision: toAccessRevisionString(page.access_revision),
       isProtected: page.is_protected === 1,
       revisionExists: Boolean(
-        this.revisions.get(record.resultShareId)?.has(record.resultRevision)
+        snapshot && snapshot.purged_at == null && snapshot.html_content != null
       )
     };
   }
@@ -675,6 +681,84 @@ class MemoryPageRepository {
     });
 
     return operation ? this.runOperationExclusive(operation, execute) : execute();
+  }
+
+  // Permanent purge of one non-current Revision (T10, issue #34): the
+  // memory counterpart of the Postgres method, under the same contract.
+  // The publishing gate serializes the whole judgment + tombstone write
+  // against saves and restores (this Adapter's Share-lock analogue), so
+  // the target is re-verified as non-current with no concurrent write in
+  // flight. The snapshot record keeps its metadata and gains purged_at
+  // while its payload fields — body, title, description, theme and the
+  // payload-derived hash — are cleared; the encrypted receipts of every
+  // committed operation whose result is exactly this version are
+  // scrubbed in the same step. Repeating the purge writes nothing.
+  async purgeRevision({ id, revision, ip = null }) {
+    const revisionString = toContentRevisionString(revision);
+
+    if (revisionString === null) {
+      return { status: 'revision_not_found', revision: null };
+    }
+
+    return this.publishingGate.runWrite(async () => {
+      const page = this.pages.get(id);
+
+      if (!page) {
+        return { status: 'not_found', revision: revisionString };
+      }
+
+      const snapshot = this.revisions.get(id)?.get(revisionString);
+
+      if (!snapshot) {
+        return { status: 'revision_not_found', revision: revisionString };
+      }
+
+      if (snapshot.purged_at != null || snapshot.html_content == null) {
+        return {
+          status: 'already_purged',
+          revision: revisionString,
+          purgedAt: snapshot.purged_at ?? null
+        };
+      }
+
+      if (contentRevisionMatches(page.current_revision, revisionString)) {
+        return {
+          status: 'current_revision',
+          revision: revisionString,
+          currentRevision: toContentRevisionString(page.current_revision)
+        };
+      }
+
+      const purgedAt = Date.now();
+
+      snapshot.html_content = null;
+      snapshot.title = null;
+      snapshot.description = null;
+      snapshot.markdown_theme = null;
+      snapshot.snapshot_hash = null;
+      snapshot.purged_at = purgedAt;
+
+      let scrubbedReceipts = 0;
+
+      for (const record of this.operations.values()) {
+        if (record.resultShareId === id
+          && record.resultRevision === revisionString
+          && record.resultState === 'committed'
+          && record.receiptEncrypted) {
+          record.receiptEncrypted = null;
+          scrubbedReceipts += 1;
+        }
+      }
+
+      await this.createAuditLog({
+        action: 'page.revision.purge',
+        pageId: id,
+        details: JSON.stringify({ revision: revisionString, purgedAt }),
+        ip
+      });
+
+      return { status: 'purged', revision: revisionString, purgedAt, scrubbedReceipts };
+    });
   }
 
   // Operation status lookup within one credential namespace (T08). A

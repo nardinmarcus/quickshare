@@ -123,6 +123,19 @@ function snapshotPayloadOf(fields) {
   };
 }
 
+// A snapshot whose payload the owner permanently purged (T10, issue
+// #34) is a tombstone: the row keeps its metadata (Share, revision,
+// capture time, provenance, purge time) but its payload fields — body,
+// title, description, theme and the payload-derived snapshot hash —
+// are NULL. purged_at is the authoritative marker; a NULL body on its
+// own is treated the same way, because an intact snapshot always
+// carries its exact bytes.
+function isSnapshotPurged(snapshot) {
+  return Boolean(snapshot)
+    && (snapshot.purged_at !== null && snapshot.purged_at !== undefined
+      || snapshot.html_content === null || snapshot.html_content === undefined);
+}
+
 // Byte-exact snapshot comparison. No newline or whitespace normalization
 // is ever applied: a body stored with CRLF endings differs from the same
 // text with LF endings, and an unchanged candidate compares equal only
@@ -160,6 +173,7 @@ module.exports = {
   contentRevisionMatches,
   contentSnapshotsEqual,
   formatContentEtag,
+  isSnapshotPurged,
   nextContentRevision,
   parseContentIfMatch,
   snapshotPayloadOf,

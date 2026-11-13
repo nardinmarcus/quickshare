@@ -107,9 +107,10 @@ test('history meta is newest-first, metadata-only, and consistent with the store
 
   for (const item of revisions) {
     // Metadata only: the paginated query must not surface bodies.
+    // purged_at (T10) is metadata — the tombstone marker belongs here.
     assert.deepEqual(
       Object.keys(item).sort(),
-      ['actor_type', 'created_at', 'restored_from_revision', 'revision', 'source']
+      ['actor_type', 'created_at', 'purged_at', 'restored_from_revision', 'revision', 'source']
     );
     assert.equal(typeof item.revision, 'string');
     assert.equal(item.restored_from_revision, null);

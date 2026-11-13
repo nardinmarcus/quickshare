@@ -124,6 +124,12 @@ function buildReport({ manifest, receipt, snapshot, pageRows, auditRows, revisio
     contentRevisions: {
       tracked: Boolean(snapshot.pages && snapshot.pages.hasContentRevision),
       snapshots: (revisionRows || []).length,
+      // Tombstones (T10): purged snapshots whose payload stayed purged.
+      // The count is informational; the purge-shape rules themselves
+      // are enforced by the integrity evaluation above.
+      purgedSnapshots: (revisionRows || []).filter(
+        row => row.purged_at !== null && row.purged_at !== undefined
+      ).length,
       sharesWithBaseline: (pageRows || []).filter(
         row => row.current_revision !== null && row.current_revision !== undefined
       ).length

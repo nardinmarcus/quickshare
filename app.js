@@ -28,6 +28,7 @@ const {
 const { projectPublicMetadata } = require('./utils/publicProjection');
 const {
   formatContentEtag,
+  isSnapshotPurged,
   parseContentIfMatch,
   toContentRevisionString
 } = require('./utils/contentRevision');
@@ -2001,7 +2002,7 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
 // the owner; the preview renders that snapshot through the same
 // renderer + sandbox pipeline as the public view, without embedding any
 // admin credential in the framed document. (Restore arrives with T09
-// below; purge remains a later ticket.)
+// below; purge with T10.)
 
 function historyRevisionMetaJson(record) {
   return {
@@ -2012,7 +2013,16 @@ function historyRevisionMetaJson(record) {
     actorType: record.actor_type,
     restoredFromRevision: record.restored_from_revision == null
       ? null
-      : toContentRevisionString(record.restored_from_revision)
+      : toContentRevisionString(record.restored_from_revision),
+    // A purged Revision (T10) keeps its tombstone metadata — version,
+    // capture time, provenance, purge time — and nothing else. Meta
+    // records carry no html_content key at all, so the payload check
+    // compares against null exactly (an absent key is undefined).
+    purged: record.purged_at != null || record.html_content === null,
+    purgedAt: record.purged_at == null ? null : Number(record.purged_at),
+    purgedAtText: record.purged_at == null
+      ? null
+      : formatManagementDateTime(record.purged_at)
   };
 }
 
@@ -2063,6 +2073,19 @@ app.get('/admin/pages/:id/revisions/:revision', requireDashboardApiAdmin, async 
       return res.status(404).json({ success: false, error: 'Revision not found' });
     }
 
+    // A purged Revision (T10) is a tombstone: its metadata stays
+    // listed, but its content is gone for good — 410, never an empty
+    // or fabricated snapshot.
+    if (isSnapshotPurged(snapshot)) {
+      return res.status(410).json({
+        success: false,
+        error: '该版本内容已被清除',
+        code: 'revision_unavailable',
+        retryable: false,
+        revision: historyRevisionMetaJson(snapshot)
+      });
+    }
+
     return res.json({
       success: true,
       revision: {
@@ -2093,6 +2116,14 @@ app.get('/admin/pages/:id/revisions/:revision/preview', requireDashboardAdmin, a
         title: 'Page Not Found',
         page: 'error-page',
         message: 'The requested revision does not exist'
+      });
+    }
+
+    if (isSnapshotPurged(snapshot)) {
+      return res.status(410).render('error', {
+        title: 'Content Purged',
+        page: 'error-page',
+        message: '该版本内容已被永久清除，无法预览'
       });
     }
 
@@ -2303,6 +2334,117 @@ app.post('/admin/pages/:id/revisions/:revision/restore', requireDashboardApiAdmi
     return res.status(500).json({
       success: false,
       error: 'Failed to restore revision'
+    });
+  }
+});
+
+// Permanent purge of one non-current Revision (T10, issue #34). This
+// is the one explicitly destructive exception to snapshot immutability
+// and it is deliberately narrow: dashboard session + CSRF only (no
+// API-Key endpoint, no CLI), and the request must confirm its target
+// verbatim — the body's confirmRevision must equal the path Revision —
+// so a stale page or a stray request cannot clear the wrong version.
+// The current Revision can never be purged (409). The repository
+// re-verifies non-current under the Share row lock, clears the payload
+// and the sensitive receipts of that version in the same transaction,
+// and leaves a content-free tombstone; repeating the purge is a no-op
+// success. The success copy promises only what is true: the copy of
+// that version stored online here is gone — identical fragments in
+// other Revisions, offline backups and copies a recipient already
+// downloaded are NOT covered.
+app.post('/admin/pages/:id/revisions/:revision/purge', requireDashboardApiAdmin, parseSmallJsonBody, requireDashboardCsrf, async (req, res) => {
+  try {
+    const targetRevision = toContentRevisionString(req.params.revision);
+
+    if (targetRevision === null) {
+      return res.status(404).json({
+        success: false,
+        error: 'Revision not found',
+        code: 'revision_not_found',
+        retryable: false
+      });
+    }
+
+    const confirmRevision = typeof req.body?.confirmRevision === 'string'
+      ? req.body.confirmRevision.trim()
+      : '';
+
+    if (confirmRevision !== targetRevision) {
+      return res.status(400).json({
+        success: false,
+        error: '清除确认不匹配：请准确确认要清除的分享与版本',
+        code: 'purge_confirmation_required',
+        retryable: false
+      });
+    }
+
+    const page = await pageRepository.getById(req.params.id);
+
+    // Write maintenance outranks the purge like every other write
+    // (T04): while paused the purge is refused at the gate.
+    if (page
+      && typeof pageRepository.getPublishingWritesPaused === 'function'
+      && await pageRepository.getPublishingWritesPaused()) {
+      return sendPublishingMaintenance(res);
+    }
+
+    const ip = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const result = await pageRepository.purgeRevision({
+      id: req.params.id,
+      revision: targetRevision,
+      ip
+    });
+
+    if (result.status === 'not_found') {
+      return res.status(404).json({
+        success: false,
+        error: 'Share not found'
+      });
+    }
+
+    if (result.status === 'revision_not_found') {
+      return res.status(404).json({
+        success: false,
+        error: 'Revision not found',
+        code: 'revision_not_found',
+        retryable: false
+      });
+    }
+
+    if (result.status === 'current_revision') {
+      return res.status(409).json({
+        success: false,
+        error: '不能清除当前版本',
+        code: 'revision_is_current',
+        contentRevision: result.currentRevision,
+        retryable: false
+      });
+    }
+
+    if (result.status === 'already_purged') {
+      return res.json({
+        success: true,
+        alreadyPurged: true,
+        shareId: req.params.id,
+        revision: result.revision,
+        purgedAt: result.purgedAt
+      });
+    }
+
+    return res.json({
+      success: true,
+      shareId: req.params.id,
+      revision: result.revision,
+      purgedAt: result.purgedAt
+    });
+  } catch (error) {
+    console.error('Purge revision failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to purge revision'
     });
   }
 });
