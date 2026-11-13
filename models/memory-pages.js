@@ -162,6 +162,34 @@ class MemoryPageRepository {
       .map(record => ({ ...record }));
   }
 
+  // Paginated history metadata for the admin history browser (T07,
+  // issue #31). Newest Revision first; the page contains metadata only —
+  // version, capture time, operation source and restore provenance — and
+  // never the snapshot body, so listing history cannot become an
+  // unbounded content aggregation. Revision numbers stay decimal strings
+  // end to end (no Number conversion, no BIGINT rounding).
+  async listContentRevisionMeta(id, { limit = 20, offset = 0 } = {}) {
+    const byRevision = this.revisions.get(id);
+
+    if (!byRevision) {
+      return { total: 0, revisions: [] };
+    }
+
+    const sorted = Array.from(byRevision.values())
+      .sort((left, right) => (BigInt(left.revision) < BigInt(right.revision) ? 1 : -1));
+
+    return {
+      total: sorted.length,
+      revisions: sorted.slice(offset, offset + limit).map(record => ({
+        revision: record.revision,
+        created_at: record.created_at,
+        source: record.source,
+        actor_type: record.actor_type,
+        restored_from_revision: record.restored_from_revision ?? null
+      }))
+    };
+  }
+
   // The baseline DML of the parent spec's rollout (issue #24 §11 step 4),
   // for this Adapter: every Share without a baseline gains Revision 1
   // capturing its current fields, with the capture time of THIS run. A

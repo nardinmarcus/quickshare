@@ -922,12 +922,37 @@ class PostgresPageRepository {
                created_at
         FROM share_revisions
         WHERE share_id = $1
-        ORDER BY revision ASC
+        ORDER BY share_revisions.revision ASC
       `,
       [id]
     );
 
     return result.rows;
+  }
+
+  // Paginated history metadata for the admin history browser (T07,
+  // issue #31). Newest Revision first; the query deliberately never
+  // selects html_content, so listing history cannot become an unbounded
+  // content aggregation. Revision numbers are cast to text in SQL and
+  // stay decimal strings end to end (no BIGINT rounding in JS).
+  async listContentRevisionMeta(id, { limit = 20, offset = 0 } = {}) {
+    const countResult = await this.pool.query(
+      'SELECT COUNT(*)::int AS total FROM share_revisions WHERE share_id = $1',
+      [id]
+    );
+    const result = await this.pool.query(
+      `
+        SELECT revision::text AS revision, created_at, source, actor_type,
+               restored_from_revision::text AS restored_from_revision
+        FROM share_revisions
+        WHERE share_id = $1
+        ORDER BY share_revisions.revision DESC
+        LIMIT $2 OFFSET $3
+      `,
+      [id, limit, offset]
+    );
+
+    return { total: countResult.rows[0].total, revisions: result.rows };
   }
 
   // The baseline DML of the parent spec's rollout (issue #24 §11 step 4)
