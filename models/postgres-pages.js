@@ -713,6 +713,158 @@ class PostgresPageRepository {
     throw lastError || new Error('Failed to create a unique page id');
   }
 
+  // Idempotent admin content save (T09, issue #33): same contract as
+  // the memory Adapter. Under the fixed lock order (maintenance gate,
+  // then the per-request operation lock, then the Share row) the
+  // committed operation is resolved BEFORE any version precondition is
+  // judged — a digest-matching record replays its original result even
+  // though the request's If-Match has since gone stale — and only a
+  // first execution reaches applyPageUpdate. A successful save (changed
+  // or unchanged) records its result in the same transaction as the
+  // projection, snapshot and audit; failures record nothing.
+  async saveContentIdempotent({ id, options, precondition = {}, operation = null }) {
+    return withPublishingWrite(this.pool, async (client) => {
+      if (operation) {
+        await acquireOperationLock(client, operation);
+
+        const resolved = await resolveExistingOperation(client, operation);
+
+        if (resolved) {
+          return resolved;
+        }
+      }
+
+      const result = await this.applyPageUpdate(client, id, options, precondition);
+
+      if (!operation || result.status !== 'updated') {
+        return { outcome: 'executed', result };
+      }
+
+      const record = {
+        ...operation,
+        resultShareId: id,
+        resultRevision: result.contentRevision,
+        resultAccessRevision: result.accessRevision,
+        receipt: {
+          kind: 'share.content.update',
+          shareId: id,
+          contentChanged: result.contentChanged === true,
+          contentRevision: result.contentRevision,
+          accessRevision: result.accessRevision
+        },
+        resultState: 'committed',
+        createdAt: Date.now()
+      };
+      await insertOperationRow(client, record);
+
+      return { outcome: 'executed', result, operation: record };
+    });
+  }
+
+  // Idempotent history restore (T09, issue #33): same contract as the
+  // memory Adapter. The Share row is locked first; the source snapshot
+  // is then read and judged inside the same transaction, so the source
+  // read, the current-version precondition, the projection write, the
+  // new snapshot (with its restore provenance), the audit and the
+  // operation record commit — or roll back — together. Only content
+  // fields move: URL, password, expiry, access_revision, Key
+  // authorization, publish state, favorite and view count are never
+  // written here. A snapshot whose payload was cleared (a purge
+  // tombstone) is not a valid restore source.
+  async restoreRevision({ id, sourceRevision, precondition = {}, operation = null }) {
+    const sourceRevisionString = toContentRevisionString(sourceRevision);
+
+    return withPublishingWrite(this.pool, async (client) => {
+      if (operation) {
+        await acquireOperationLock(client, operation);
+
+        const resolved = await resolveExistingOperation(client, operation);
+
+        if (resolved) {
+          return resolved;
+        }
+      }
+
+      const selectResult = await client.query(
+        'SELECT * FROM pages WHERE id = $1 FOR UPDATE',
+        [id]
+      );
+      const row = selectResult.rows[0];
+
+      if (!row) {
+        return { outcome: 'executed', result: { status: 'not_found' } };
+      }
+
+      await ensureContentBaseline(client, row);
+
+      const snapshotResult = await client.query(
+        `
+          SELECT html_content, code_type, title, description, markdown_theme
+          FROM public.share_revisions
+          WHERE share_id = $1 AND revision = $2::bigint
+          LIMIT 1
+        `,
+        [id, sourceRevisionString]
+      );
+      const source = snapshotResult.rows[0];
+
+      if (!source) {
+        return { outcome: 'executed', result: { status: 'source_not_found' } };
+      }
+
+      if (source.html_content === null) {
+        return { outcome: 'executed', result: { status: 'source_unavailable' } };
+      }
+
+      const previousRevision = toContentRevisionString(row.current_revision);
+      const result = await this.applyPageUpdate(client, id, {
+        htmlContent: source.html_content,
+        title: source.title,
+        description: source.description,
+        markdownTheme: source.markdown_theme
+      }, {
+        ...precondition,
+        expectedAccessRevision: null,
+        advanceAccessRevision: false,
+        contentMeta: {
+          source: 'admin-restore',
+          actorType: 'owner',
+          actorId: null,
+          restoredFromRevision: sourceRevisionString
+        }
+      }, row);
+      const fullResult = {
+        ...result,
+        sourceRevision: sourceRevisionString,
+        previousRevision
+      };
+
+      if (!operation || result.status !== 'updated') {
+        return { outcome: 'executed', result: fullResult };
+      }
+
+      const record = {
+        ...operation,
+        resultShareId: id,
+        resultRevision: result.contentRevision,
+        resultAccessRevision: result.accessRevision,
+        receipt: {
+          kind: 'share.restore',
+          shareId: id,
+          sourceRevision: sourceRevisionString,
+          previousRevision,
+          contentRevision: result.contentRevision,
+          contentChanged: result.contentChanged === true
+        },
+        resultState: 'committed',
+        createdAt: Date.now()
+      };
+      await insertOperationRow(client, record);
+
+      return { outcome: 'executed', result: fullResult, operation: record };
+    });
+  }
+
   // Operation status lookup within one credential namespace (T08). A
   // read: it never passes the publishing gate, so an operation can be
   // confirmed while writes are paused for maintenance.
@@ -1012,6 +1164,22 @@ class PostgresPageRepository {
   // Callers that pass no content precondition (internal legacy writes)
   // still cannot bypass Revision: their content changes snapshot too.
   async updatePageWithPreconditions(id, options, precondition = {}) {
+    return withPublishingWrite(
+      this.pool,
+      (client) => this.applyPageUpdate(client, id, options, precondition)
+    );
+  }
+
+  // The transactional core of updatePageWithPreconditions, for callers
+  // that already hold a publishing-write transaction (the idempotent
+  // save/restore paths, T09). `lockedRow`, when supplied, is the pages
+  // row the caller already selected FOR UPDATE in this transaction.
+  // Two extra precondition markers serve the idempotent paths, where the
+  // caller's precondition state is judged inside the transaction — after
+  // an operation replay has had its chance: contentPreconditionMissing /
+  // contentPreconditionInvalid for the content family and
+  // accessPreconditionMissing for the access family.
+  async applyPageUpdate(client, id, options, precondition = {}, lockedRow = null) {
     const expectedAccess = precondition.expectedAccessRevision == null
       ? null
       : toAccessRevisionString(precondition.expectedAccessRevision);
@@ -1019,12 +1187,16 @@ class PostgresPageRepository {
       ? null
       : toContentRevisionString(precondition.expectedContentRevision);
 
-    return withPublishingWrite(this.pool, async (client) => {
-      const selectResult = await client.query(
-        'SELECT * FROM pages WHERE id = $1 FOR UPDATE',
-        [id]
-      );
-      const row = selectResult.rows[0];
+    {
+      let row = lockedRow;
+
+      if (!row) {
+        const selectResult = await client.query(
+          'SELECT * FROM pages WHERE id = $1 FOR UPDATE',
+          [id]
+        );
+        row = selectResult.rows[0];
+      }
 
       if (!row) {
         return {
@@ -1039,6 +1211,16 @@ class PostgresPageRepository {
       await ensureContentBaseline(client, row);
 
       const currentAccessRevision = toAccessRevisionString(row.access_revision);
+
+      if (precondition.accessPreconditionMissing) {
+        return {
+          status: 'access_precondition_required',
+          accessRevision: currentAccessRevision,
+          contentRevision: toContentRevisionString(row.current_revision),
+          contentChanged: false,
+          current: null
+        };
+      }
 
       if (expectedAccess !== null && !accessRevisionMatches(currentAccessRevision, expectedAccess)) {
         return {
@@ -1059,6 +1241,26 @@ class PostgresPageRepository {
         markdownTheme: options.markdownTheme !== undefined ? (options.markdownTheme || null) : currentFields.markdownTheme
       };
       const currentContentRevision = toContentRevisionString(row.current_revision);
+
+      if (precondition.contentPreconditionMissing) {
+        return {
+          status: 'precondition_required',
+          accessRevision: currentAccessRevision,
+          contentRevision: currentContentRevision,
+          contentChanged: false,
+          current: { ...currentFields }
+        };
+      }
+
+      if (precondition.contentPreconditionInvalid) {
+        return {
+          status: 'content_conflict',
+          accessRevision: currentAccessRevision,
+          contentRevision: currentContentRevision,
+          contentChanged: false,
+          current: { ...currentFields }
+        };
+      }
 
       if (expectedContent !== null && !contentRevisionMatches(currentContentRevision, expectedContent)) {
         return {
@@ -1148,7 +1350,10 @@ class PostgresPageRepository {
             JSON.stringify({
               fromRevision: currentContentRevision,
               toRevision: nextRevision,
-              source: (precondition.contentMeta || {}).source || 'admin-edit'
+              source: (precondition.contentMeta || {}).source || 'admin-edit',
+              ...((precondition.contentMeta || {}).restoredFromRevision != null
+                ? { restoredFromRevision: (precondition.contentMeta || {}).restoredFromRevision }
+                : {})
             }),
             precondition.ip || null,
             Date.now()
@@ -1165,7 +1370,7 @@ class PostgresPageRepository {
         contentChanged,
         current: null
       };
-    });
+    }
   }
 
   // Admin save that may combine content fields with access-policy fields

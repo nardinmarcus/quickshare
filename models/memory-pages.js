@@ -378,7 +378,12 @@ class MemoryPageRepository {
     };
   }
 
-  storeOperationRecord(operation, { resultShareId, receipt }) {
+  storeOperationRecord(operation, {
+    resultShareId,
+    resultRevision = '1',
+    resultAccessRevision = '1',
+    receipt
+  }) {
     const record = {
       actorNamespace: operation.actorNamespace,
       requestId: operation.requestId,
@@ -386,8 +391,10 @@ class MemoryPageRepository {
       targetId: operation.targetId ?? null,
       requestHmac: operation.requestHmac,
       resultShareId,
-      resultRevision: '1',
-      resultAccessRevision: '1',
+      resultRevision: resultRevision == null ? null : String(resultRevision),
+      resultAccessRevision: resultAccessRevision == null
+        ? null
+        : String(resultAccessRevision),
       receiptEncrypted: receipt ? encryptSecret(JSON.stringify(receipt)) : null,
       resultState: 'committed',
       createdAt: Date.now()
@@ -533,6 +540,138 @@ class MemoryPageRepository {
       }
 
       throw lastError || new Error('Failed to create a unique page id');
+    });
+
+    return operation ? this.runOperationExclusive(operation, execute) : execute();
+  }
+
+  // Idempotent admin content save (T09, issue #33). The operation is
+  // resolved BEFORE any version precondition is judged: a committed
+  // record whose digest matches replays its original result even though
+  // the request's If-Match has since gone stale, and only a first
+  // execution reaches the precondition checks in updatePageUnlocked.
+  // The result of a successful save — changed or unchanged — is recorded
+  // in the same gated step as the projection, snapshot and audit, so the
+  // record and the Revision it names commit atomically. Failed saves
+  // (conflict, missing precondition, not found) record nothing, so a
+  // later retry of the same identifier re-executes instead of replaying
+  // a failure.
+  async saveContentIdempotent({ id, options, precondition = {}, operation = null }) {
+    const execute = () => this.publishingGate.runWrite(async () => {
+      if (operation) {
+        const resolved = this.resolveExistingOperation(operation);
+
+        if (resolved) {
+          return resolved;
+        }
+      }
+
+      const result = await this.updatePageUnlocked(id, options, precondition);
+
+      if (!operation || result.status !== 'updated') {
+        return { outcome: 'executed', result };
+      }
+
+      const record = this.storeOperationRecord(operation, {
+        resultShareId: id,
+        resultRevision: result.contentRevision,
+        resultAccessRevision: result.accessRevision,
+        receipt: {
+          kind: 'share.content.update',
+          shareId: id,
+          contentChanged: result.contentChanged === true,
+          contentRevision: result.contentRevision,
+          accessRevision: result.accessRevision
+        }
+      });
+
+      return { outcome: 'executed', result, operation: record };
+    });
+
+    return operation ? this.runOperationExclusive(operation, execute) : execute();
+  }
+
+  // Idempotent history restore (T09, issue #33): the chosen snapshot
+  // becomes the current content as a NEW Revision whose snapshot records
+  // its restore source; restoring a snapshot identical to the current
+  // one is a successful no-op (contentChanged: false, no new Revision)
+  // that still records its operation result. Source read, current
+  // version judgment, projection write, new snapshot, audit and the
+  // operation record all happen in this one gated step. A restore
+  // touches content fields only: URL, password, expiry, access_revision,
+  // Key authorization, publish state, favorite and view count are never
+  // written here. A snapshot whose payload was cleared (a purge
+  // tombstone) is not a valid restore source.
+  async restoreRevision({ id, sourceRevision, precondition = {}, operation = null }) {
+    const execute = () => this.publishingGate.runWrite(async () => {
+      if (operation) {
+        const resolved = this.resolveExistingOperation(operation);
+
+        if (resolved) {
+          return resolved;
+        }
+      }
+
+      const page = this.pages.get(id);
+
+      if (!page) {
+        return { outcome: 'executed', result: { status: 'not_found' } };
+      }
+
+      this.ensureContentBaseline(page);
+
+      const source = this.revisions.get(id)?.get(toContentRevisionString(sourceRevision));
+
+      if (!source) {
+        return { outcome: 'executed', result: { status: 'source_not_found' } };
+      }
+
+      if (source.purged === true || source.purged_at != null || source.html_content == null) {
+        return { outcome: 'executed', result: { status: 'source_unavailable' } };
+      }
+
+      const previousRevision = toContentRevisionString(page.current_revision);
+      const result = await this.updatePageUnlocked(id, {
+        htmlContent: source.html_content,
+        title: source.title,
+        description: source.description,
+        markdownTheme: source.markdown_theme
+      }, {
+        ...precondition,
+        expectedAccessRevision: null,
+        advanceAccessRevision: false,
+        contentMeta: {
+          source: 'admin-restore',
+          actorType: 'owner',
+          actorId: null,
+          restoredFromRevision: toContentRevisionString(sourceRevision)
+        }
+      });
+      const fullResult = {
+        ...result,
+        sourceRevision: toContentRevisionString(sourceRevision),
+        previousRevision
+      };
+
+      if (!operation || result.status !== 'updated') {
+        return { outcome: 'executed', result: fullResult };
+      }
+
+      const record = this.storeOperationRecord(operation, {
+        resultShareId: id,
+        resultRevision: result.contentRevision,
+        resultAccessRevision: result.accessRevision,
+        receipt: {
+          kind: 'share.restore',
+          shareId: id,
+          sourceRevision: toContentRevisionString(sourceRevision),
+          previousRevision,
+          contentRevision: result.contentRevision,
+          contentChanged: result.contentChanged === true
+        }
+      });
+
+      return { outcome: 'executed', result: fullResult, operation: record };
     });
 
     return operation ? this.runOperationExclusive(operation, execute) : execute();
@@ -878,7 +1017,22 @@ class MemoryPageRepository {
   // Callers that pass no content precondition (internal legacy writes)
   // still cannot bypass Revision: their content changes snapshot too.
   async updatePageWithPreconditions(id, options, precondition = {}) {
-    return this.publishingGate.runWrite(async () => {
+    return this.publishingGate.runWrite(
+      () => this.updatePageUnlocked(id, options, precondition)
+    );
+  }
+
+  // The gated step of updatePageWithPreconditions, callable by callers
+  // that already hold the gate (the idempotent save/restore paths, T09).
+  // Two extra precondition markers serve those paths, where the caller's
+  // precondition state must be judged INSIDE the transaction — after an
+  // operation replay has had its chance — rather than by a route-level
+  // pre-read: contentPreconditionMissing (a content save arrived without
+  // its If-Match) and contentPreconditionInvalid (the tag was malformed),
+  // plus accessPreconditionMissing for a combined save missing its
+  // expectedAccessRevision.
+  async updatePageUnlocked(id, options, precondition = {}) {
+    {
       const page = this.pages.get(id);
 
       if (!page) {
@@ -894,6 +1048,16 @@ class MemoryPageRepository {
       this.ensureContentBaseline(page);
 
       const currentAccessRevision = toAccessRevisionString(page.access_revision);
+
+      if (precondition.accessPreconditionMissing) {
+        return {
+          status: 'access_precondition_required',
+          accessRevision: currentAccessRevision,
+          contentRevision: toContentRevisionString(page.current_revision),
+          contentChanged: false,
+          current: null
+        };
+      }
 
       if (precondition.expectedAccessRevision != null
         && !accessRevisionMatches(currentAccessRevision, precondition.expectedAccessRevision)) {
@@ -915,6 +1079,26 @@ class MemoryPageRepository {
         markdownTheme: options.markdownTheme !== undefined ? (options.markdownTheme || null) : currentFields.markdownTheme
       };
       const currentContentRevision = toContentRevisionString(page.current_revision);
+
+      if (precondition.contentPreconditionMissing) {
+        return {
+          status: 'precondition_required',
+          accessRevision: currentAccessRevision,
+          contentRevision: currentContentRevision,
+          contentChanged: false,
+          current: { ...currentFields }
+        };
+      }
+
+      if (precondition.contentPreconditionInvalid) {
+        return {
+          status: 'content_conflict',
+          accessRevision: currentAccessRevision,
+          contentRevision: currentContentRevision,
+          contentChanged: false,
+          current: { ...currentFields }
+        };
+      }
 
       if (precondition.expectedContentRevision != null
         && !contentRevisionMatches(currentContentRevision, precondition.expectedContentRevision)) {
@@ -952,7 +1136,10 @@ class MemoryPageRepository {
           details: JSON.stringify({
             fromRevision: currentContentRevision,
             toRevision: page.current_revision,
-            source: (precondition.contentMeta || {}).source || 'admin-edit'
+            source: (precondition.contentMeta || {}).source || 'admin-edit',
+            ...((precondition.contentMeta || {}).restoredFromRevision != null
+              ? { restoredFromRevision: (precondition.contentMeta || {}).restoredFromRevision }
+              : {})
           }),
           ip: precondition.ip || null
         });
@@ -969,7 +1156,7 @@ class MemoryPageRepository {
         contentChanged,
         current: null
       };
-    });
+    }
   }
 
   // Admin save that may combine content fields with access-policy fields

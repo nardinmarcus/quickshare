@@ -203,6 +203,77 @@
     updateRevisionDisplay();
   }
 
+  // --- Save operation intent (T09) ------------------------------------
+  //
+  // The page keeps one pending save intent: { requestId, intentKey },
+  // where the key fingerprints the candidate draft AND the baseline ETag
+  // it is saved against. Resubmitting the same draft against the same
+  // baseline — a repeated click that escaped the disabled buttons, or an
+  // explicit retry after the response was lost — reuses the requestId,
+  // so the server replays the committed result instead of minting a
+  // second Revision. Editing the draft, or explicitly re-saving onto a
+  // newer baseline after a conflict, is a new intent with a fresh id.
+  // The intent survives a page reload through sessionStorage; an error
+  // status never rotates it silently and never adopts a new baseline.
+  const saveIntentStorageKey = 'quickshare-admin-save-intent:' + (originalData.id || '');
+  let saveIntent = null;
+
+  try {
+    const stored = window.sessionStorage.getItem(saveIntentStorageKey);
+    if (stored) {
+      saveIntent = JSON.parse(stored);
+    }
+  } catch (error) {
+    saveIntent = null;
+  }
+
+  function persistSaveIntent() {
+    try {
+      if (saveIntent) {
+        window.sessionStorage.setItem(saveIntentStorageKey, JSON.stringify(saveIntent));
+      } else {
+        window.sessionStorage.removeItem(saveIntentStorageKey);
+      }
+    } catch (error) {
+      // Storage unavailable: the in-memory intent still applies.
+    }
+  }
+
+  function saveIntentKeyFor(candidate, etag) {
+    const fingerprint = window.PublishIntent
+      ? window.PublishIntent.draftKeyFor({
+        htmlContent: candidate.htmlContent || '',
+        codeType: originalData.codeType || '',
+        title: candidate.title == null ? '' : String(candidate.title),
+        description: candidate.description == null ? '' : String(candidate.description),
+        markdownTheme: candidate.markdownTheme || ''
+      })
+      : 'draft-unavailable';
+    return fingerprint + '|' + (etag || '');
+  }
+
+  function requestIdForSave(candidate, etag) {
+    const intentKey = saveIntentKeyFor(candidate, etag);
+
+    if (saveIntent && saveIntent.intentKey === intentKey && saveIntent.requestId) {
+      return saveIntent.requestId;
+    }
+
+    saveIntent = {
+      requestId: window.PublishIntent
+        ? window.PublishIntent.generateRequestId()
+        : 'save-' + Date.now() + '-' + Math.random().toString(36).slice(2),
+      intentKey
+    };
+    persistSaveIntent();
+    return saveIntent.requestId;
+  }
+
+  function clearSaveIntent() {
+    saveIntent = null;
+    persistSaveIntent();
+  }
+
   function finishSuccessfulSave(page, message) {
     mergeSavedPage(page);
     updateViewMode(page);
@@ -392,6 +463,8 @@
 
   async function saveContent(candidate, etagOverride) {
     setSaving(true);
+    const etag = etagOverride || originalData.contentEtag || '';
+    const requestId = requestIdForSave(candidate, etag);
 
     try {
       const response = await fetch('/admin/pages/' + encodeURIComponent(originalData.id), {
@@ -400,11 +473,22 @@
           'Content-Type': 'application/json',
           Accept: 'application/json',
           'X-CSRF-Token': csrfToken(),
-          'If-Match': etagOverride || originalData.contentEtag || ''
+          'If-Match': etag,
+          'Idempotency-Key': requestId
         },
         body: JSON.stringify(candidate)
       });
       const data = await response.json();
+
+      if (response.status === 409 && data.code === 'idempotency_conflict') {
+        // The identifier was already committed for a different request:
+        // drop the intent so the next explicit save starts a fresh
+        // operation. The draft and the baseline are left untouched —
+        // nothing was saved by this request.
+        clearSaveIntent();
+        Toast.error('该保存操作标识已用于其他请求，操作标识已重置，请检查后重新保存');
+        return;
+      }
 
       if (response.status === 412 && data.code === 'content_conflict' && data.current) {
         // The candidate is preserved exactly as submitted (including its
@@ -419,12 +503,42 @@
         throw new Error(data.error || '保存内容失败');
       }
 
+      clearSaveIntent();
       hideContentConflict();
+
+      if (data.replayed) {
+        // This response is the recorded result of this same save: the
+        // candidate IS the committed content (the server replayed, it
+        // did not re-apply anything and created no second Revision), so
+        // only the version baseline advances to the recorded result.
+        const replayedPage = {
+          ...originalData,
+          title: candidate.title,
+          description: candidate.description,
+          htmlContent: candidate.htmlContent,
+          markdownTheme: candidate.markdownTheme !== undefined
+            ? candidate.markdownTheme
+            : originalData.markdownTheme,
+          currentRevision: data.contentRevision,
+          contentEtag: data.contentEtag,
+          accessRevision: data.accessRevision || originalData.accessRevision
+        };
+        finishSuccessfulSave(
+          replayedPage,
+          data.contentChanged ? '内容已保存（此前提交已生效）' : '内容没有变化（此前提交已生效）'
+        );
+        return;
+      }
+
       finishSuccessfulSave(
         data.page,
         data.contentChanged ? '内容已保存' : '内容没有变化'
       );
     } catch (error) {
+      // A network failure leaves the outcome unknown: the intent (and
+      // the draft) are kept, so an explicit retry of the same draft
+      // replays the committed result instead of creating a second
+      // version. Nothing is ever retried automatically.
       Toast.error(error.message || '保存内容失败');
     } finally {
       setSaving(false);
@@ -633,6 +747,23 @@
       await saveContent(conflictState.candidate, conflictState.contentEtag);
     });
   }
+
+  // A history restore (T09) advances the current Revision behind this
+  // page's back: adopt the new baseline so the revision display and any
+  // later save use the restored version's ETag. An open draft is never
+  // overwritten — only the version it will be saved against moves.
+  window.addEventListener('quickshare:revision-changed', function (event) {
+    const detail = event.detail || {};
+
+    if (detail.contentRevision) {
+      originalData = {
+        ...originalData,
+        currentRevision: detail.contentRevision,
+        contentEtag: detail.contentEtag || originalData.contentEtag
+      };
+      updateRevisionDisplay();
+    }
+  });
 
   editForm.addEventListener('submit', async function (event) {
     event.preventDefault();
