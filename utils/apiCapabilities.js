@@ -18,6 +18,14 @@
 // update grant is additionally required at call time and, being
 // per-resource data, is never part of this document. The publish scope
 // remains stored vocabulary for a later ticket, not a capability.
+//
+// Granted history reads and conditional restore arrived with T14 (issue
+// #38): the history list and single-Revision read join the read family
+// under the read scope, and the restore joins the update as a
+// conditional write under the same read+update conjunction — it reuses
+// the dashboard restore transaction in the Key's own namespace. There
+// is NO history-purge operation for Keys anywhere in this document:
+// purge stays an owner dashboard action (T10).
 
 const config = require('../config');
 const { getMarkdownThemeOptions } = require('./markdownThemeCatalog');
@@ -73,6 +81,36 @@ const SHARE_CONTENT_UPDATE_OPERATION = Object.freeze({
   id: 'share.content.update',
   method: 'PUT',
   path: '/api/v1/shares/:id/content'
+});
+
+// Granted history reads (T14): Revision metadata pagination and the
+// canonical single-Revision snapshot GET. Both are read operations —
+// the list returns metadata only (purge tombstones included, payloads
+// never aggregated), and the single read returns one snapshot or 410
+// for a tombstone. The single read carries the snapshot's own strong
+// content ETag, like the current-content read.
+const SHARE_HISTORY_READ_OPERATION = Object.freeze({
+  id: 'share.history.read',
+  method: 'GET',
+  path: '/api/v1/shares/:id/revisions',
+  pagination: Object.freeze({ defaultLimit: 20, maxLimit: 100, offset: true })
+});
+
+const SHARE_REVISION_READ_OPERATION = Object.freeze({
+  id: 'share.revision.read',
+  method: 'GET',
+  path: '/api/v1/shares/:id/revisions/:revision'
+});
+
+// Granted history restore (T14): makes one granted Revision current
+// again through the dashboard's restore transaction. Requires the read
+// AND update scopes plus an update grant on the target, the concrete
+// content If-Match of the CURRENT Revision and an Idempotency-Key; the
+// body names only the source `revision`.
+const SHARE_RESTORE_OPERATION = Object.freeze({
+  id: 'share.restore',
+  method: 'POST',
+  path: '/api/v1/shares/:id/restore'
 });
 
 const CONNECTION_OPERATIONS = Object.freeze([
@@ -149,6 +187,17 @@ function buildCapabilities({ credentialType, scopes } = {}) {
     readOperations.push({ ...SHARE_STATE_READ_OPERATION });
   }
 
+  // Granted history reads (T14): read scope only — a publish grant
+  // never implies read, so a publish-only credential is not told about
+  // history either.
+  if (isManaged && hasScope('share:read')) {
+    readOperations.push({
+      ...SHARE_HISTORY_READ_OPERATION,
+      pagination: { ...SHARE_HISTORY_READ_OPERATION.pagination }
+    });
+    readOperations.push({ ...SHARE_REVISION_READ_OPERATION });
+  }
+
   operations.push(...readOperations);
 
   // Granted content update (T13): advertised only when the credential
@@ -159,6 +208,9 @@ function buildCapabilities({ credentialType, scopes } = {}) {
 
   if (canUpdate) {
     operations.push({ ...SHARE_CONTENT_UPDATE_OPERATION });
+    // Granted history restore (T14): the same conjunction as the
+    // content update — restore is a content edit (parent spec #24 §6).
+    operations.push({ ...SHARE_RESTORE_OPERATION });
   }
 
   const conditionalWrites = [];
@@ -225,6 +277,33 @@ function buildCapabilities({ credentialType, scopes } = {}) {
       // letting it land under an authorization that no longer exists.
       credentialRecheck: { status: 401, code: 'api_key_credential_changed', retryable: false }
     });
+
+    conditionalWrites.push({
+      operation: SHARE_RESTORE_OPERATION.id,
+      requiresIfMatch: true,
+      requiresIdempotencyKey: true,
+      // Mandatory idempotent restore (T14): the same protocol as the
+      // content update, because the restore IS the dashboard restore
+      // transaction — the Idempotency-Key is required, the If-Match
+      // names the CURRENT content Revision the caller based its
+      // decision on (the restore family's tag is the current content
+      // tag, never an access tag), a same-identifier retry replays
+      // the committed result, a different source or baseline under
+      // the same identifier is a 409, and a purged source answers
+      // 410 revision_unavailable instead of restoring.
+      idempotency: {
+        header: 'Idempotency-Key',
+        required: true,
+        replaySupported: true,
+        keyFormat: '16-128 characters of [A-Za-z0-9_-]; clients generate a UUID v4',
+        confirmationOperation: 'operation.status',
+        conflict: { status: 409, code: 'idempotency_conflict', retryable: false },
+        resultUnavailable: { status: 410, code: 'operation_result_unavailable', retryable: false },
+        invalidKey: { status: 400, code: 'invalid_idempotency_key', retryable: false }
+      },
+      maintenanceRefusal: { status: 503, code: 'maintenance', retryable: true },
+      credentialRecheck: { status: 401, code: 'api_key_credential_changed', retryable: false }
+    });
   }
 
   const document = {
@@ -251,12 +330,16 @@ function buildCapabilities({ credentialType, scopes } = {}) {
     // naming the current representation, or `*`, answers 304. Both
     // responses are private/no-store; no shared cache is involved.
     document.conditionalReads = readOperations
-      .filter(operation => operation.id !== SHARE_LIST_OPERATION.id)
+      .filter(operation => operation.id !== SHARE_LIST_OPERATION.id
+        && operation.id !== SHARE_HISTORY_READ_OPERATION.id)
       .map(operation => ({
         operation: operation.id,
-        etagFormat: operation.id === SHARE_CONTENT_READ_OPERATION.id
-          ? '"content:<Share ID>:<Revision>"'
-          : '"access:<Share ID>:<Access Revision>"',
+        // The single-Revision read (T14) carries the snapshot's own
+        // content-family tag — the tag names the Revision it covers,
+        // current or not — exactly like the current-content read.
+        etagFormat: operation.id === SHARE_STATE_READ_OPERATION.id
+          ? '"access:<Share ID>:<Access Revision>"'
+          : '"content:<Share ID>:<Revision>"',
         ifNoneMatch: { weakComparison: true, notModifiedStatus: 304 },
         cacheControl: 'private, no-store'
       }));
@@ -282,7 +365,10 @@ module.exports = {
   SHARE_CONTENT_READ_OPERATION,
   SHARE_CONTENT_UPDATE_OPERATION,
   SHARE_CREATE_OPERATION,
+  SHARE_HISTORY_READ_OPERATION,
   SHARE_LIST_OPERATION,
+  SHARE_RESTORE_OPERATION,
+  SHARE_REVISION_READ_OPERATION,
   SHARE_STATE_READ_OPERATION,
   buildCapabilities,
   getMarkdownThemePresetIds,
