@@ -4,6 +4,52 @@ const {
   managementDateRange,
   managementRecentStart
 } = require('../utils/management-time');
+const { toAccessRevisionString } = require('../utils/shareAccess');
+
+function buildPageUpdateFields(options, startIndex = 1) {
+  const fields = [];
+  const params = [];
+  let paramIndex = startIndex;
+
+  if (options.title !== undefined) {
+    fields.push(`title = $${paramIndex}`);
+    params.push(options.title || null);
+    paramIndex += 1;
+  }
+  if (options.description !== undefined) {
+    fields.push(`description = $${paramIndex}`);
+    params.push(options.description || null);
+    paramIndex += 1;
+  }
+  if (options.htmlContent !== undefined) {
+    fields.push(`html_content = $${paramIndex}`);
+    params.push(options.htmlContent);
+    paramIndex += 1;
+  }
+  if (options.expiresAt !== undefined) {
+    fields.push(`expires_at = $${paramIndex}`);
+    params.push(options.expiresAt || null);
+    paramIndex += 1;
+  }
+  if (options.isProtected !== undefined) {
+    fields.push(`is_protected = $${paramIndex}`);
+    params.push(options.isProtected ? 1 : 0);
+    paramIndex += 1;
+    fields.push(`password_hash = $${paramIndex}`);
+    params.push(options.passwordHash || null);
+    paramIndex += 1;
+    fields.push(`encrypted_password = $${paramIndex}`);
+    params.push(options.encryptedPassword || null);
+    paramIndex += 1;
+  }
+  if (options.markdownTheme !== undefined) {
+    fields.push(`markdown_theme = $${paramIndex}`);
+    params.push(options.markdownTheme || null);
+    paramIndex += 1;
+  }
+
+  return { fields, params, nextParamIndex: paramIndex };
+}
 
 function buildAdminPageFilter(options = {}) {
   const conditions = [];
@@ -141,9 +187,9 @@ class PostgresPageRepository {
       `
         INSERT INTO pages (
           id, html_content, created_at, password_hash, encrypted_password, is_protected,
-          code_type, title, description, expires_at, markdown_theme
+          code_type, title, description, expires_at, markdown_theme, access_revision
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1)
       `,
       [
         page.id,
@@ -252,17 +298,22 @@ class PostgresPageRepository {
     return Number.parseInt(result.rows[0]?.count || '0', 10);
   }
 
-  async recordViewEvent(id, now = Date.now(), hasAccess = false) {
+  async recordViewEvent(id, now = Date.now(), hasAccess = false, accessRevision = null) {
+    // The success path is a single conditional UPDATE against the current
+    // access policy (T01): a protected Share counts only when the caller's
+    // credential revision still equals the stored access_revision. No body
+    // content is read on this path.
+    const revisionParam = accessRevision == null ? null : toAccessRevisionString(accessRevision);
     const updateResult = await this.pool.query(
       `
         UPDATE pages
         SET view_count = COALESCE(view_count, 0) + 1
         WHERE id = $1
           AND (expires_at IS NULL OR expires_at > $2)
-          AND (COALESCE(is_protected, 0) <> 1 OR $3)
+          AND (COALESCE(is_protected, 0) <> 1 OR ($3 AND access_revision = $4::bigint))
         RETURNING id
       `,
-      [id, now, hasAccess]
+      [id, now, hasAccess, revisionParam]
     );
 
     if (updateResult.rowCount > 0) {
@@ -343,11 +394,119 @@ class PostgresPageRepository {
 
   async updateProtection(id, options) {
     const result = await this.pool.query(
-      'UPDATE pages SET is_protected = $1, password_hash = $2, encrypted_password = $3 WHERE id = $4',
+      `
+        UPDATE pages
+        SET is_protected = $1, password_hash = $2, encrypted_password = $3,
+            access_revision = access_revision + 1
+        WHERE id = $4
+      `,
       [options.isProtected ? 1 : 0, options.passwordHash || null, options.encryptedPassword || null, id]
     );
 
     return result.rowCount > 0;
+  }
+
+  // Conditional protection write used by the access-policy routes (T01).
+  // The WHERE clause pins the expected revision, so the compare-and-swap and
+  // the optional revision advance happen in one atomic UPDATE; two racing
+  // writers cannot both succeed on the same expected revision.
+  async updateProtectionWithAccessRevision(id, options, precondition = {}) {
+    const expected = precondition.expectedAccessRevision == null
+      ? null
+      : toAccessRevisionString(precondition.expectedAccessRevision);
+    const result = await this.pool.query(
+      `
+        UPDATE pages
+        SET is_protected = $1, password_hash = $2, encrypted_password = $3,
+            access_revision = CASE WHEN $4 THEN access_revision + 1 ELSE access_revision END
+        WHERE id = $5
+          AND ($6::bigint IS NULL OR access_revision = $6::bigint)
+        RETURNING access_revision::text AS access_revision
+      `,
+      [
+        options.isProtected ? 1 : 0,
+        options.passwordHash || null,
+        options.encryptedPassword || null,
+        Boolean(precondition.advanceAccessRevision),
+        id,
+        expected
+      ]
+    );
+
+    if (result.rowCount > 0) {
+      return { status: 'updated', accessRevision: result.rows[0].access_revision };
+    }
+
+    return this.accessPreconditionMiss(id);
+  }
+
+  // Admin save that may combine content fields with access-policy fields
+  // (T01). Same compare-and-swap discipline as the protection write.
+  async updatePageWithAccessPolicy(id, options, precondition = {}) {
+    const { fields, params, nextParamIndex } = buildPageUpdateFields(options);
+    const expected = precondition.expectedAccessRevision == null
+      ? null
+      : toAccessRevisionString(precondition.expectedAccessRevision);
+
+    fields.push(`access_revision = CASE WHEN $${nextParamIndex} THEN access_revision + 1 ELSE access_revision END`);
+    params.push(Boolean(precondition.advanceAccessRevision));
+    params.push(id);
+    params.push(expected);
+
+    const result = await this.pool.query(
+      `
+        UPDATE pages
+        SET ${fields.join(', ')}
+        WHERE id = $${nextParamIndex + 1}
+          AND ($${nextParamIndex + 2}::bigint IS NULL OR access_revision = $${nextParamIndex + 2}::bigint)
+        RETURNING access_revision::text AS access_revision
+      `,
+      params
+    );
+
+    if (result.rowCount > 0) {
+      return { status: 'updated', accessRevision: result.rows[0].access_revision };
+    }
+
+    return this.accessPreconditionMiss(id);
+  }
+
+  // Explicit admin revocation entry (T01): advances the access revision
+  // without touching the password, expiry, or content.
+  async revokeAccess(id, expectedAccessRevision) {
+    const expected = expectedAccessRevision == null
+      ? null
+      : toAccessRevisionString(expectedAccessRevision);
+    const result = await this.pool.query(
+      `
+        UPDATE pages
+        SET access_revision = access_revision + 1
+        WHERE id = $1
+          AND ($2::bigint IS NULL OR access_revision = $2::bigint)
+        RETURNING access_revision::text AS access_revision
+      `,
+      [id, expected]
+    );
+
+    if (result.rowCount > 0) {
+      return { status: 'updated', accessRevision: result.rows[0].access_revision };
+    }
+
+    return this.accessPreconditionMiss(id);
+  }
+
+  async accessPreconditionMiss(id) {
+    const result = await this.pool.query(
+      'SELECT access_revision::text AS access_revision FROM pages WHERE id = $1 LIMIT 1',
+      [id]
+    );
+    const row = result.rows[0];
+
+    if (!row) {
+      return { status: 'not_found', accessRevision: null };
+    }
+
+    return { status: 'conflict', accessRevision: row.access_revision };
   }
 
   async setFavorite(id, isFavorite) {
@@ -393,46 +552,7 @@ class PostgresPageRepository {
   }
 
   async updatePage(id, options) {
-    const fields = [];
-    const params = [];
-    let paramIndex = 1;
-
-    if (options.title !== undefined) {
-      fields.push(`title = $${paramIndex}`);
-      params.push(options.title || null);
-      paramIndex += 1;
-    }
-    if (options.description !== undefined) {
-      fields.push(`description = $${paramIndex}`);
-      params.push(options.description || null);
-      paramIndex += 1;
-    }
-    if (options.htmlContent !== undefined) {
-      fields.push(`html_content = $${paramIndex}`);
-      params.push(options.htmlContent);
-      paramIndex += 1;
-    }
-    if (options.expiresAt !== undefined) {
-      fields.push(`expires_at = $${paramIndex}`);
-      params.push(options.expiresAt || null);
-      paramIndex += 1;
-    }
-    if (options.isProtected !== undefined) {
-      fields.push(`is_protected = $${paramIndex}`);
-      params.push(options.isProtected ? 1 : 0);
-      paramIndex += 1;
-      fields.push(`password_hash = $${paramIndex}`);
-      params.push(options.passwordHash || null);
-      paramIndex += 1;
-      fields.push(`encrypted_password = $${paramIndex}`);
-      params.push(options.encryptedPassword || null);
-      paramIndex += 1;
-    }
-    if (options.markdownTheme !== undefined) {
-      fields.push(`markdown_theme = $${paramIndex}`);
-      params.push(options.markdownTheme || null);
-      paramIndex += 1;
-    }
+    const { fields, params, nextParamIndex } = buildPageUpdateFields(options);
 
     if (fields.length === 0) {
       return true;
@@ -440,7 +560,7 @@ class PostgresPageRepository {
 
     params.push(id);
     const result = await this.pool.query(
-      `UPDATE pages SET ${fields.join(', ')} WHERE id = $${paramIndex}`,
+      `UPDATE pages SET ${fields.join(', ')} WHERE id = $${nextParamIndex}`,
       params
     );
 

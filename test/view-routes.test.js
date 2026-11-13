@@ -104,6 +104,7 @@ test('public view works without expiry and before a future expiry', async () => 
     title: 'future-expiry',
     description: null,
     isProtected: false,
+    accessRevision: '1',
     markdownTheme: null
   });
 });

@@ -218,15 +218,18 @@ test('empty passwords keep automatic generation and existing protected admin pas
   });
   const protectResponse = await jsonRequest('/api/pages/protect-auto/protect', 'POST', {
     isProtected: true,
-    password: ''
+    password: '',
+    expectedAccessRevision: '1'
   });
   const adminAutoResponse = await jsonRequest('/admin/pages/admin-auto', 'PUT', {
     isProtected: true,
-    password: ''
+    password: '',
+    expectedAccessRevision: '1'
   });
   const adminKeepResponse = await jsonRequest('/admin/pages/admin-keep', 'PUT', {
     isProtected: true,
-    password: ''
+    password: '',
+    expectedAccessRevision: '1'
   });
 
   assert.match(browserCreateResponse.body.password, /^\d{6}$/);

@@ -21,6 +21,11 @@ const {
 } = require('./utils/markdownThemeCatalog');
 const { derivePageTitle } = require('./utils/pageTitle');
 const {
+  accessRevisionMatches,
+  parseExpectedAccessRevision,
+  toAccessRevisionString
+} = require('./utils/shareAccess');
+const {
   formatManagementDateTime,
   toManagementDateTimeLocal
 } = require('./utils/management-time');
@@ -619,8 +624,14 @@ function pageAccessCookieName(id) {
   return `page_access_${id}`;
 }
 
-function setPageAccessCookie(res, id) {
-  const token = createScopedToken('page-access', { id }, PAGE_ACCESS_TTL_MS);
+function setPageAccessCookie(res, id, accessRevision) {
+  // The signed cookie binds the Share ID with the access revision that was
+  // current when the password was verified (T01). Advancing the revision
+  // therefore revokes this cookie immediately, even before its 24h TTL ends.
+  const token = createScopedToken('page-access', {
+    id,
+    accessRevision: toAccessRevisionString(accessRevision)
+  }, PAGE_ACCESS_TTL_MS);
 
   res.cookie(pageAccessCookieName(id), token, {
     maxAge: PAGE_ACCESS_TTL_MS,
@@ -630,11 +641,65 @@ function setPageAccessCookie(res, id) {
   });
 }
 
-function hasPageAccess(req, id) {
+function getPageAccess(req, id) {
   const token = req.cookies?.[pageAccessCookieName(id)];
   const payload = verifyScopedToken(token, 'page-access');
 
-  return payload?.id === id;
+  // Legacy cookies issued before T01 carry no accessRevision and are no
+  // longer accepted; the visitor is asked to unlock again.
+  if (!payload || payload.id !== id || typeof payload.accessRevision !== 'string') {
+    return null;
+  }
+
+  return payload;
+}
+
+function hasPageAccess(req, id, currentAccessRevision) {
+  const payload = getPageAccess(req, id);
+
+  if (!payload) {
+    return false;
+  }
+
+  if (currentAccessRevision === undefined || currentAccessRevision === null) {
+    return true;
+  }
+
+  return accessRevisionMatches(payload.accessRevision, currentAccessRevision);
+}
+
+// Shared expectedAccessRevision precondition handling for access-policy
+// writes (T01): a missing precondition is 428, a stale one is 412, and an
+// invalid format is 400. The latest revision is never filled in silently.
+function checkAccessPrecondition(req, res, page) {
+  const expected = parseExpectedAccessRevision(req.body?.expectedAccessRevision);
+
+  if (!expected.provided) {
+    res.status(428).json({
+      success: false,
+      error: '缺少 expectedAccessRevision，请刷新后重试'
+    });
+    return null;
+  }
+
+  if (!expected.valid) {
+    res.status(400).json({
+      success: false,
+      error: 'expectedAccessRevision 必须为十进制字符串'
+    });
+    return null;
+  }
+
+  if (!accessRevisionMatches(page.access_revision, expected.value)) {
+    res.status(412).json({
+      success: false,
+      error: '访问策略已被更新，请刷新后重试',
+      accessRevision: toAccessRevisionString(page.access_revision)
+    });
+    return null;
+  }
+
+  return expected.value;
 }
 
 function isSameOriginRequest(req) {
@@ -1375,6 +1440,7 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       isProtected: sharedPage.is_protected === 1,
       isFavorite: sharedPage.is_favorite === true,
       password: visiblePagePassword(sharedPage),
+      accessRevision: toAccessRevisionString(sharedPage.access_revision),
       expiresAt: sharedPage.expires_at,
       markdownTheme: sharedPage.code_type === 'markdown'
         ? resolveMarkdownThemeId(sharedPage.markdown_theme)
@@ -1446,6 +1512,63 @@ app.put('/admin/pages/:id/favorite', requireDashboardApiAdmin, parseSmallJsonBod
   }
 });
 
+app.post('/admin/pages/:id/revoke-access', requireDashboardApiAdmin, parseSmallJsonBody, requireDashboardCsrf, async (req, res) => {
+  try {
+    const page = await pageRepository.getById(req.params.id);
+
+    if (!page) {
+      return res.status(404).json({
+        success: false,
+        error: 'Share not found'
+      });
+    }
+
+    // Active revocation is an access-policy write: it advances the access
+    // revision (invalidating every issued access cookie) without changing
+    // the password, expiry, or content (T01).
+    const expectedAccessRevision = checkAccessPrecondition(req, res, page);
+
+    if (expectedAccessRevision === null) {
+      return;
+    }
+
+    const result = await pageRepository.revokeAccess(req.params.id, expectedAccessRevision);
+
+    if (result.status === 'conflict') {
+      return res.status(412).json({
+        success: false,
+        error: '访问策略已被更新，请刷新后重试',
+        accessRevision: result.accessRevision
+      });
+    }
+
+    if (result.status === 'not_found') {
+      return res.status(404).json({
+        success: false,
+        error: 'Share not found'
+      });
+    }
+
+    pageRepository.createAuditLog({
+      action: 'page.access.revoke',
+      pageId: req.params.id,
+      details: JSON.stringify({ accessRevision: result.accessRevision }),
+      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+    }).catch((err) => { console.error('Audit log failed:', err); });
+
+    return res.json({
+      success: true,
+      accessRevision: result.accessRevision
+    });
+  } catch (error) {
+    console.error('Revoke page access failed:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to revoke access'
+    });
+  }
+});
+
 app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashboardCsrf, async (req, res) => {
   try {
     const page = await pageRepository.getById(req.params.id);
@@ -1465,6 +1588,23 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
         success: false,
         error: CUSTOM_PASSWORD_ERROR
       });
+    }
+
+    // Submitting access-policy fields (protection, password, or expiry) is
+    // an access-policy write and requires the caller's expectedAccessRevision
+    // precondition (T01). Content-only saves do not need one and never
+    // advance the revision.
+    const touchesAccessPolicy = isProtected !== undefined
+      || customPassword.provided
+      || expiresAt !== undefined;
+    let expectedAccessRevision = null;
+
+    if (touchesAccessPolicy) {
+      expectedAccessRevision = checkAccessPrecondition(req, res, page);
+
+      if (expectedAccessRevision === null) {
+        return;
+      }
     }
 
     const updateOptions = {};
@@ -1511,7 +1651,33 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
       }
     }
 
-    await pageRepository.updatePage(req.params.id, updateOptions);
+    const expiryChanged = expiresAt !== undefined
+      && updateOptions.expiresAt !== (page.expires_at ?? null);
+    const accessPolicyChanged = updateOptions.isProtected !== undefined || expiryChanged;
+
+    const updateResult = await pageRepository.updatePageWithAccessPolicy(
+      req.params.id,
+      updateOptions,
+      {
+        expectedAccessRevision,
+        advanceAccessRevision: accessPolicyChanged
+      }
+    );
+
+    if (updateResult.status === 'conflict') {
+      return res.status(412).json({
+        success: false,
+        error: '访问策略已被更新，请刷新后重试',
+        accessRevision: updateResult.accessRevision
+      });
+    }
+
+    if (updateResult.status === 'not_found') {
+      return res.status(404).json({
+        success: false,
+        error: 'Page not found'
+      });
+    }
 
     const updatedPage = await pageRepository.getById(req.params.id);
 
@@ -1533,6 +1699,7 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
         isProtected: updatedPage.is_protected === 1,
         password: visiblePagePassword(updatedPage),
         expiresAt: updatedPage.expires_at,
+        accessRevision: toAccessRevisionString(updatedPage.access_revision),
         markdownTheme: updatedPage.markdown_theme,
         createdAt: updatedPage.created_at
       }
@@ -1793,6 +1960,7 @@ app.get('/api/pages/:id', async (req, res) => {
         description: page.description,
         isProtected: page.is_protected === 1,
         expiresAt: page.expires_at,
+        accessRevision: toAccessRevisionString(page.access_revision),
         markdownTheme: page.markdown_theme
       }
     });
@@ -1826,22 +1994,56 @@ app.post('/api/pages/:id/protect', privateNoStore, requireApiAdmin, parseSmallJs
       });
     }
 
+    // The existing protection entry is an access-policy write and carries
+    // the same expectedAccessRevision precondition as the admin routes
+    // (T01): missing is 428, stale is 412.
+    const expectedAccessRevision = checkAccessPrecondition(req, res, page);
+
+    if (expectedAccessRevision === null) {
+      return;
+    }
+
     const password = isProtected
       ? (customPassword.provided ? customPassword.value : generateNumericPassword(DEFAULT_PASSWORD_LENGTH))
       : null;
     const passwordHash = password ? await hashSecret(password) : null;
     const encryptedPassword = password ? encryptSecret(password) : null;
 
-    await pageRepository.updateProtection(req.params.id, {
+    // This entry always (re)sets the password when protection is on and
+    // clears it when protection is turned off, so any submission that does
+    // not restate the unchanged unprotected state is one access-policy
+    // update and advances the revision.
+    const accessPolicyChanged = isProtected || page.is_protected === 1;
+
+    const result = await pageRepository.updateProtectionWithAccessRevision(req.params.id, {
       isProtected,
       passwordHash,
       encryptedPassword
+    }, {
+      expectedAccessRevision,
+      advanceAccessRevision: accessPolicyChanged
     });
+
+    if (result.status === 'conflict') {
+      return res.status(412).json({
+        success: false,
+        error: '访问策略已被更新，请刷新后重试',
+        accessRevision: result.accessRevision
+      });
+    }
+
+    if (result.status === 'not_found') {
+      return res.status(404).json({
+        success: false,
+        error: '页面不存在'
+      });
+    }
 
     return res.json({
       success: true,
       isProtected,
-      password
+      password,
+      accessRevision: result.accessRevision
     });
   } catch (error) {
     console.error('Update page protection failed:', error);
@@ -1885,7 +2087,11 @@ app.post('/view/:id/password', privateNoStore, parseSmallJson, async (req, res) 
       });
     }
 
-    setPageAccessCookie(res, req.params.id);
+    // Issue the credential bound to the access revision read together with
+    // the password hash above (T01). If the policy rotates afterwards, this
+    // cookie carries the old revision and is rejected; a credential for the
+    // newest revision is never minted from an old-policy verification.
+    setPageAccessCookie(res, req.params.id, page.access_revision);
     return res.json({
       valid: true,
       redirectUrl: `/view/${req.params.id}`
@@ -1904,10 +2110,12 @@ app.post('/view/:id/view-event', privateNoStore, async (req, res) => {
   }
 
   try {
+    const access = getPageAccess(req, req.params.id);
     const outcome = await pageRepository.recordViewEvent(
       req.params.id,
       Date.now(),
-      hasPageAccess(req, req.params.id)
+      Boolean(access),
+      access?.accessRevision ?? null
     );
 
     if (outcome === 'not_found') {
@@ -1973,7 +2181,7 @@ app.get('/view/:id', async (req, res) => {
       });
     }
 
-    if (page.is_protected === 1 && !hasPageAccess(req, req.params.id)) {
+    if (page.is_protected === 1 && !hasPageAccess(req, req.params.id, page.access_revision)) {
       metrics.outcome = 'password_required';
       setTrustedUiCsp(res, { allowFraming: true });
       return res.render('password', {
