@@ -2,6 +2,11 @@ const {
   buildManagementDailyStats,
   managementDateRange
 } = require('../utils/management-time');
+const {
+  accessRevisionMatches,
+  nextAccessRevision,
+  toAccessRevisionString
+} = require('../utils/shareAccess');
 
 function filterAdminPages(pages, options = {}) {
   const search = options.search || '';
@@ -42,6 +47,29 @@ function filterAdminPages(pages, options = {}) {
   }
 
   return results;
+}
+
+function applyPageUpdate(page, options) {
+  if (options.title !== undefined) {
+    page.title = options.title || null;
+  }
+  if (options.description !== undefined) {
+    page.description = options.description || null;
+  }
+  if (options.htmlContent !== undefined) {
+    page.html_content = options.htmlContent;
+  }
+  if (options.expiresAt !== undefined) {
+    page.expires_at = options.expiresAt || null;
+  }
+  if (options.isProtected !== undefined) {
+    page.is_protected = options.isProtected ? 1 : 0;
+    page.password_hash = options.passwordHash || null;
+    page.encrypted_password = options.encryptedPassword || null;
+  }
+  if (options.markdownTheme !== undefined) {
+    page.markdown_theme = options.markdownTheme || null;
+  }
 }
 
 class MemoryPageRepository {
@@ -110,6 +138,7 @@ class MemoryPageRepository {
       description: page.description || null,
       expires_at: page.expiresAt || null,
       markdown_theme: page.markdownTheme || null,
+      access_revision: '1',
       is_favorite: false,
       view_count: 0
     });
@@ -295,7 +324,86 @@ class MemoryPageRepository {
     page.is_protected = options.isProtected ? 1 : 0;
     page.password_hash = options.passwordHash || null;
     page.encrypted_password = options.encryptedPassword || null;
+    // A protection write is an access-policy change: previously issued
+    // access cookies must stop working immediately (T01).
+    page.access_revision = nextAccessRevision(page.access_revision);
     return true;
+  }
+
+  // Conditional protection write used by the access-policy routes (T01).
+  // The update only applies when the stored revision still equals
+  // expectedAccessRevision; the revision advances in the same step when
+  // advanceAccessRevision is set, so the check and the revocation are atomic.
+  async updateProtectionWithAccessRevision(id, options, precondition = {}) {
+    const page = this.pages.get(id);
+
+    if (!page) {
+      return { status: 'not_found', accessRevision: null };
+    }
+
+    const currentRevision = toAccessRevisionString(page.access_revision);
+
+    if (precondition.expectedAccessRevision != null
+      && !accessRevisionMatches(currentRevision, precondition.expectedAccessRevision)) {
+      return { status: 'conflict', accessRevision: currentRevision };
+    }
+
+    page.is_protected = options.isProtected ? 1 : 0;
+    page.password_hash = options.passwordHash || null;
+    page.encrypted_password = options.encryptedPassword || null;
+
+    if (precondition.advanceAccessRevision) {
+      page.access_revision = nextAccessRevision(currentRevision);
+    }
+
+    return { status: 'updated', accessRevision: toAccessRevisionString(page.access_revision) };
+  }
+
+  // Admin save that may combine content fields with access-policy fields
+  // (T01). Content-only saves pass no expected revision and never advance
+  // it; access-policy saves are compare-and-swap on the revision.
+  async updatePageWithAccessPolicy(id, options, precondition = {}) {
+    const page = this.pages.get(id);
+
+    if (!page) {
+      return { status: 'not_found', accessRevision: null };
+    }
+
+    const currentRevision = toAccessRevisionString(page.access_revision);
+
+    if (precondition.expectedAccessRevision != null
+      && !accessRevisionMatches(currentRevision, precondition.expectedAccessRevision)) {
+      return { status: 'conflict', accessRevision: currentRevision };
+    }
+
+    applyPageUpdate(page, options);
+
+    if (precondition.advanceAccessRevision) {
+      page.access_revision = nextAccessRevision(currentRevision);
+    }
+
+    return { status: 'updated', accessRevision: toAccessRevisionString(page.access_revision) };
+  }
+
+  // Explicit admin revocation entry (T01): advances the access revision
+  // without touching the password, expiry, or content.
+  async revokeAccess(id, expectedAccessRevision) {
+    const page = this.pages.get(id);
+
+    if (!page) {
+      return { status: 'not_found', accessRevision: null };
+    }
+
+    const currentRevision = toAccessRevisionString(page.access_revision);
+
+    if (expectedAccessRevision != null
+      && !accessRevisionMatches(currentRevision, expectedAccessRevision)) {
+      return { status: 'conflict', accessRevision: currentRevision };
+    }
+
+    page.access_revision = nextAccessRevision(currentRevision);
+
+    return { status: 'updated', accessRevision: toAccessRevisionString(page.access_revision) };
   }
 
   async setFavorite(id, isFavorite) {
@@ -333,26 +441,7 @@ class MemoryPageRepository {
       return false;
     }
 
-    if (options.title !== undefined) {
-      page.title = options.title || null;
-    }
-    if (options.description !== undefined) {
-      page.description = options.description || null;
-    }
-    if (options.htmlContent !== undefined) {
-      page.html_content = options.htmlContent;
-    }
-    if (options.expiresAt !== undefined) {
-      page.expires_at = options.expiresAt || null;
-    }
-    if (options.isProtected !== undefined) {
-      page.is_protected = options.isProtected ? 1 : 0;
-      page.password_hash = options.passwordHash || null;
-      page.encrypted_password = options.encryptedPassword || null;
-    }
-    if (options.markdownTheme !== undefined) {
-      page.markdown_theme = options.markdownTheme || null;
-    }
+    applyPageUpdate(page, options);
 
     return true;
   }
@@ -369,7 +458,7 @@ class MemoryPageRepository {
     return count;
   }
 
-  async recordViewEvent(id, now = Date.now(), hasAccess = false) {
+  async recordViewEvent(id, now = Date.now(), hasAccess = false, accessRevision = null) {
     const page = this.pages.get(id);
 
     if (!page) {
@@ -380,7 +469,12 @@ class MemoryPageRepository {
       return 'expired';
     }
 
-    if (page.is_protected === 1 && !hasAccess) {
+    // A protected Share only counts the event when the caller's credential
+    // is bound to the Share's current access revision (T01). A boolean
+    // "has access" without a matching revision is not enough.
+    if (page.is_protected === 1
+      && (!hasAccess || accessRevision == null
+        || !accessRevisionMatches(page.access_revision, accessRevision))) {
       return 'protected';
     }
 
