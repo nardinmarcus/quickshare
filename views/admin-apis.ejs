@@ -90,6 +90,10 @@
                   <input type="checkbox" class="api-scope-checkbox" data-scope="share:read" <%= apiKey.scopeList.includes('share:read') ? 'checked' : '' %>>
                   读取已授权 Share
                 </label>
+                <label class="api-scope-option">
+                  <input type="checkbox" class="api-scope-checkbox" data-scope="share:update" <%= apiKey.scopeList.includes('share:update') ? 'checked' : '' %>>
+                  编辑已授权 Share
+                </label>
                 <button type="button" class="cyber-btn cyber-btn-secondary api-key-scopes-btn" data-api-key-id="<%= apiKey.id %>" data-api-key-name="<%= apiKey.name %>">保存范围</button>
               </td>
               <td><time datetime="<%= new Date(Number(apiKey.created_at)).toISOString() %>"><%= formatManagementDateTime(apiKey.created_at) %></time></td>
@@ -120,8 +124,8 @@
   <section class="card admin-card api-grants-card">
     <div class="admin-content-header">
       <div>
-        <h2>Share 只读授权</h2>
-        <p class="admin-muted">给具名密钥授权读取指定 Share：密钥还需具备「读取」范围，且只能读到被授权的 Share。授权不改变 Share 的归属，轮换密钥后授权保留，删除密钥或 Share 时授权一并失效。</p>
+        <h2>Share 授权</h2>
+        <p class="admin-muted">给具名密钥授权指定 Share 的读取或编辑权限：密钥还需具备对应的「读取」/「编辑」范围，且只能接触被授权的 Share。编辑授权自动包含读取，但不包含上下架。授权不改变 Share 的归属，轮换密钥后授权保留，删除密钥或 Share 时授权一并失效。</p>
       </div>
     </div>
 
@@ -134,6 +138,10 @@
         <ul class="api-grant-list" data-grant-list>
           <li class="admin-muted">正在加载授权…</li>
         </ul>
+        <label class="api-auto-grant-option">
+          <input type="checkbox" class="api-auto-grant-checkbox" data-auto-grant-toggle <%= apiKey.auto_grant_new_share_edit ? 'checked' : '' %>>
+          自动编辑未来新建：该密钥新建 Share 时自动获得读取+编辑授权（不含上下架，不追溯既有 Share；需要先具备「读取」与「编辑」范围）
+        </label>
         <form class="api-grant-form" data-grant-form>
           <label>
             <span class="sr-only">选择要授权的 Share</span>
@@ -144,7 +152,14 @@
               <% }) %>
             </select>
           </label>
-          <button class="cyber-btn cyber-btn-secondary" type="submit">授予只读</button>
+          <label>
+            <span class="sr-only">选择授权权限</span>
+            <select class="cyber-input api-grant-permission-select" data-grant-permission>
+              <option value="read">只读</option>
+              <option value="update">编辑（含读取）</option>
+            </select>
+          </label>
+          <button class="cyber-btn cyber-btn-secondary" type="submit">授予</button>
         </form>
       </div>
     <% }) %>
@@ -152,14 +167,15 @@
 
   <section class="api-docs-grid">
     <article class="card api-doc-card">
-      <h2>只读资源管理（需授权）</h2>
-      <p>具备「读取」范围的托管密钥，可按授权读取指定 Share；旧版环境变量密钥始终只能创建。</p>
+      <h2>资源管理（需授权）</h2>
+      <p>具备相应范围的托管密钥，可按授权读取或编辑指定 Share；旧版环境变量密钥始终只能创建。</p>
       <dl class="api-field-list">
         <div><dt><code>GET /api/v1/shares</code></dt><dd>已授权 Share 清单，游标分页（默认 20、上限 100）。无读取授权的条目只显示中性元信息。</dd></div>
         <div><dt><code>GET /api/v1/shares/:id/content</code></dt><dd>当前内容快照，带强 ETag <code>"content:&lt;id&gt;:&lt;revision&gt;"</code>，支持 <code>If-None-Match</code> 弱比较返回 304。</dd></div>
+        <div><dt><code>PUT /api/v1/shares/:id/content</code></dt><dd>完整快照替换：四个内容字段必填，codeType 不可变，未知 Markdown Preset 返回 400；必须带具体内容 <code>If-Match</code> 与 <code>Idempotency-Key</code>，需要「读取」+「编辑」范围与编辑授权。无变化保存返回 <code>changed:false</code> 且不产生新版本。</dd></div>
         <div><dt><code>GET /api/v1/shares/:id/state</code></dt><dd>受限状态字段（published、isProtected、expiresAt、accessRevision），带独立强 ETag <code>"access:&lt;id&gt;:&lt;revision&gt;"</code>，不含标题、简介或正文。</dd></div>
       </dl>
-      <p>无凭据 401；缺范围 403；有范围但目标未授权 404（与不存在不可区分）。下架或过期不影响已授权的管理读取。</p>
+      <p>无凭据 401；缺范围 403；有范围但目标未授权 404（与不存在不可区分）。下架或过期不影响已授权的管理读取与编辑。</p>
     </article>
 
     <article class="card api-doc-card">
