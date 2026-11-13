@@ -2,6 +2,7 @@
 require('dotenv').config();
 
 const { createPostgresPool } = require('../models/postgres-config');
+const { withPublishingWrite } = require('../models/publishing');
 const { derivePageTitle } = require('../utils/pageTitle');
 
 function parseArgs(argv) {
@@ -28,6 +29,43 @@ function parseArgs(argv) {
   return options;
 }
 
+async function runBackfill(queryable, options) {
+  const result = await queryable.query(
+    `
+      SELECT id, html_content, code_type, title, created_at
+      FROM pages
+      WHERE title IS NULL OR title = '' OR title = id
+      ORDER BY created_at DESC
+      LIMIT $1
+    `,
+    [options.limit]
+  );
+
+  let changed = 0;
+
+  for (const page of result.rows) {
+    const nextTitle = derivePageTitle(
+      page.html_content,
+      page.code_type || 'html',
+      null,
+      Number(page.created_at) || Date.now()
+    );
+
+    if (!nextTitle || nextTitle === page.title) {
+      continue;
+    }
+
+    changed += 1;
+    console.log(`${options.write ? 'update' : 'dry-run'} ${page.id}: ${nextTitle}`);
+
+    if (options.write) {
+      await queryable.query('UPDATE pages SET title = $1 WHERE id = $2', [nextTitle, page.id]);
+    }
+  }
+
+  console.log(`${options.write ? 'updated' : 'would update'} ${changed} of ${result.rows.length} scanned pages`);
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL;
@@ -39,40 +77,15 @@ async function main() {
   const pool = createPostgresPool(connectionString, { max: 1 });
 
   try {
-    const result = await pool.query(
-      `
-        SELECT id, html_content, code_type, title, created_at
-        FROM pages
-        WHERE title IS NULL OR title = '' OR title = id
-        ORDER BY created_at DESC
-        LIMIT $1
-      `,
-      [options.limit]
-    );
-
-    let changed = 0;
-
-    for (const page of result.rows) {
-      const nextTitle = derivePageTitle(
-        page.html_content,
-        page.code_type || 'html',
-        null,
-        Number(page.created_at) || Date.now()
-      );
-
-      if (!nextTitle || nextTitle === page.title) {
-        continue;
-      }
-
-      changed += 1;
-      console.log(`${options.write ? 'update' : 'dry-run'} ${page.id}: ${nextTitle}`);
-
-      if (options.write) {
-        await pool.query('UPDATE pages SET title = $1 WHERE id = $2', [nextTitle, page.id]);
-      }
+    if (options.write) {
+      // --write is a real publishing write entrypoint: it goes through the
+      // maintenance gate (T04), so a paused instance refuses the backfill
+      // instead of bypassing the gate with direct UPDATEs. The dry-run
+      // stays a plain read and remains available during maintenance.
+      await withPublishingWrite(pool, client => runBackfill(client, options));
+    } else {
+      await runBackfill(pool, options);
     }
-
-    console.log(`${options.write ? 'updated' : 'would update'} ${changed} of ${result.rows.length} scanned pages`);
   } finally {
     await pool.end();
   }

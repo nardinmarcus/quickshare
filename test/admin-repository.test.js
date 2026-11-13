@@ -448,9 +448,24 @@ test('Postgres favorite mutation exposes the same result contract as memory stor
   };
 
   repository.pool = {
-    async query(sql, params) {
-      queries.push({ sql, params });
-      return { rows: [outcomes[params[0]]] };
+    async connect() {
+      return {
+        async query(sql, params) {
+          queries.push({ sql, params });
+
+          // Publishing gate statements (T04): open transaction, shared
+          // advisory lock, paused check, commit.
+          if (/publishing_writes_paused/i.test(sql)) {
+            return { rows: [{ publishing_writes_paused: false }] };
+          }
+          if (/pg_advisory|^(BEGIN|COMMIT|ROLLBACK)/i.test(sql)) {
+            return { rows: [] };
+          }
+
+          return { rows: [outcomes[params[0]]] };
+        },
+        release() {}
+      };
     }
   };
 
@@ -473,8 +488,16 @@ test('Postgres favorite mutation exposes the same result contract as memory stor
     previousValue: null
   });
   await assert.rejects(repository.setFavorite('changed', 1), /isFavorite must be a boolean/);
-  assert.match(queries[0].sql, /SELECT id, is_favorite[\s\S]+FOR UPDATE/i);
-  assert.match(queries[0].sql, /UPDATE pages[\s\S]+FROM existing/i);
+  // The mutation statement itself is unchanged; since T04 it runs inside a
+  // publishing-gate transaction (BEGIN / shared lock / paused check /
+  // COMMIT), so locate it among the recorded statements.
+  const mutation = queries.find(query => /WITH existing/i.test(query.sql));
+  assert.match(mutation.sql, /SELECT id, is_favorite[\s\S]+FOR UPDATE/i);
+  assert.match(mutation.sql, /UPDATE pages[\s\S]+FROM existing/i);
+  assert.equal(
+    queries.filter(query => /pg_advisory_xact_lock_shared/i.test(query.sql)).length,
+    3
+  );
 });
 
 test('Postgres admin favorite list and count share one composed filter contract', async () => {
@@ -527,14 +550,28 @@ test('view events update eligible rows without selecting page content', async ()
   };
 
   repository.pool = {
-    async query(sql, params) {
-      queries.push({ sql, params });
+    async connect() {
+      return {
+        async query(sql, params) {
+          queries.push({ sql, params });
 
-      if (/^\s*UPDATE pages/i.test(sql)) {
-        return { rowCount: params[0] === 'active' ? 1 : 0, rows: [] };
-      }
+          // Publishing gate statements (T04): open transaction, shared
+          // advisory lock, paused check, commit.
+          if (/publishing_writes_paused/i.test(sql)) {
+            return { rows: [{ publishing_writes_paused: false }] };
+          }
+          if (/pg_advisory|^(BEGIN|COMMIT|ROLLBACK)/i.test(sql)) {
+            return { rows: [] };
+          }
 
-      return { rows: states[params[0]] ? [states[params[0]]] : [] };
+          if (/^\s*UPDATE pages/i.test(sql)) {
+            return { rowCount: params[0] === 'active' ? 1 : 0, rows: [] };
+          }
+
+          return { rows: states[params[0]] ? [states[params[0]]] : [] };
+        },
+        release() {}
+      };
     }
   };
 
@@ -543,10 +580,19 @@ test('view events update eligible rows without selecting page content', async ()
   assert.equal(await repository.recordViewEvent('protected', 5000, false), 'protected');
   assert.equal(await repository.recordViewEvent('missing', 5000, false), 'not_found');
 
-  assert.equal(queries.length, 7);
+  // The page statements keep their original shape and count (1 UPDATE for a
+  // counted event, UPDATE + state SELECT for each non-counted outcome); the
+  // surrounding gate statements never select page content either.
+  const pageQueries = queries.filter(query => !/pg_advisory|publishing_writes_paused|^(BEGIN|COMMIT|ROLLBACK)/i.test(query.sql));
+  assert.equal(pageQueries.length, 7);
   assert.doesNotMatch(queries.map(query => query.sql).join('\n'), /SELECT\s+\*|html_content|password_hash/i);
-  assert.match(queries[0].sql, /expires_at IS NULL OR expires_at > \$2/);
-  assert.match(queries[0].sql, /is_protected, 0\) <> 1 OR \(\$3 AND access_revision = \$4::bigint\)/);
-  assert.deepEqual(queries[0].params, ['active', 4999, false, null]);
-  assert.match(queries[2].sql, /SELECT is_protected, expires_at/);
+  assert.match(pageQueries[0].sql, /expires_at IS NULL OR expires_at > \$2/);
+  assert.match(pageQueries[0].sql, /is_protected, 0\) <> 1 OR \(\$3 AND access_revision = \$4::bigint\)/);
+  assert.deepEqual(pageQueries[0].params, ['active', 4999, false, null]);
+  assert.match(pageQueries[2].sql, /SELECT is_protected, expires_at/);
+  // Every view event passed the maintenance gate first (T04).
+  assert.equal(
+    queries.filter(query => /pg_advisory_xact_lock_shared/i.test(query.sql)).length,
+    4
+  );
 });

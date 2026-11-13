@@ -88,7 +88,7 @@ const skipReason = pgBinDir
   ? null
   : 'pg_dump/pg_restore not found on PATH or QS_PG_BIN_DIR; backup/restore drill not run';
 
-test('full backup restores into an isolated database and verifies (schema 001-004)', { skip: skipReason || false, timeout: 300000 }, async () => {
+test('full backup restores into an isolated database and verifies (schema 001-005)', { skip: skipReason || false, timeout: 300000 }, async () => {
   const { summary, stderr } = await runDrill('full');
 
   assert.equal(summary.ok, true, `drill failures: ${summary.failures.join('; ')}\n${stderr}`);
@@ -105,5 +105,10 @@ test('backup drill on a legacy 001-003 schema skips access_revision explicitly',
     summary.skipped.some(entry => entry.includes('access_revision')),
     `expected an explicit access_revision skip, got: ${JSON.stringify(summary.skipped)}`
   );
+  assert.ok(
+    summary.skipped.some(entry => entry.includes('publishing_writes_paused')),
+    `expected an explicit publishing_writes_paused skip, got: ${JSON.stringify(summary.skipped)}`
+  );
   assert.match(stderr, /SKIP access_revision/);
+  assert.match(stderr, /SKIP publishing_writes_paused/);
 });

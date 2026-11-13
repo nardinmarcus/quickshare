@@ -26,6 +26,7 @@ const {
   toAccessRevisionString
 } = require('./utils/shareAccess');
 const { projectPublicMetadata } = require('./utils/publicProjection');
+const { isPublishingGateError } = require('./utils/publishing');
 const {
   formatManagementDateTime,
   toManagementDateTimeLocal
@@ -143,6 +144,27 @@ function setPrivateNoStore(res) {
 function privateNoStore(req, res, next) {
   setPrivateNoStore(res);
   return next();
+}
+
+function sendPublishingMaintenance(res) {
+  return res.status(503).json({
+    success: false,
+    error: 'Publishing is paused for maintenance',
+    code: 'maintenance',
+    retryable: true
+  });
+}
+
+// Write entrypoints answer a publishing-gate rejection (writes paused, or
+// the gate busy draining) with the explicit maintenance 503 (T04) instead
+// of a generic failure. Returns true when the response was sent.
+function respondIfPublishingGate(res, error) {
+  if (isPublishingGateError(error)) {
+    sendPublishingMaintenance(res);
+    return true;
+  }
+
+  return false;
 }
 
 function parseSmallJsonBody(req, res, next) {
@@ -1182,6 +1204,9 @@ app.post('/admin/apis/keys', requireDashboardAdmin, parseSmallJson, requireDashb
     });
   } catch (error) {
     console.error('Create API key failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
     return res.status(500).json({
       success: false,
       error: 'Failed to create API key'
@@ -1210,6 +1235,9 @@ app.delete('/admin/apis/keys/:id', requireDashboardAdmin, requireDashboardCsrf, 
     return res.json({ success: true });
   } catch (error) {
     console.error('Delete API key failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
     return res.status(500).json({
       success: false,
       error: 'Failed to delete API key'
@@ -1346,6 +1374,9 @@ app.put('/admin/settings/homepage-access', requireDashboardApiAdmin, parseSmallJ
     });
   } catch (error) {
     console.error('Update homepage access setting failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
     return res.status(503).json({
       success: false,
       error: 'Homepage access setting is unavailable'
@@ -1514,6 +1545,9 @@ app.put('/admin/pages/:id/favorite', requireDashboardApiAdmin, parseSmallJsonBod
     });
   } catch (error) {
     console.error('Update favorite failed:');
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
     return res.status(500).json({
       success: false,
       error: 'Failed to update favorite'
@@ -1571,6 +1605,9 @@ app.post('/admin/pages/:id/revoke-access', requireDashboardApiAdmin, parseSmallJ
     });
   } catch (error) {
     console.error('Revoke page access failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
     return res.status(500).json({
       success: false,
       error: 'Failed to revoke access'
@@ -1715,6 +1752,9 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
     });
   } catch (error) {
     console.error('Update page failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
     return res.status(500).json({
       success: false,
       error: 'Failed to update page'
@@ -1746,6 +1786,9 @@ app.delete('/admin/pages/batch', requireDashboardAdmin, parseSmallJson, requireD
     return res.json({ success: true, deleted });
   } catch (error) {
     console.error('Batch delete failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
     return res.status(500).json({ success: false, error: 'Failed to delete pages' });
   }
 });
@@ -1775,6 +1818,9 @@ app.delete('/admin/pages/:id', requireDashboardAdmin, requireDashboardCsrf, asyn
     });
   } catch (error) {
     console.error('Delete page failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
     return res.status(500).json({
       success: false,
       error: 'Failed to delete page'
@@ -1808,6 +1854,9 @@ app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requir
     return res.redirect('/admin/pages/' + encodeURIComponent(newId));
   } catch (error) {
     console.error('Clone page failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
     return res.status(500).json({ success: false, error: 'Failed to clone page' });
   }
 });
@@ -1843,6 +1892,9 @@ app.post('/api/pages/create', privateNoStore, requireBrowserPublishAccess, parse
     });
   } catch (error) {
     console.error('Create page failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
     return res.status(500).json({
       success: false,
       error: '服务器错误'
@@ -1913,6 +1965,9 @@ app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (
     });
   } catch (error) {
     console.error('Share API failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
     return res.status(500).json({ success: false, error: '服务器错误' });
   }
 });
@@ -2065,6 +2120,9 @@ app.post('/api/pages/:id/protect', privateNoStore, requireApiAdmin, parseSmallJs
     });
   } catch (error) {
     console.error('Update page protection failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
     return res.status(500).json({
       success: false,
       error: '更新保护状态失败'
@@ -2148,13 +2206,18 @@ app.post('/view/:id/view-event', privateNoStore, async (req, res) => {
       return res.sendStatus(403);
     }
 
+    // During write maintenance the event is not counted at all (T04).
+    if (outcome === 'maintenance') {
+      return res.sendStatus(503);
+    }
+
     return outcome === 'counted' ? res.sendStatus(204) : res.sendStatus(500);
   } catch (error) {
     console.error('Track page view failed:', {
       name: error?.name || 'Error',
       code: safeErrorCode(error)
     });
-    return res.sendStatus(500);
+    return res.sendStatus(isPublishingGateError(error) ? 503 : 500);
   }
 });
 
