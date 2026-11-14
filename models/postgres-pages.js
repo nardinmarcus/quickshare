@@ -18,8 +18,12 @@ const {
 } = require('../utils/contentRevision');
 const {
   ApiKeyCredentialChangedError,
-  credentialVersionMatches
+  credentialVersionMatches,
+  serializeApiKeyScopes
 } = require('../utils/apiKeyIdentity');
+const {
+  grantPermissionsFromRow
+} = require('../utils/shareGrants');
 const { isPublishingPausedError } = require('../utils/publishing');
 const {
   IdempotencyConflictError,
@@ -220,6 +224,25 @@ async function insertPageRow(client, page) {
 // concurrent submissions of the same identifier, so the second one
 // observes the committed record and replays it; the PRIMARY KEY remains
 // the final dedup guard underneath.
+
+// One share_grants row (T12) in the shape the routes and the admin
+// panel consume: identifiers, the three resource permissions (with the
+// update-implies-read invariant applied on read as well as on write, so
+// a hand-edited row can never understate an editor's read access) and
+// the grant timestamps as epoch numbers.
+function normalizeGrantRow(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    keyId: row.api_key_id,
+    shareId: row.share_id,
+    permissions: grantPermissionsFromRow(row),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at)
+  };
+}
 
 function operationLockKey(operation) {
   return `quickshare:publish-operation:${operation.actorNamespace}:${operation.requestId}`;
@@ -1828,6 +1851,14 @@ class PostgresPageRepository {
 
   async deletePage(id) {
     const result = await withPublishingWrite(this.pool, async (client) => {
+      // Full deletion clears the Share's grants in the same transaction
+      // (T12, parent spec #24 §3): no authorization may outlive the
+      // resource it names. Lock the Share row first — the lock every
+      // grant write takes after the Key row — so a concurrently
+      // committing grant is either already visible (and removed below)
+      // or waits and then finds the Share gone.
+      await client.query('SELECT id FROM pages WHERE id = $1 FOR UPDATE', [id]);
+      await client.query('DELETE FROM public.share_grants WHERE share_id = $1', [id]);
       const deleted = await client.query('DELETE FROM pages WHERE id = $1', [id]);
 
       // Full deletion retires any publish-operation result pointing at
@@ -1853,6 +1884,16 @@ class PostgresPageRepository {
   async deletePages(ids) {
     if (!Array.isArray(ids) || ids.length === 0) return 0;
     const result = await withPublishingWrite(this.pool, async (client) => {
+      // Lock every target Share row in ID order before cleaning up
+      // grants, mirroring deletePage's single-Share ordering.
+      await client.query(
+        'SELECT id FROM pages WHERE id = ANY($1) ORDER BY id FOR UPDATE',
+        [ids]
+      );
+      await client.query(
+        'DELETE FROM public.share_grants WHERE share_id = ANY($1)',
+        [ids]
+      );
       const deleted = await client.query(
         'DELETE FROM pages WHERE id = ANY($1)',
         [ids]
@@ -1874,11 +1915,19 @@ class PostgresPageRepository {
   async createApiKey(apiKey) {
     const result = await withPublishingWrite(this.pool, client => client.query(
       `
-        INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at, credential_version)
-        VALUES ($1, $2, $3, $4, $5, 1)
-        RETURNING id, name, key_prefix, created_at, last_used_at, credential_version::text AS credential_version
+        INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at, credential_version, scopes, auto_grant_new_share_edit)
+        VALUES ($1, $2, $3, $4, $5, 1, $6, $7)
+        RETURNING id, name, key_prefix, created_at, last_used_at, credential_version::text AS credential_version, scopes, auto_grant_new_share_edit
       `,
-      [apiKey.id, apiKey.name, apiKey.keyHash, apiKey.keyPrefix, apiKey.createdAt]
+      [
+        apiKey.id,
+        apiKey.name,
+        apiKey.keyHash,
+        apiKey.keyPrefix,
+        apiKey.createdAt,
+        serializeApiKeyScopes(apiKey.scopes),
+        apiKey.autoGrantNewShareEdit === true
+      ]
     ));
 
     return result.rows[0];
@@ -1887,7 +1936,7 @@ class PostgresPageRepository {
   async listApiKeys() {
     const result = await this.pool.query(
       `
-        SELECT id, name, key_prefix, created_at, last_used_at, credential_version::text AS credential_version
+        SELECT id, name, key_prefix, created_at, last_used_at, credential_version::text AS credential_version, scopes, auto_grant_new_share_edit
         FROM api_keys
         ORDER BY created_at DESC
       `
@@ -1898,9 +1947,29 @@ class PostgresPageRepository {
 
   async getApiKeyById(id) {
     const result = await this.pool.query(
-      'SELECT id, name, key_hash, key_prefix, created_at, last_used_at, credential_version::text AS credential_version FROM api_keys WHERE id = $1 LIMIT 1',
+      'SELECT id, name, key_hash, key_prefix, created_at, last_used_at, credential_version::text AS credential_version, scopes, auto_grant_new_share_edit FROM api_keys WHERE id = $1 LIMIT 1',
       [id]
     );
+
+    return result.rows[0] || null;
+  }
+
+  // Scope assignment (T12): replaces the Key's stored scope list in one
+  // gated write. Scopes are owner-managed credential metadata — changing
+  // them never touches any Share, and the change takes effect for the
+  // next request that verifies the Key (each request re-reads the row
+  // at authentication). Returns the public record, or null when the Key
+  // does not exist.
+  async updateApiKeyScopes(id, scopes) {
+    const result = await withPublishingWrite(this.pool, client => client.query(
+      `
+        UPDATE api_keys
+        SET scopes = $2
+        WHERE id = $1
+        RETURNING id, name, key_prefix, created_at, last_used_at, credential_version::text AS credential_version, scopes, auto_grant_new_share_edit
+      `,
+      [id, serializeApiKeyScopes(scopes)]
+    ));
 
     return result.rows[0] || null;
   }
@@ -1911,14 +1980,16 @@ class PostgresPageRepository {
   // for any in-flight API write that locked the Key row first (and vice
   // versa), so the version advance and the invalidation of the old secret
   // are one indivisible step. Returns the public record (never the hash),
-  // or null when the Key does not exist.
+  // or null when the Key does not exist. Scopes and Share grants (T12)
+  // belong to the logical Key, not to the secret: both survive rotation
+  // untouched.
   async rotateApiKey(id, { keyHash, keyPrefix } = {}) {
     const result = await withPublishingWrite(this.pool, client => client.query(
       `
         UPDATE api_keys
         SET key_hash = $2, key_prefix = $3, credential_version = credential_version + 1
         WHERE id = $1
-        RETURNING id, name, key_prefix, created_at, last_used_at, credential_version::text AS credential_version
+        RETURNING id, name, key_prefix, created_at, last_used_at, credential_version::text AS credential_version, scopes, auto_grant_new_share_edit
       `,
       [id, keyHash, keyPrefix]
     ));
@@ -1927,11 +1998,310 @@ class PostgresPageRepository {
   }
 
   async deleteApiKey(id) {
-    const result = await withPublishingWrite(this.pool, client => client.query(
-      'DELETE FROM api_keys WHERE id = $1',
-      [id]
-    ));
+    const result = await withPublishingWrite(this.pool, async (client) => {
+      // Deleting a Key retires every grant it held in the same
+      // transaction (T12): a deleted credential must leave no
+      // authorization behind. The Key row is locked FIRST — the same
+      // lock grant/revoke take before touching grants — so a grant
+      // that is committing concurrently either lands before this lock
+      // (and is deleted below) or waits behind it (and then finds the
+      // Key gone). Cleaning up before the lock would leave exactly
+      // the orphan this ordering prevents.
+      await client.query('SELECT id FROM api_keys WHERE id = $1 FOR UPDATE', [id]);
+      await client.query('DELETE FROM public.share_grants WHERE api_key_id = $1', [id]);
+      return client.query('DELETE FROM api_keys WHERE id = $1', [id]);
+    });
     return result.rowCount > 0;
+  }
+
+  // --- Per-Share grants (T12, issue #36) ----------------------------------
+  //
+  // Grant and revoke are publishing writes: they pass the T04 gate and
+  // follow the parent spec's fixed lock order — the managed Key row
+  // first, then the Share row — the same order the credential re-check
+  // (T05) uses, so a grant change can never interleave with a rotation
+  // or a Share write in the opposite order. Grants are keyed by the
+  // LOGICAL Key ID, so they survive rotation; they are removed in the
+  // same transaction when the Key or the Share is deleted.
+
+  async grantShareAccess({ keyId, shareId, permissions, now = Date.now() }) {
+    return withPublishingWrite(this.pool, async (client) => {
+      const keyResult = await client.query(
+        'SELECT id FROM api_keys WHERE id = $1 FOR UPDATE',
+        [keyId]
+      );
+
+      if (keyResult.rows.length === 0) {
+        return { status: 'key_not_found' };
+      }
+
+      const shareResult = await client.query(
+        'SELECT id FROM pages WHERE id = $1 FOR UPDATE',
+        [shareId]
+      );
+
+      if (shareResult.rows.length === 0) {
+        return { status: 'share_not_found' };
+      }
+
+      const existing = await client.query(
+        'SELECT api_key_id FROM public.share_grants WHERE api_key_id = $1 AND share_id = $2',
+        [keyId, shareId]
+      );
+      const created = existing.rows.length === 0;
+
+      const result = await client.query(
+        `
+          INSERT INTO public.share_grants (
+            api_key_id, share_id, can_read, can_update, can_publish, created_at, updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $6)
+          ON CONFLICT (api_key_id, share_id) DO UPDATE
+          SET can_read = EXCLUDED.can_read,
+              can_update = EXCLUDED.can_update,
+              can_publish = EXCLUDED.can_publish,
+              updated_at = EXCLUDED.updated_at
+          RETURNING api_key_id, share_id, can_read, can_update, can_publish, created_at, updated_at
+        `,
+        [keyId, shareId, permissions.read, permissions.update, permissions.publish, now]
+      );
+
+      return { status: 'ok', created, grant: normalizeGrantRow(result.rows[0]) };
+    });
+  }
+
+  async revokeShareAccess({ keyId, shareId }) {
+    return withPublishingWrite(this.pool, async (client) => {
+      const keyResult = await client.query(
+        'SELECT id FROM api_keys WHERE id = $1 FOR UPDATE',
+        [keyId]
+      );
+
+      if (keyResult.rows.length === 0) {
+        return { status: 'key_not_found' };
+      }
+
+      // Same Key-then-Share lock order as grant. A grant whose Share
+      // was deleted out from under it (only possible outside the app's
+      // own delete path, which cleans grants up) can still be revoked:
+      // the lock is taken when the Share exists, the delete runs
+      // either way.
+      await client.query('SELECT id FROM pages WHERE id = $1 FOR UPDATE', [shareId]);
+
+      const result = await client.query(
+        'DELETE FROM public.share_grants WHERE api_key_id = $1 AND share_id = $2',
+        [keyId, shareId]
+      );
+
+      if (result.rowCount === 0) {
+        return { status: 'grant_not_found' };
+      }
+
+      return { status: 'ok' };
+    });
+  }
+
+  // The owner's view of one Key's grants (admin grant panel). Includes
+  // the Share title for display — this is the owner's own dashboard,
+  // not an API response — and whether the Share still exists.
+  async listShareGrants(keyId) {
+    const result = await this.pool.query(
+      `
+        SELECT g.api_key_id, g.share_id, g.can_read, g.can_update, g.can_publish,
+               g.created_at, g.updated_at,
+               (p.id IS NOT NULL) AS share_exists, p.title AS share_title
+        FROM public.share_grants g
+        LEFT JOIN public.pages p ON p.id = g.share_id
+        WHERE g.api_key_id = $1
+        ORDER BY g.created_at ASC, g.share_id ASC
+      `,
+      [keyId]
+    );
+
+    return result.rows.map(row => ({
+      ...normalizeGrantRow(row),
+      shareExists: row.share_exists === true,
+      shareTitle: row.share_title ?? null
+    }));
+  }
+
+  async getShareGrant(keyId, shareId) {
+    const result = await this.pool.query(
+      `
+        SELECT api_key_id, share_id, can_read, can_update, can_publish, created_at, updated_at
+        FROM public.share_grants
+        WHERE api_key_id = $1 AND share_id = $2
+        LIMIT 1
+      `,
+      [keyId, shareId]
+    );
+
+    return result.rows[0] ? normalizeGrantRow(result.rows[0]) : null;
+  }
+
+  // The granted-Share list for the v1 API: only Shares this Key holds a
+  // grant on, in the stable (created_at, id) order, keyset-paginated by
+  // the same tuple so the ORDER BY and the cursor filter express ONE
+  // comparison and cannot disagree. The query never selects password
+  // material, the favorite flag or view counts — the list cannot leak
+  // what its projection does not fetch. Title/description are returned
+  // verbatim; the route neutralizes them for grants without read.
+  async listGrantedShares({ keyId, limit = 20, cursor = null } = {}) {
+    const params = [keyId];
+    let cursorClause = '';
+
+    if (cursor) {
+      params.push(cursor.createdAt, cursor.id);
+      cursorClause = `AND (p.created_at, p.id) > ($${params.length - 1}, $${params.length})`;
+    }
+
+    params.push(limit + 1);
+    const result = await this.pool.query(
+      `
+        SELECT p.id, p.code_type, p.title, p.description, p.markdown_theme,
+               p.created_at, p.expires_at, p.is_protected, p.published,
+               p.current_revision::text AS current_revision,
+               p.access_revision::text AS access_revision,
+               g.can_read, g.can_update, g.can_publish
+        FROM public.share_grants g
+        JOIN public.pages p ON p.id = g.share_id
+        WHERE g.api_key_id = $1 ${cursorClause}
+        ORDER BY p.created_at ASC, p.id ASC
+        LIMIT $${params.length}
+      `,
+      params
+    );
+
+    const hasMore = result.rows.length > limit;
+    const rows = hasMore ? result.rows.slice(0, limit) : result.rows;
+    const last = rows[rows.length - 1];
+
+    return {
+      shares: rows.map(row => ({
+        id: row.id,
+        codeType: row.code_type || 'html',
+        title: row.title ?? null,
+        description: row.description ?? null,
+        markdownTheme: row.markdown_theme ?? null,
+        createdAt: Number(row.created_at),
+        expiresAt: row.expires_at === null || row.expires_at === undefined
+          ? null
+          : Number(row.expires_at),
+        isProtected: Number(row.is_protected) === 1,
+        published: row.published !== false,
+        contentRevision: row.current_revision === null || row.current_revision === undefined
+          ? null
+          : String(row.current_revision),
+        accessRevision: toAccessRevisionString(row.access_revision),
+        permissions: grantPermissionsFromRow(row)
+      })),
+      nextPosition: hasMore && last
+        ? { createdAt: Number(last.created_at), id: last.id }
+        : null
+    };
+  }
+
+  // Content read for the v1 API (T12): the grant, the Share's current
+  // materialized fields and its current Revision snapshot in one read.
+  // Returns null when the Key holds no grant on the Share (or the Share
+  // is gone) — the route answers the same 404 either way, so existence
+  // is never probed through this surface. Deliberately NOT judged by
+  // public visibility: published/expiry/protection are public-surface
+  // concepts; a granted manager reads an unpublished or expired Share
+  // exactly like the owner does in the admin.
+  async getGrantedShareContent({ keyId, shareId }) {
+    const result = await this.pool.query(
+      `
+        SELECT g.can_read, g.can_update, g.can_publish,
+               p.id, p.html_content, p.code_type, p.title, p.description, p.markdown_theme,
+               p.current_revision::text AS current_revision,
+               s.share_id AS snapshot_share_id,
+               s.html_content AS snapshot_html_content,
+               s.code_type AS snapshot_code_type,
+               s.title AS snapshot_title,
+               s.description AS snapshot_description,
+               s.markdown_theme AS snapshot_markdown_theme,
+               s.purged_at AS snapshot_purged_at
+        FROM public.share_grants g
+        JOIN public.pages p ON p.id = g.share_id
+        LEFT JOIN public.share_revisions s
+          ON s.share_id = p.id AND s.revision = p.current_revision
+        WHERE g.api_key_id = $1 AND g.share_id = $2
+        LIMIT 1
+      `,
+      [keyId, shareId]
+    );
+
+    const row = result.rows[0];
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      permissions: grantPermissionsFromRow(row),
+      shareId: row.id,
+      currentRevision: row.current_revision === null || row.current_revision === undefined
+        ? null
+        : String(row.current_revision),
+      // The Share's materialized current fields (parent spec #24 §3:
+      // the projection OF the current Revision). Used only when no
+      // snapshot row exists — a Share that predates its baseline.
+      live: {
+        htmlContent: row.html_content,
+        codeType: row.code_type || 'html',
+        title: row.title ?? null,
+        description: row.description ?? null,
+        markdownTheme: row.markdown_theme ?? null
+      },
+      snapshot: row.snapshot_share_id === null || row.snapshot_share_id === undefined
+        ? null
+        : {
+            htmlContent: row.snapshot_html_content,
+            codeType: row.snapshot_code_type || 'html',
+            title: row.snapshot_title ?? null,
+            description: row.snapshot_description ?? null,
+            markdownTheme: row.snapshot_markdown_theme ?? null,
+            purgedAt: row.snapshot_purged_at ?? null
+          }
+    };
+  }
+
+  // State read for the v1 API (T12): ONLY the restricted state fields
+  // the access ETag covers. The query never selects the title,
+  // description or body, so this surface cannot leak them by accident.
+  async getGrantedShareState({ keyId, shareId }) {
+    const result = await this.pool.query(
+      `
+        SELECT g.can_read, g.can_update, g.can_publish,
+               p.id, p.published, p.is_protected, p.expires_at,
+               p.access_revision::text AS access_revision
+        FROM public.share_grants g
+        JOIN public.pages p ON p.id = g.share_id
+        WHERE g.api_key_id = $1 AND g.share_id = $2
+        LIMIT 1
+      `,
+      [keyId, shareId]
+    );
+
+    const row = result.rows[0];
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      permissions: grantPermissionsFromRow(row),
+      share: {
+        id: row.id,
+        published: row.published !== false,
+        isProtected: Number(row.is_protected) === 1,
+        expiresAt: row.expires_at === null || row.expires_at === undefined
+          ? null
+          : Number(row.expires_at),
+        accessRevision: toAccessRevisionString(row.access_revision)
+      }
+    };
   }
 
   // Deliberately NOT gated (T04): the last-used timestamp is background

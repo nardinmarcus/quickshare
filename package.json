@@ -7,7 +7,7 @@
     "start": "NODE_ENV=production node --max-old-space-size=1024 server.js",
     "dev": "NODE_ENV=development nodemon server.js",
     "test": "NODE_ENV=test VERCEL_ENV= DATABASE_URL= POSTGRES_URL= node --test test/*.test.js",
-    "test:postgres": "NODE_ENV=test node --test test/integration/postgres-migrations.test.js test/integration/postgres-backup.test.js test/integration/postgres-maintenance.test.js test/integration/postgres-api-keys.test.js test/integration/postgres-revisions.test.js test/integration/postgres-history.test.js test/integration/postgres-idempotency.test.js test/integration/postgres-restore.test.js test/integration/postgres-purge.test.js test/integration/postgres-publication.test.js",
+    "test:postgres": "NODE_ENV=test node --test test/integration/postgres-migrations.test.js test/integration/postgres-backup.test.js test/integration/postgres-maintenance.test.js test/integration/postgres-api-keys.test.js test/integration/postgres-revisions.test.js test/integration/postgres-history.test.js test/integration/postgres-idempotency.test.js test/integration/postgres-restore.test.js test/integration/postgres-purge.test.js test/integration/postgres-publication.test.js test/integration/postgres-grants.test.js",
     "prod": "NODE_ENV=production node --max-old-space-size=1024 server.js",
     "db:migrate": "node scripts/migrate.js",
     "db:maintenance": "node scripts/maintenance.js",

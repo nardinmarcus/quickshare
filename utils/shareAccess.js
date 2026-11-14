@@ -66,8 +66,19 @@ function accessRevisionMatches(actual, expected) {
   return toAccessRevisionString(actual) === toAccessRevisionString(expected);
 }
 
+// The strong ETag of a Share's access-state representation (parent spec
+// #24 §4): "access:<Share ID>:<Access Revision>". It is a DIFFERENT tag
+// family from the content ETag ("content:<id>:<revision>") — the two
+// are never interchangeable, and a state response carries only the
+// fields this tag covers (published / isProtected / expiresAt /
+// accessRevision), never title, description or body.
+function formatAccessEtag(shareId, accessRevision) {
+  return `"access:${shareId}:${toAccessRevisionString(accessRevision)}"`;
+}
+
 module.exports = {
   accessRevisionMatches,
+  formatAccessEtag,
   nextAccessRevision,
   parseExpectedAccessRevision,
   toAccessRevisionString

@@ -22,6 +22,7 @@ const {
 const { derivePageTitle } = require('./utils/pageTitle');
 const {
   accessRevisionMatches,
+  formatAccessEtag,
   parseExpectedAccessRevision,
   toAccessRevisionString
 } = require('./utils/shareAccess');
@@ -35,16 +36,23 @@ const {
 const { isPublishingGateError } = require('./utils/publishing');
 const {
   API_CONTENT_TYPES,
-  CREATE_ONLY_SCOPES,
   buildCapabilities
 } = require('./utils/apiCapabilities');
 const {
   isApiKeyCredentialChangedError,
   legacyCredentialIdentity,
   managedCredentialIdentity,
+  normalizeApiKeyScopes,
+  parseApiKeyScopes,
   parseManagedApiKeyCredential,
   toCredentialVersionString
 } = require('./utils/apiKeyIdentity');
+const {
+  encodeShareListCursor,
+  hasAnyGrantPermission,
+  normalizeGrantPermissions,
+  parseShareListCursor
+} = require('./utils/shareGrants');
 const {
   browserOwnerNamespace,
   computeRequestHmac,
@@ -662,6 +670,56 @@ async function requireApiKey(req, res, next) {
     console.error('API key validation failed:', error);
     return res.status(503).json({ success: false, error: 'API authentication unavailable' });
   }
+}
+
+// Scope guard for the v1 resource API (T12, parent spec #24 §6). Runs
+// after requireApiKey, so a missing/invalid credential has already been
+// answered 401; a verified credential that lacks the operation's scope
+// gets a stable 403. Authorization for a specific Share is the
+// conjunction of scope and grant — this guard checks only the scope
+// half; the grant half is judged by the repository read, whose "no
+// grant" outcome is the same 404 as "no such Share", so this surface
+// cannot be used to probe which Shares exist. The legacy credential's
+// scope list is create-only by construction, so it is refused here for
+// every management operation without a special case.
+function requireApiScope(...scopes) {
+  return (req, res, next) => {
+    const credential = req.apiCredential || legacyCredentialIdentity();
+    const held = credential.scopes || [];
+
+    if (scopes.some(scope => held.includes(scope))) {
+      return next();
+    }
+
+    return res.status(403).json({
+      success: false,
+      error: 'Insufficient scope for this operation',
+      code: 'insufficient_scope',
+      retryable: false
+    });
+  };
+}
+
+// If-None-Match evaluation for the conditional resource reads (T12).
+// GET requests use the RFC 7232 WEAK comparison: a candidate matches
+// when it is `*`, or when its opaque tag — ignoring a `W/` prefix —
+// equals the current representation's strong tag. (Writes are the
+// opposite: If-Match stays strong-only, per parent spec #24 §4.)
+function ifNoneMatchMatches(header, currentEtag) {
+  if (!currentEtag || typeof header !== 'string') {
+    return false;
+  }
+
+  return header.split(',').some((candidate) => {
+    const trimmed = candidate.trim();
+
+    if (trimmed === '*') {
+      return true;
+    }
+
+    const opaque = trimmed.startsWith('W/') ? trimmed.slice(2) : trimmed;
+    return opaque === currentEtag;
+  });
 }
 
 // The instance's canonical origin for identity responses (T05): the
@@ -1565,12 +1623,20 @@ app.get('/admin', (req, res) => {
 app.get('/admin/apis', requireDashboardAdmin, async (req, res) => {
   try {
     const apiKeys = await pageRepository.listApiKeys();
+    // The grant panel (T12) lets the owner pick a target Share per Key;
+    // only the ID and the owner's own title are needed for the picker.
+    const pages = await pageRepository.listAdminPages({ limit: null });
+    const grantableShares = pages.map(page => ({ id: page.id, title: page.title || null }));
     const sessionToken = req.dashboardAdminSession?.token || req.cookies?.[DASHBOARD_ADMIN_COOKIE] || '';
 
     return res.render('admin-apis', {
       title: 'QuickShare | API 管理',
       page: 'admin-apis',
-      apiKeys,
+      apiKeys: apiKeys.map(apiKey => ({
+        ...apiKey,
+        scopeList: parseApiKeyScopes(apiKey.scopes)
+      })),
+      grantableShares,
       legacyApiKeyConfigured: Boolean(config.shareApiKey),
       csrfToken: config.authEnabled ? createCsrfToken(sessionToken) : ''
     });
@@ -1621,6 +1687,10 @@ app.post('/admin/apis/keys', requireDashboardAdmin, parseSmallJson, requireDashb
         created_at: apiKey.created_at,
         last_used_at: apiKey.last_used_at,
         credential_version: toCredentialVersionString(apiKey.credential_version),
+        // A new managed Key starts create-only (T12), like every Key
+        // migrated by 010; the owner widens it explicitly if at all.
+        scopes: [...parseApiKeyScopes(apiKey.scopes)],
+        auto_grant_new_share_edit: apiKey.auto_grant_new_share_edit === true,
         secret: `qs.${id}.${secret}`
       }
     });
@@ -1677,6 +1747,10 @@ app.post('/admin/apis/keys/:id/rotate', requireDashboardAdmin, parseSmallJson, r
         created_at: rotated.created_at,
         last_used_at: rotated.last_used_at,
         credential_version: toCredentialVersionString(rotated.credential_version),
+        // Rotation changes only the secret: scopes and grants belong to
+        // the logical Key and are reported unchanged (T12).
+        scopes: [...parseApiKeyScopes(rotated.scopes)],
+        auto_grant_new_share_edit: rotated.auto_grant_new_share_edit === true,
         secret: `qs.${rotated.id}.${secret}`
       }
     });
@@ -1719,6 +1793,229 @@ app.delete('/admin/apis/keys/:id', requireDashboardAdmin, requireDashboardCsrf, 
     return res.status(500).json({
       success: false,
       error: 'Failed to delete API key'
+    });
+  }
+});
+
+// Scope assignment (T12): the owner widens or narrows what a managed
+// Key may attempt. Only the scopes whose behavior this ticket
+// implements are assignable here — share:create (T05/T08) and
+// share:read (this ticket). share:update / share:publish are stored
+// vocabulary for their own tickets; accepting them now would hand the
+// owner a switch that changes nothing observable, so they are refused
+// as unsupported instead of silently stored. A scope by itself still
+// authorizes no specific Share: resource access needs the matching
+// grant as well.
+const API_KEY_ASSIGNABLE_SCOPES = Object.freeze(['share:create', 'share:read']);
+
+app.put('/admin/apis/keys/:id/scopes', requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
+  try {
+    const scopes = normalizeApiKeyScopes(req.body?.scopes);
+
+    if (!scopes || scopes.some(scope => !API_KEY_ASSIGNABLE_SCOPES.includes(scope))) {
+      return res.status(400).json({
+        success: false,
+        error: `Scopes must be a list drawn from: ${API_KEY_ASSIGNABLE_SCOPES.join(', ')}`,
+        code: 'invalid_scopes',
+        retryable: false
+      });
+    }
+
+    const updated = await pageRepository.updateApiKeyScopes(req.params.id, scopes);
+
+    if (!updated) {
+      return res.status(404).json({
+        success: false,
+        error: 'API key not found'
+      });
+    }
+
+    pageRepository.createAuditLog({
+      action: 'api_key.scopes',
+      pageId: null,
+      details: JSON.stringify({ apiKeyId: updated.id, scopes }),
+      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+    }).catch((err) => { console.error('Audit log failed:', err); });
+
+    return res.json({
+      success: true,
+      apiKey: {
+        id: updated.id,
+        name: updated.name,
+        key_prefix: updated.key_prefix,
+        created_at: updated.created_at,
+        last_used_at: updated.last_used_at,
+        credential_version: toCredentialVersionString(updated.credential_version),
+        scopes: [...parseApiKeyScopes(updated.scopes)],
+        auto_grant_new_share_edit: updated.auto_grant_new_share_edit === true
+      }
+    });
+  } catch (error) {
+    console.error('Update API key scopes failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to update API key scopes'
+    });
+  }
+});
+
+// The owner's grant list for one Key (T12): which Shares this Key may
+// touch and with which resource permissions. Dashboard session only —
+// grants are owner-managed credential metadata, never exposed through
+// the v1 API itself.
+app.get('/admin/apis/keys/:id/grants', requireDashboardApiAdmin, async (req, res) => {
+  try {
+    const apiKey = await pageRepository.getApiKeyById(req.params.id);
+
+    if (!apiKey) {
+      return res.status(404).json({
+        success: false,
+        error: 'API key not found'
+      });
+    }
+
+    const grants = await pageRepository.listShareGrants(req.params.id);
+
+    return res.json({
+      success: true,
+      grants: grants.map(grant => ({
+        shareId: grant.shareId,
+        permissions: grant.permissions,
+        shareExists: grant.shareExists,
+        shareTitle: grant.shareTitle,
+        createdAt: grant.createdAt,
+        updatedAt: grant.updatedAt
+      }))
+    });
+  } catch (error) {
+    console.error('List API key grants failed:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to list API key grants'
+    });
+  }
+});
+
+// Grant (T12): the owner authorizes one Key on one Share. This ticket's
+// dashboard grants the READ permission — the only resource permission
+// whose behavior ships here; update/publish grants arrive with their
+// own endpoints, and a request naming them is refused rather than
+// stored as a dead switch. The repository applies the Key-then-Share
+// lock order inside the publishing gate.
+app.post('/admin/apis/keys/:id/grants', requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
+  try {
+    const shareId = typeof req.body?.shareId === 'string' ? req.body.shareId.trim() : '';
+    const permissions = normalizeGrantPermissions(req.body?.permissions);
+
+    if (!shareId || !permissions || !hasAnyGrantPermission(permissions)) {
+      return res.status(400).json({
+        success: false,
+        error: 'A grant requires a shareId and at least one permission',
+        code: 'invalid_grant',
+        retryable: false
+      });
+    }
+
+    if (permissions.update || permissions.publish) {
+      return res.status(400).json({
+        success: false,
+        error: 'Only the read permission can be granted from this dashboard yet',
+        code: 'grant_permission_not_available',
+        retryable: false
+      });
+    }
+
+    const result = await pageRepository.grantShareAccess({
+      keyId: req.params.id,
+      shareId,
+      permissions
+    });
+
+    if (result.status === 'key_not_found') {
+      return res.status(404).json({ success: false, error: 'API key not found' });
+    }
+
+    if (result.status === 'share_not_found') {
+      return res.status(404).json({ success: false, error: 'Share not found' });
+    }
+
+    pageRepository.createAuditLog({
+      action: 'api_key.grant',
+      pageId: shareId,
+      details: JSON.stringify({
+        apiKeyId: req.params.id,
+        shareId,
+        permissions: result.grant.permissions
+      }),
+      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+    }).catch((err) => { console.error('Audit log failed:', err); });
+
+    return res.status(result.created ? 201 : 200).json({
+      success: true,
+      created: result.created,
+      grant: {
+        shareId: result.grant.shareId,
+        permissions: result.grant.permissions,
+        createdAt: result.grant.createdAt,
+        updatedAt: result.grant.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error('Grant API key access failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to grant API key access'
+    });
+  }
+});
+
+// Revoke (T12): removes one Key's grant on one Share in the same
+// Key-then-Share lock order. The revocation audit is part of the
+// backup's revocation evidence: restoring an older backup can revive
+// a since-revoked grant, and the verify report names this event so the
+// owner can reconcile (see docs/backup-restore.md).
+app.delete('/admin/apis/keys/:id/grants/:shareId', requireDashboardAdmin, requireDashboardCsrf, async (req, res) => {
+  try {
+    const result = await pageRepository.revokeShareAccess({
+      keyId: req.params.id,
+      shareId: req.params.shareId
+    });
+
+    if (result.status === 'key_not_found') {
+      return res.status(404).json({ success: false, error: 'API key not found' });
+    }
+
+    if (result.status === 'grant_not_found') {
+      return res.status(404).json({
+        success: false,
+        error: 'Grant not found',
+        code: 'grant_not_found',
+        retryable: false
+      });
+    }
+
+    pageRepository.createAuditLog({
+      action: 'api_key.grant_revoke',
+      pageId: req.params.shareId,
+      details: JSON.stringify({ apiKeyId: req.params.id, shareId: req.params.shareId }),
+      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+    }).catch((err) => { console.error('Audit log failed:', err); });
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Revoke API key access failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to revoke API key access'
     });
   }
 });
@@ -3629,7 +3926,10 @@ app.get('/api/v1/me', privateNoStore, requireApiKey, (req, res) => {
       keyId: credential.keyId,
       name: credential.name,
       credentialVersion: credential.credentialVersion,
-      scopes: [...CREATE_ONLY_SCOPES]
+      // The credential's OWN scopes (T12): a managed Key reports the
+      // list stored on its row — create-only until the owner assigns
+      // more in the admin — and the legacy Key reports create-only.
+      scopes: [...parseApiKeyScopes(credential.scopes)]
     }
   });
 });
@@ -3645,7 +3945,10 @@ app.get('/api/v1/capabilities', privateNoStore, requireApiKey, (req, res) => {
   return res.json({
     success: true,
     origin: instanceOrigin(req),
-    capabilities: buildCapabilities({ credentialType: credential.type })
+    capabilities: buildCapabilities({
+      credentialType: credential.type,
+      scopes: credential.scopes
+    })
   });
 });
 
@@ -3745,6 +4048,215 @@ app.get('/admin/operations/:requestId', requireDashboardApiAdmin, async (req, re
     });
   } catch (error) {
     console.error('Admin operation lookup failed:', error);
+    return res.status(500).json({ success: false, error: '服务器错误' });
+  }
+});
+
+// Granted-Share list (T12, issue #36): the Shares THIS credential holds
+// a grant on — never the instance's Shares in general — in the stable
+// (createdAt, id) cursor order. Listing is a read-family operation: the
+// credential needs at least one management scope (read/update/publish)
+// to list at all, and each entry is additionally filtered to the
+// permissions the conjunction of scope and grant actually yields, so a
+// grant whose scope the Key no longer holds does not surface. Entries
+// without effective read carry neutralized title/description (parent
+// spec #24 §7); no entry ever carries password material, the grant
+// table itself, or the Favorite flag. Reads stay available during
+// write maintenance.
+app.get('/api/v1/shares', privateNoStore, requireApiKey, requireApiScope('share:read', 'share:update', 'share:publish'), async (req, res) => {
+  const credential = req.apiCredential || legacyCredentialIdentity();
+
+  let limit = 20;
+
+  if (req.query.limit !== undefined) {
+    const parsedLimit = Number(req.query.limit);
+
+    if (!Number.isInteger(parsedLimit) || parsedLimit < 1) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid limit',
+        code: 'invalid_limit',
+        retryable: false
+      });
+    }
+
+    limit = Math.min(parsedLimit, 100);
+  }
+
+  let cursor = null;
+
+  if (req.query.cursor !== undefined && req.query.cursor !== '') {
+    cursor = parseShareListCursor(req.query.cursor);
+
+    if (!cursor) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid cursor',
+        code: 'invalid_cursor',
+        retryable: false
+      });
+    }
+  }
+
+  try {
+    const { shares, nextPosition } = await pageRepository.listGrantedShares({
+      keyId: credential.keyId,
+      limit,
+      cursor
+    });
+    const held = credential.scopes || [];
+    const visible = [];
+
+    for (const share of shares) {
+      const permissions = {
+        read: share.permissions.read && held.includes('share:read'),
+        update: share.permissions.update && held.includes('share:update'),
+        publish: share.permissions.publish && held.includes('share:publish')
+      };
+
+      if (!hasAnyGrantPermission(permissions)) {
+        continue;
+      }
+
+      visible.push({
+        id: share.id,
+        codeType: share.codeType,
+        title: permissions.read ? share.title : null,
+        description: permissions.read ? share.description : null,
+        markdownTheme: permissions.read ? share.markdownTheme : null,
+        createdAt: share.createdAt,
+        expiresAt: share.expiresAt,
+        isProtected: share.isProtected,
+        published: share.published,
+        contentRevision: share.contentRevision,
+        accessRevision: share.accessRevision,
+        permissions
+      });
+    }
+
+    return res.json({
+      success: true,
+      shares: visible,
+      nextCursor: nextPosition ? encodeShareListCursor(nextPosition) : null
+    });
+  } catch (error) {
+    console.error('Granted share list failed:', error);
+    return res.status(500).json({ success: false, error: '服务器错误' });
+  }
+});
+
+// Granted-Share content read (T12): the current Revision snapshot of a
+// Share the credential is granted to read. Requires the read scope
+// (403 without it) AND a read grant on this Share (404 without one —
+// the same 404 as a nonexistent Share). Management authorization is
+// judged independently of public visibility: an unpublished or expired
+// Share reads exactly like a live one here, and neither the share
+// access cookie nor public view rights authorize this surface. The
+// response body is exactly the content representation the strong
+// content ETag covers — no timestamps, view counts or request data —
+// and a purged current snapshot stays unavailable (410), as everywhere.
+app.get('/api/v1/shares/:id/content', privateNoStore, requireApiKey, requireApiScope('share:read'), async (req, res) => {
+  const credential = req.apiCredential || legacyCredentialIdentity();
+
+  try {
+    const result = await pageRepository.getGrantedShareContent({
+      keyId: credential.keyId,
+      shareId: req.params.id
+    });
+
+    if (!result || !result.permissions.read) {
+      return res.status(404).json({
+        success: false,
+        error: 'Share not found',
+        code: 'share_not_found',
+        retryable: false
+      });
+    }
+
+    if (result.snapshot && result.snapshot.purgedAt !== null && result.snapshot.purgedAt !== undefined) {
+      return res.status(410).json({
+        success: false,
+        error: 'Revision content has been purged',
+        code: 'revision_unavailable',
+        retryable: false
+      });
+    }
+
+    const fields = result.snapshot || result.live;
+    const contentRevision = result.currentRevision;
+    const etag = contentRevision ? formatContentEtag(result.shareId, contentRevision) : null;
+
+    if (etag) {
+      res.set('ETag', etag);
+    }
+
+    if (etag && ifNoneMatchMatches(req.get('if-none-match'), etag)) {
+      return res.status(304).end();
+    }
+
+    return res.json({
+      success: true,
+      share: {
+        id: result.shareId,
+        contentRevision,
+        htmlContent: fields.htmlContent,
+        codeType: fields.codeType,
+        title: fields.title,
+        description: fields.description,
+        markdownTheme: fields.markdownTheme
+      }
+    });
+  } catch (error) {
+    console.error('Granted share content read failed:', error);
+    return res.status(500).json({ success: false, error: '服务器错误' });
+  }
+});
+
+// Granted-Share state read (T12): the restricted state model — ID,
+// published, isProtected, expiresAt, accessRevision, and nothing else.
+// The repository query never selects title, description or body, so
+// this surface cannot leak them; the response is identical for every
+// authorized caller, whether they matched through the read or the
+// publish permission (parent spec #24 §6). The state ETag is the access
+// tag family, distinct from the content ETag, and it moves whenever an
+// access-policy change advances access_revision.
+app.get('/api/v1/shares/:id/state', privateNoStore, requireApiKey, requireApiScope('share:read', 'share:publish'), async (req, res) => {
+  const credential = req.apiCredential || legacyCredentialIdentity();
+  const held = credential.scopes || [];
+
+  try {
+    const result = await pageRepository.getGrantedShareState({
+      keyId: credential.keyId,
+      shareId: req.params.id
+    });
+
+    const matched = Boolean(result) && (
+      (result.permissions.read && held.includes('share:read'))
+      || (result.permissions.publish && held.includes('share:publish'))
+    );
+
+    if (!matched) {
+      return res.status(404).json({
+        success: false,
+        error: 'Share not found',
+        code: 'share_not_found',
+        retryable: false
+      });
+    }
+
+    const etag = formatAccessEtag(result.share.id, result.share.accessRevision);
+    res.set('ETag', etag);
+
+    if (ifNoneMatchMatches(req.get('if-none-match'), etag)) {
+      return res.status(304).end();
+    }
+
+    return res.json({
+      success: true,
+      share: { ...result.share }
+    });
+  } catch (error) {
+    console.error('Granted share state read failed:', error);
     return res.status(500).json({ success: false, error: '服务器错误' });
   }
 });

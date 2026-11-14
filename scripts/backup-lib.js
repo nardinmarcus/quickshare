@@ -23,6 +23,7 @@ const KNOWN_TABLES = [
   'pages',
   'publish_operations',
   'quickshare_schema_migrations',
+  'share_grants',
   'share_revisions',
   'site_settings'
 ];
@@ -144,6 +145,42 @@ function buildOperationSection(rows) {
 
   const aggregateDigest = sha256Hex(
     ordered.map(row => digests[operationKey(row)]).join('\n')
+  );
+
+  return { count: rows.length, aggregateDigest, digests };
+}
+
+// Per-Share grants (migration 010, T12). Authorization state is part
+// of a complete backup (parent spec #24 §11): a restore must reproduce
+// exactly who could read what, so every grant field is digested — a
+// restore that drops, widens or resurrects a grant is detected by the
+// section comparison, never silently accepted.
+const GRANT_DIGEST_FIELDS = [
+  'api_key_id',
+  'share_id',
+  'can_read',
+  'can_update',
+  'can_publish',
+  'created_at',
+  'updated_at'
+];
+
+function grantKey(row) {
+  return `${row.api_key_id}:${row.share_id}`;
+}
+
+function buildGrantSection(rows) {
+  const digests = {};
+  const ordered = [...rows].sort((left, right) => (
+    grantKey(left).localeCompare(grantKey(right))
+  ));
+
+  for (const row of ordered) {
+    digests[grantKey(row)] = rowDigest(row, GRANT_DIGEST_FIELDS);
+  }
+
+  const aggregateDigest = sha256Hex(
+    ordered.map(row => digests[grantKey(row)]).join('\n')
   );
 
   return { count: rows.length, aggregateDigest, digests };
@@ -582,9 +619,25 @@ async function collectSnapshot(query) {
   // per-Key versions are also recorded verbatim (like accessRevisions) so
   // verification can name a credential_version difference directly.
   const hasCredentialVersion = (columns.api_keys || []).includes('credential_version');
-  const apiKeyFields = hasCredentialVersion
-    ? [...API_KEY_DIGEST_FIELDS, 'credential_version']
-    : API_KEY_DIGEST_FIELDS;
+  // Scopes and the auto-edit opt-in arrive with migration 010 (T12);
+  // the same conditional treatment keeps pre-010 fixtures' digests
+  // historical.
+  const hasScopes = (columns.api_keys || []).includes('scopes');
+  const hasAutoGrant = (columns.api_keys || []).includes('auto_grant_new_share_edit');
+  const apiKeyFields = [...API_KEY_DIGEST_FIELDS];
+
+  if (hasCredentialVersion) {
+    apiKeyFields.push('credential_version');
+  }
+
+  if (hasScopes) {
+    apiKeyFields.push('scopes');
+  }
+
+  if (hasAutoGrant) {
+    apiKeyFields.push('auto_grant_new_share_edit');
+  }
+
   const apiKeys = buildSection(apiKeyResult.rows, apiKeyFields, 'id');
   apiKeys.hasCredentialVersion = hasCredentialVersion;
 
@@ -594,6 +647,34 @@ async function collectSnapshot(query) {
     for (const row of apiKeyResult.rows) {
       apiKeys.credentialVersions[row.id] = canonicalValue(row.credential_version);
     }
+  }
+
+  // The scopes are also recorded verbatim — they are not secret — so
+  // verification can name a scopes difference directly instead of
+  // reporting an anonymous row mismatch.
+  apiKeys.hasScopes = hasScopes;
+
+  if (hasScopes) {
+    apiKeys.scopes = {};
+
+    for (const row of apiKeyResult.rows) {
+      apiKeys.scopes[row.id] = canonicalValue(row.scopes);
+    }
+  }
+
+  // Per-Share grants (migration 010, T12). Present only when the table
+  // exists; pre-010 snapshots carry no section and verification skips
+  // the grant assertions explicitly, mirroring Revisions/operations.
+  let grants = null;
+  let grantRows = [];
+
+  if (tables.includes('share_grants')) {
+    const grantResult = await query(
+      'SELECT * FROM public.share_grants ORDER BY api_key_id, share_id'
+    );
+
+    grantRows = grantResult.rows;
+    grants = buildGrantSection(grantRows);
   }
 
   const auditResult = await query('SELECT * FROM public.audit_logs ORDER BY id');
@@ -638,10 +719,11 @@ async function collectSnapshot(query) {
     },
     siteSettings,
     revisions,
-    operations
+    operations,
+    grants
   };
 
-  return { snapshot, pageRows, auditRows, revisionRows, operationRows };
+  return { snapshot, pageRows, auditRows, revisionRows, operationRows, grantRows };
 }
 
 // The manifest is the public record of a backup: it must let an operator
@@ -877,6 +959,15 @@ function compareSnapshots(expected, actual) {
     compareSections('publish_operations', expected.operations, actual.operations, failures);
   }
 
+  // Grants (T12): only judged when the backup itself carries the
+  // section, so pre-010 manifests verify exactly as before. When it
+  // does, a restored database that lost the table — or any single
+  // grant row — fails by name: authorization state is never allowed to
+  // silently shrink or grow across a restore.
+  if (expected.grants) {
+    compareSections('share_grants', expected.grants, actual.grants, failures);
+  }
+
   if (expected.pages.hasContentRevision) {
     if (!actual.pages.hasContentRevision) {
       failures.push('pages.current_revision column missing after restore');
@@ -937,6 +1028,23 @@ function compareSnapshots(expected, actual) {
         if (actualVersions[keyId] !== version) {
           failures.push(
             `api_keys ${keyId} credential_version differs (backup ${version}, restored ${actualVersions[keyId]})`
+          );
+        }
+      }
+    }
+  }
+
+  if (expected.apiKeys && expected.apiKeys.hasScopes) {
+    if (!actual.apiKeys || !actual.apiKeys.hasScopes) {
+      failures.push('api_keys.scopes column missing after restore');
+    } else {
+      const expectedScopes = expected.apiKeys.scopes || {};
+      const actualScopes = actual.apiKeys.scopes || {};
+
+      for (const [keyId, scopes] of Object.entries(expectedScopes)) {
+        if (actualScopes[keyId] !== scopes) {
+          failures.push(
+            `api_keys ${keyId} scopes differ (backup ${scopes}, restored ${actualScopes[keyId]})`
           );
         }
       }
@@ -1010,6 +1118,45 @@ function detectAccessRevocations(auditRows) {
       continue;
     }
 
+    if (row.action === 'api_key.grant_revoke') {
+      // A grant revoked at or before the restore point (T12): the
+      // snapshot still containing the grant row would contradict this
+      // event, and — the dangerous direction — restoring an OLDER
+      // backup than a revocation revives the grant. Naming the event
+      // here is what lets the owner reconcile grants before serving.
+      let details = {};
+
+      try {
+        details = JSON.parse(row.details || '{}');
+      } catch (error) {
+        details = {};
+      }
+
+      events.push({
+        ...base,
+        type: 'grant-revoke',
+        apiKeyId: details.apiKeyId ?? null,
+        shareId: details.shareId ?? row.page_id ?? null
+      });
+      continue;
+    }
+
+    if (row.action === 'api_key.delete') {
+      // Deleting a Key revokes the credential and all of its grants at
+      // once (T12); rotation, by contrast, preserves grants and is
+      // deliberately NOT a revocation event.
+      let details = {};
+
+      try {
+        details = JSON.parse(row.details || '{}');
+      } catch (error) {
+        details = {};
+      }
+
+      events.push({ ...base, type: 'api-key-delete', apiKeyId: details.apiKeyId ?? null });
+      continue;
+    }
+
     if (row.action === 'page.delete') {
       events.push({ ...base, type: 'page-delete' });
       continue;
@@ -1036,6 +1183,7 @@ module.exports = {
   ACCESS_POLICY_FIELDS,
   KNOWN_TABLES,
   assertIsolatedDatabaseUrl,
+  buildGrantSection,
   buildManifest,
   buildSection,
   canonicalValue,

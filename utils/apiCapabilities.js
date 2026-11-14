@@ -6,14 +6,18 @@
 // docs/api-capabilities.md describes the same shape — so the documented
 // capabilities cannot drift away from the real HTTP behavior.
 //
-// At this stage both credential kinds (legacy environment Key and managed
-// Keys) are create-only: the only write operation is Share creation.
-// Later tickets add scopes/grants and management operations by extending
-// this definition; nothing here may advertise an operation the routes do
-// not implement.
+// Scopes and per-Share grants arrived with T12 (issue #36): a managed Key
+// now reports ITS OWN scopes, and the read-only management operations are
+// advertised only to a managed credential whose scopes include them. The
+// legacy environment Key is create-only by construction and never sees a
+// management operation here. Nothing in this definition may advertise an
+// operation the routes do not implement, and no write operation beyond
+// Share creation exists yet: update/publish scopes are stored vocabulary
+// for later tickets, not advertised capabilities.
 
 const config = require('../config');
 const { getMarkdownThemeOptions } = require('./markdownThemeCatalog');
+const { parseApiKeyScopes } = require('./apiKeyIdentity');
 
 const API_PROTOCOL_VERSION = 1;
 
@@ -21,15 +25,38 @@ const API_PROTOCOL_VERSION = 1;
 // accepted-type set from this list.
 const API_CONTENT_TYPES = Object.freeze(['html', 'markdown', 'svg', 'mermaid']);
 
-// Effective scopes at the create-only stage. Stored scopes/grants arrive
-// with later tickets; until then every valid credential holds exactly this
-// list, for both credential kinds.
+// The scopes a credential with no stored scope row holds (the legacy Key,
+// and a managed Key migrated by 010 before any owner edit): create-only.
 const CREATE_ONLY_SCOPES = Object.freeze(['share:create']);
 
 const SHARE_CREATE_OPERATION = Object.freeze({
   id: 'share.create',
   method: 'POST',
   path: '/api/v1/share'
+});
+
+// Read-only resource management (T12). Each operation additionally
+// requires the matching per-Share grant at call time; the capabilities
+// document advertises the operation when the credential's scopes allow
+// attempting it, never the grants themselves (per-resource data does
+// not belong in a connection document).
+const SHARE_LIST_OPERATION = Object.freeze({
+  id: 'share.list',
+  method: 'GET',
+  path: '/api/v1/shares',
+  pagination: Object.freeze({ defaultLimit: 20, maxLimit: 100, cursor: 'opaque' })
+});
+
+const SHARE_CONTENT_READ_OPERATION = Object.freeze({
+  id: 'share.content.read',
+  method: 'GET',
+  path: '/api/v1/shares/:id/content'
+});
+
+const SHARE_STATE_READ_OPERATION = Object.freeze({
+  id: 'share.state.read',
+  method: 'GET',
+  path: '/api/v1/shares/:id/state'
 });
 
 const CONNECTION_OPERATIONS = Object.freeze([
@@ -63,19 +90,56 @@ function getMarkdownThemePresetIds() {
 }
 
 // The capabilities document for one verified credential. `credentialType`
-// is 'managed' or 'legacy'; at the create-only stage both kinds receive the
-// same operations and scopes. The document contains no secret material and
-// no per-resource data: it describes the API surface, never other Keys or
-// Shares.
-function buildCapabilities({ credentialType } = {}) {
-  return {
+// is 'managed' or 'legacy'; `scopes` is the credential's own effective
+// scope list (managed Keys read theirs from the stored row; the legacy
+// Key is always create-only). The document contains no secret material
+// and no per-resource data: it describes the API surface, never other
+// Keys, Shares or grants.
+function buildCapabilities({ credentialType, scopes } = {}) {
+  const isManaged = credentialType === 'managed';
+  const effectiveScopes = isManaged
+    ? parseApiKeyScopes(scopes === undefined ? [...CREATE_ONLY_SCOPES] : scopes)
+    : [...CREATE_ONLY_SCOPES];
+  const hasScope = scope => effectiveScopes.includes(scope);
+
+  const operations = [];
+
+  if (hasScope('share:create')) {
+    operations.push({ ...SHARE_CREATE_OPERATION });
+  }
+
+  operations.push(...CONNECTION_OPERATIONS.map(operation => ({ ...operation })));
+
+  // Read-only management (T12): managed credentials only, and only the
+  // operations the credential's scopes actually allow attempting. The
+  // state read matches either the read or the publish scope (whichever
+  // grant kind the Share carries); the list and content reads are read
+  // operations. A publish-scope-only credential is told about the state
+  // read and the (metadata-neutralized) list, never about content.
+  const readOperations = [];
+
+  if (isManaged && (hasScope('share:read') || hasScope('share:update') || hasScope('share:publish'))) {
+    readOperations.push({
+      ...SHARE_LIST_OPERATION,
+      pagination: { ...SHARE_LIST_OPERATION.pagination }
+    });
+  }
+
+  if (isManaged && hasScope('share:read')) {
+    readOperations.push({ ...SHARE_CONTENT_READ_OPERATION });
+  }
+
+  if (isManaged && (hasScope('share:read') || hasScope('share:publish'))) {
+    readOperations.push({ ...SHARE_STATE_READ_OPERATION });
+  }
+
+  operations.push(...readOperations);
+
+  const document = {
     protocolVersion: API_PROTOCOL_VERSION,
     credentialType: credentialType || null,
-    scopes: [...CREATE_ONLY_SCOPES],
-    operations: [
-      { ...SHARE_CREATE_OPERATION },
-      ...CONNECTION_OPERATIONS.map(operation => ({ ...operation }))
-    ],
+    scopes: effectiveScopes,
+    operations,
     contentTypes: [...API_CONTENT_TYPES],
     markdownThemePresets: getMarkdownThemePresetIds(),
     limits: {
@@ -84,7 +148,7 @@ function buildCapabilities({ credentialType } = {}) {
       smallRequestBody: config.smallBodyLimit,
       smallRequestBodyBytes: parseByteLimit(config.smallBodyLimit)
     },
-    conditionalWrites: [
+    conditionalWrites: hasScope('share:create') ? [
       {
         operation: SHARE_CREATE_OPERATION.id,
         requiresIfMatch: false,
@@ -114,8 +178,38 @@ function buildCapabilities({ credentialType } = {}) {
         // refuses the write with 401 instead of publishing (T05).
         credentialRecheck: { status: 401, code: 'api_key_credential_changed', retryable: false }
       }
-    ]
+    ] : []
   };
+
+  if (readOperations.length > 0) {
+    // Conditional reads (T12): the content and state representations
+    // carry SEPARATE strong ETags (parent spec #24 §4) — a content tag
+    // never validates a state response or vice versa. If-None-Match is
+    // evaluated with the RFC 7232 weak comparison for GET: a weak tag
+    // naming the current representation, or `*`, answers 304. Both
+    // responses are private/no-store; no shared cache is involved.
+    document.conditionalReads = readOperations
+      .filter(operation => operation.id !== SHARE_LIST_OPERATION.id)
+      .map(operation => ({
+        operation: operation.id,
+        etagFormat: operation.id === SHARE_CONTENT_READ_OPERATION.id
+          ? '"content:<Share ID>:<Revision>"'
+          : '"access:<Share ID>:<Access Revision>"',
+        ifNoneMatch: { weakComparison: true, notModifiedStatus: 304 },
+        cacheControl: 'private, no-store'
+      }));
+    // Authorization failures are part of the read contract (parent spec
+    // #24 §6): no/invalid credential 401, missing operation scope 403,
+    // scope held but no matching grant on the target 404 — the 404
+    // never distinguishes "exists but not granted" from "absent".
+    document.managementAuthorization = {
+      unauthenticated: { status: 401 },
+      missingScope: { status: 403, code: 'insufficient_scope', retryable: false },
+      noGrant: { status: 404, code: 'share_not_found', retryable: false }
+    };
+  }
+
+  return document;
 }
 
 module.exports = {
@@ -123,7 +217,10 @@ module.exports = {
   API_PROTOCOL_VERSION,
   CONNECTION_OPERATIONS,
   CREATE_ONLY_SCOPES,
+  SHARE_CONTENT_READ_OPERATION,
   SHARE_CREATE_OPERATION,
+  SHARE_LIST_OPERATION,
+  SHARE_STATE_READ_OPERATION,
   buildCapabilities,
   getMarkdownThemePresetIds,
   parseByteLimit
