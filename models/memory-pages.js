@@ -7,6 +7,11 @@ const {
   nextAccessRevision,
   toAccessRevisionString
 } = require('../utils/shareAccess');
+const {
+  PUBLISHING_PAUSED_AUDIT_ACTION,
+  MemoryPublishingGate,
+  isPublishingPausedError
+} = require('../utils/publishing');
 
 function filterAdminPages(pages, options = {}) {
   const search = options.search || '';
@@ -79,6 +84,9 @@ class MemoryPageRepository {
     this.auditIdCounter = 0;
     this.apiKeys = new Map();
     this.homepagePasswordRequired = true;
+    // Same observable maintenance-gate protocol as the Postgres advisory
+    // lock (T04): shared holds for writes, exclusive drain for pausing.
+    this.publishingGate = new MemoryPublishingGate();
   }
 
   async init() {
@@ -98,28 +106,54 @@ class MemoryPageRepository {
       throw new TypeError('passwordRequired must be a boolean');
     }
 
-    const previousValue = this.homepagePasswordRequired;
+    // A management write: it passes the publishing maintenance gate (T04).
+    return this.publishingGate.runWrite(async () => {
+      const previousValue = this.homepagePasswordRequired;
 
-    if (typeof previousValue !== 'boolean') {
-      throw new Error('Homepage access setting is unavailable');
-    }
+      if (typeof previousValue !== 'boolean') {
+        throw new Error('Homepage access setting is unavailable');
+      }
 
-    if (previousValue === passwordRequired) {
-      return { passwordRequired, changed: false };
-    }
+      if (previousValue === passwordRequired) {
+        return { passwordRequired, changed: false };
+      }
 
-    await this.createAuditLog({
-      action: 'settings.homepage_password_required.update',
-      pageId: null,
-      details: JSON.stringify({ from: previousValue, to: passwordRequired }),
-      ip
+      await this.createAuditLog({
+        action: 'settings.homepage_password_required.update',
+        pageId: null,
+        details: JSON.stringify({ from: previousValue, to: passwordRequired }),
+        ip
+      });
+      this.homepagePasswordRequired = passwordRequired;
+
+      return { passwordRequired, changed: true };
     });
-    this.homepagePasswordRequired = passwordRequired;
+  }
 
-    return { passwordRequired, changed: true };
+  async getPublishingWritesPaused() {
+    return this.publishingGate.isPaused();
+  }
+
+  async setPublishingWritesPaused({ paused, ip } = {}) {
+    if (typeof paused !== 'boolean') {
+      throw new TypeError('paused must be a boolean');
+    }
+
+    return this.publishingGate.setPaused(paused, async (previousValue, nextValue) => {
+      await this.createAuditLog({
+        action: PUBLISHING_PAUSED_AUDIT_ACTION,
+        pageId: null,
+        details: JSON.stringify({ from: previousValue, to: nextValue }),
+        ip
+      });
+    });
   }
 
   async create(page) {
+    return this.publishingGate.runWrite(async () => this.createUnlocked(page));
+  }
+
+  async createUnlocked(page) {
     if (this.pages.has(page.id)) {
       const error = new Error('UNIQUE constraint failed: pages.id');
       error.code = 'SQLITE_CONSTRAINT';
@@ -147,29 +181,31 @@ class MemoryPageRepository {
   }
 
   async createApiKey(apiKey) {
-    if (this.apiKeys.has(apiKey.id)) {
-      const error = new Error('UNIQUE constraint failed: api_keys.id');
-      error.code = 'SQLITE_CONSTRAINT';
-      throw error;
-    }
+    return this.publishingGate.runWrite(async () => {
+      if (this.apiKeys.has(apiKey.id)) {
+        const error = new Error('UNIQUE constraint failed: api_keys.id');
+        error.code = 'SQLITE_CONSTRAINT';
+        throw error;
+      }
 
-    const record = {
-      id: apiKey.id,
-      name: apiKey.name,
-      key_hash: apiKey.keyHash,
-      key_prefix: apiKey.keyPrefix,
-      created_at: apiKey.createdAt,
-      last_used_at: null
-    };
+      const record = {
+        id: apiKey.id,
+        name: apiKey.name,
+        key_hash: apiKey.keyHash,
+        key_prefix: apiKey.keyPrefix,
+        created_at: apiKey.createdAt,
+        last_used_at: null
+      };
 
-    this.apiKeys.set(record.id, record);
-    return {
-      id: record.id,
-      name: record.name,
-      key_prefix: record.key_prefix,
-      created_at: record.created_at,
-      last_used_at: record.last_used_at
-    };
+      this.apiKeys.set(record.id, record);
+      return {
+        id: record.id,
+        name: record.name,
+        key_prefix: record.key_prefix,
+        created_at: record.created_at,
+        last_used_at: record.last_used_at
+      };
+    });
   }
 
   async listApiKeys() {
@@ -183,9 +219,11 @@ class MemoryPageRepository {
   }
 
   async deleteApiKey(id) {
-    return this.apiKeys.delete(id);
+    return this.publishingGate.runWrite(async () => this.apiKeys.delete(id));
   }
 
+  // Deliberately NOT gated (T04): background last-used bookkeeping for an
+  // already-authorized read must not impede read access during maintenance.
   async touchApiKey(id, usedAt = Date.now()) {
     const apiKey = this.apiKeys.get(id);
 
@@ -315,19 +353,21 @@ class MemoryPageRepository {
   }
 
   async updateProtection(id, options) {
-    const page = this.pages.get(id);
+    return this.publishingGate.runWrite(async () => {
+      const page = this.pages.get(id);
 
-    if (!page) {
-      return false;
-    }
+      if (!page) {
+        return false;
+      }
 
-    page.is_protected = options.isProtected ? 1 : 0;
-    page.password_hash = options.passwordHash || null;
-    page.encrypted_password = options.encryptedPassword || null;
-    // A protection write is an access-policy change: previously issued
-    // access cookies must stop working immediately (T01).
-    page.access_revision = nextAccessRevision(page.access_revision);
-    return true;
+      page.is_protected = options.isProtected ? 1 : 0;
+      page.password_hash = options.passwordHash || null;
+      page.encrypted_password = options.encryptedPassword || null;
+      // A protection write is an access-policy change: previously issued
+      // access cookies must stop working immediately (T01).
+      page.access_revision = nextAccessRevision(page.access_revision);
+      return true;
+    });
   }
 
   // Conditional protection write used by the access-policy routes (T01).
@@ -335,75 +375,81 @@ class MemoryPageRepository {
   // expectedAccessRevision; the revision advances in the same step when
   // advanceAccessRevision is set, so the check and the revocation are atomic.
   async updateProtectionWithAccessRevision(id, options, precondition = {}) {
-    const page = this.pages.get(id);
+    return this.publishingGate.runWrite(async () => {
+      const page = this.pages.get(id);
 
-    if (!page) {
-      return { status: 'not_found', accessRevision: null };
-    }
+      if (!page) {
+        return { status: 'not_found', accessRevision: null };
+      }
 
-    const currentRevision = toAccessRevisionString(page.access_revision);
+      const currentRevision = toAccessRevisionString(page.access_revision);
 
-    if (precondition.expectedAccessRevision != null
-      && !accessRevisionMatches(currentRevision, precondition.expectedAccessRevision)) {
-      return { status: 'conflict', accessRevision: currentRevision };
-    }
+      if (precondition.expectedAccessRevision != null
+        && !accessRevisionMatches(currentRevision, precondition.expectedAccessRevision)) {
+        return { status: 'conflict', accessRevision: currentRevision };
+      }
 
-    page.is_protected = options.isProtected ? 1 : 0;
-    page.password_hash = options.passwordHash || null;
-    page.encrypted_password = options.encryptedPassword || null;
+      page.is_protected = options.isProtected ? 1 : 0;
+      page.password_hash = options.passwordHash || null;
+      page.encrypted_password = options.encryptedPassword || null;
 
-    if (precondition.advanceAccessRevision) {
-      page.access_revision = nextAccessRevision(currentRevision);
-    }
+      if (precondition.advanceAccessRevision) {
+        page.access_revision = nextAccessRevision(currentRevision);
+      }
 
-    return { status: 'updated', accessRevision: toAccessRevisionString(page.access_revision) };
+      return { status: 'updated', accessRevision: toAccessRevisionString(page.access_revision) };
+    });
   }
 
   // Admin save that may combine content fields with access-policy fields
   // (T01). Content-only saves pass no expected revision and never advance
   // it; access-policy saves are compare-and-swap on the revision.
   async updatePageWithAccessPolicy(id, options, precondition = {}) {
-    const page = this.pages.get(id);
+    return this.publishingGate.runWrite(async () => {
+      const page = this.pages.get(id);
 
-    if (!page) {
-      return { status: 'not_found', accessRevision: null };
-    }
+      if (!page) {
+        return { status: 'not_found', accessRevision: null };
+      }
 
-    const currentRevision = toAccessRevisionString(page.access_revision);
+      const currentRevision = toAccessRevisionString(page.access_revision);
 
-    if (precondition.expectedAccessRevision != null
-      && !accessRevisionMatches(currentRevision, precondition.expectedAccessRevision)) {
-      return { status: 'conflict', accessRevision: currentRevision };
-    }
+      if (precondition.expectedAccessRevision != null
+        && !accessRevisionMatches(currentRevision, precondition.expectedAccessRevision)) {
+        return { status: 'conflict', accessRevision: currentRevision };
+      }
 
-    applyPageUpdate(page, options);
+      applyPageUpdate(page, options);
 
-    if (precondition.advanceAccessRevision) {
-      page.access_revision = nextAccessRevision(currentRevision);
-    }
+      if (precondition.advanceAccessRevision) {
+        page.access_revision = nextAccessRevision(currentRevision);
+      }
 
-    return { status: 'updated', accessRevision: toAccessRevisionString(page.access_revision) };
+      return { status: 'updated', accessRevision: toAccessRevisionString(page.access_revision) };
+    });
   }
 
   // Explicit admin revocation entry (T01): advances the access revision
   // without touching the password, expiry, or content.
   async revokeAccess(id, expectedAccessRevision) {
-    const page = this.pages.get(id);
+    return this.publishingGate.runWrite(async () => {
+      const page = this.pages.get(id);
 
-    if (!page) {
-      return { status: 'not_found', accessRevision: null };
-    }
+      if (!page) {
+        return { status: 'not_found', accessRevision: null };
+      }
 
-    const currentRevision = toAccessRevisionString(page.access_revision);
+      const currentRevision = toAccessRevisionString(page.access_revision);
 
-    if (expectedAccessRevision != null
-      && !accessRevisionMatches(currentRevision, expectedAccessRevision)) {
-      return { status: 'conflict', accessRevision: currentRevision };
-    }
+      if (expectedAccessRevision != null
+        && !accessRevisionMatches(currentRevision, expectedAccessRevision)) {
+        return { status: 'conflict', accessRevision: currentRevision };
+      }
 
-    page.access_revision = nextAccessRevision(currentRevision);
+      page.access_revision = nextAccessRevision(currentRevision);
 
-    return { status: 'updated', accessRevision: toAccessRevisionString(page.access_revision) };
+      return { status: 'updated', accessRevision: toAccessRevisionString(page.access_revision) };
+    });
   }
 
   async setFavorite(id, isFavorite) {
@@ -411,75 +457,93 @@ class MemoryPageRepository {
       throw new TypeError('isFavorite must be a boolean');
     }
 
-    const page = this.pages.get(id);
+    return this.publishingGate.runWrite(async () => {
+      const page = this.pages.get(id);
 
-    if (!page) {
+      if (!page) {
+        return {
+          found: false,
+          changed: false,
+          isFavorite: false,
+          previousValue: null
+        };
+      }
+
+      const previousValue = page.is_favorite;
+
+      page.is_favorite = isFavorite;
+
       return {
-        found: false,
-        changed: false,
-        isFavorite: false,
-        previousValue: null
+        found: true,
+        changed: previousValue !== isFavorite,
+        isFavorite,
+        previousValue
       };
-    }
-
-    const previousValue = page.is_favorite;
-
-    page.is_favorite = isFavorite;
-
-    return {
-      found: true,
-      changed: previousValue !== isFavorite,
-      isFavorite,
-      previousValue
-    };
+    });
   }
 
   async updatePage(id, options) {
-    const page = this.pages.get(id);
+    return this.publishingGate.runWrite(async () => {
+      const page = this.pages.get(id);
 
-    if (!page) {
-      return false;
-    }
+      if (!page) {
+        return false;
+      }
 
-    applyPageUpdate(page, options);
+      applyPageUpdate(page, options);
 
-    return true;
+      return true;
+    });
   }
 
   async deletePage(id) {
-    return this.pages.delete(id);
+    return this.publishingGate.runWrite(async () => this.pages.delete(id));
   }
 
   async deletePages(ids) {
-    let count = 0;
-    ids.forEach((id) => {
-      if (this.pages.delete(id)) count += 1;
+    return this.publishingGate.runWrite(async () => {
+      let count = 0;
+      ids.forEach((id) => {
+        if (this.pages.delete(id)) count += 1;
+      });
+      return count;
     });
-    return count;
   }
 
   async recordViewEvent(id, now = Date.now(), hasAccess = false, accessRevision = null) {
-    const page = this.pages.get(id);
+    // A view event is a controlled write: while publishing writes are
+    // paused it is not counted at all and reports 'maintenance' (T04).
+    try {
+      return await this.publishingGate.runWrite(async () => {
+        const page = this.pages.get(id);
 
-    if (!page) {
-      return 'not_found';
+        if (!page) {
+          return 'not_found';
+        }
+
+        if (page.expires_at !== null && Number(page.expires_at) <= now) {
+          return 'expired';
+        }
+
+        // A protected Share only counts the event when the caller's credential
+        // is bound to the Share's current access revision (T01). A boolean
+        // "has access" without a matching revision is not enough.
+        if (page.is_protected === 1
+          && (!hasAccess || accessRevision == null
+            || !accessRevisionMatches(page.access_revision, accessRevision))) {
+          return 'protected';
+        }
+
+        page.view_count = (page.view_count || 0) + 1;
+        return 'counted';
+      });
+    } catch (error) {
+      if (isPublishingPausedError(error)) {
+        return 'maintenance';
+      }
+
+      throw error;
     }
-
-    if (page.expires_at !== null && Number(page.expires_at) <= now) {
-      return 'expired';
-    }
-
-    // A protected Share only counts the event when the caller's credential
-    // is bound to the Share's current access revision (T01). A boolean
-    // "has access" without a matching revision is not enough.
-    if (page.is_protected === 1
-      && (!hasAccess || accessRevision == null
-        || !accessRevisionMatches(page.access_revision, accessRevision))) {
-      return 'protected';
-    }
-
-    page.view_count = (page.view_count || 0) + 1;
-    return 'counted';
   }
 
   async createAuditLog({ action, pageId, details, ip }) {

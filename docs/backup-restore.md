@@ -67,7 +67,7 @@ QS_PG_BIN_DIR=/path/to/pg/bin \
   npm run db:backup-check -- [--schema full|legacy] [--keep]
 ```
 
-演练自建两个以 `_test` 结尾的合成本地库，写入已知夹具（公开/受保护/已过期 Share、收藏、主题、API Key、撤销与策略变更审计、站点设置），跑通备份 → 恢复 → 核对，并断言：非默认 `access_revision`（如 `9007199254740993`）精确往返、只改恢复库的 `access_revision` 会被核对拒绝、报告包含备份与恢复耗时、恢复库 `safeToServe: false`。`--schema legacy` 用 001–003 旧结构演练，此时 `access_revision` 相关断言会显式 SKIP 并打印说明。演练结束自动删除两个夹具库（`--keep` 保留以便排查）。该演练也包含在 `npm run test:postgres` 中（工具缺失时显式 skip，不冒充通过）。
+演练自建两个以 `_test` 结尾的合成本地库，写入已知夹具（公开/受保护/已过期 Share、收藏、主题、API Key、撤销与策略变更审计、站点设置），跑通备份 → 恢复 → 核对，并断言：非默认 `access_revision`（如 `9007199254740993`）精确往返、只改恢复库的 `access_revision` 会被核对拒绝、报告包含备份与恢复耗时、恢复库 `safeToServe: false`。完整结构（台账 001–005）下夹具还会把写维护开关 `publishing_writes_paused` 置为 `true`，断言恢复库保持暂停（开关本身也是备份内容，恢复后不会悄悄恢复写入；开关操作见 [写维护手册](maintenance.md)）。`--schema legacy` 用 001–003 旧结构演练，此时 `access_revision` 与 `publishing_writes_paused` 相关断言会显式 SKIP 并打印说明。演练结束自动删除两个夹具库（`--keep` 保留以便排查）。该演练也包含在 `npm run test:postgres` 中（工具缺失时显式 skip，不冒充通过）。
 
 ## 记录要求
 

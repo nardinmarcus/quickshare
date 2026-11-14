@@ -436,10 +436,20 @@ async function collectSnapshot(query) {
   audit.highWaterCreatedAt = lastAudit ? canonicalValue(lastAudit.created_at) : null;
 
   const settingsResult = await query('SELECT * FROM public.site_settings ORDER BY id');
-  const siteSettings = buildSection(settingsResult.rows, SITE_SETTINGS_DIGEST_FIELDS, 'id');
+  // publishing_writes_paused arrives with migration 005 (T04); mirror the
+  // access_revision treatment and only digest it when the column exists,
+  // so legacy 001-003 fixtures keep their historical digests.
+  const hasPublishingWritesPaused = (columns.site_settings || []).includes('publishing_writes_paused');
+  const siteSettingsFields = hasPublishingWritesPaused
+    ? [...SITE_SETTINGS_DIGEST_FIELDS, 'publishing_writes_paused']
+    : SITE_SETTINGS_DIGEST_FIELDS;
+  const siteSettings = buildSection(settingsResult.rows, siteSettingsFields, 'id');
   const settingsRow = settingsResult.rows[0];
   siteSettings.homepagePasswordRequired = settingsRow
     ? settingsRow.homepage_password_required === true
+    : null;
+  siteSettings.publishingWritesPaused = hasPublishingWritesPaused && settingsRow
+    ? settingsRow.publishing_writes_paused === true
     : null;
 
   const snapshot = {
