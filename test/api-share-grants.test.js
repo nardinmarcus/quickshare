@@ -253,13 +253,18 @@ test('a create-only managed Key is refused with 403 until the owner assigns the 
   assert.deepEqual(meAfter.json.credential.scopes, ['share:create', 'share:read']);
 
   const capsAfter = await jsonRequest('/api/v1/capabilities', { headers: key.headers });
+  // T14 (issue #38) deliberately extends this T12 shape: the read
+  // scope now also advertises the granted history reads, and the
+  // single-Revision read joins conditionalReads with the content
+  // ETag family. The restore stays absent — it needs the update
+  // scope as well.
   assert.deepEqual(
     capsAfter.json.capabilities.operations.map(operation => operation.id),
-    ['share.create', 'connection.me', 'connection.capabilities', 'operation.status', 'share.list', 'share.content.read', 'share.state.read']
+    ['share.create', 'connection.me', 'connection.capabilities', 'operation.status', 'share.list', 'share.content.read', 'share.state.read', 'share.history.read', 'share.revision.read']
   );
   assert.deepEqual(
     capsAfter.json.capabilities.conditionalReads.map(entry => entry.operation),
-    ['share.content.read', 'share.state.read']
+    ['share.content.read', 'share.state.read', 'share.revision.read']
   );
 
   const listAfter = await jsonRequest('/api/v1/shares', { headers: key.headers });

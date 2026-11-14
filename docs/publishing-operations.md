@@ -217,6 +217,27 @@ grant 行仍持有 update 权限。于是先提交的轮换/撤销能拒绝在�
 行、Revision 与操作记录同成同败；幂等重放不进入首次执行路径，因
 此不产生重复授权。
 
+## API 授权历史恢复（T14）
+
+`POST /api/v1/shares/:id/restore`（见
+[API 身份与能力发现](api-capabilities.md) 的 T14 一节）与 T13 的
+内容更新一样不是第二套规则：它调用与后台恢复同一个仓库操作
+（`restoreRevision`），动作名同为 `share.restore`，命名空间为凭
+据自己的 `key:managed:<Key ID>`——与后台命名空间同名动作、互不
+可见。摘要绑定来源 Revision 与调用方的当前内容期望，回执为
+`{kind, shareId, sourceRevision, previousRevision, contentRevision,
+contentChanged}`（从不含正文）。与后台恢复的差别只有两处：新
+Revision 的来源标记为 `source: 'api-restore'`、主体 `api_key`
+（后台为 `admin-restore` / 所有者），以及授权复核的位置与 T13 相
+同——仓库事务内、操作查找与前置条件判定**之前**先复核凭据版本
+与 update 授权行。因此清除/恢复竞争、响应丢失重放与旧条件重放
+的语义与后台完全一致：来源在同一 Share 行锁内判定，清除先提交
+则恢复得 410 `revision_unavailable`，恢复先提交则其新 Revision
+载荷完整；恢复结果版本事后被所有者清除时，其操作回执已被清除
+事务同批抹除，重放返回 410 `operation_result_unavailable`，操
+作状态确认仍只报标识。Key 侧**没有**清除动作：账本里永远不会
+出现 Key 命名空间的清除记录。
+
 ## 历史清除与回执（T10）
 
 所有者在后台永久清除某个非当前 Revision（见

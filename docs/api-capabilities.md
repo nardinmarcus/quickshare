@@ -163,8 +163,9 @@ ID、体积限制与条件写规则。T05 阶段两类凭据均为 **create-only
   no-store`。
 - **能力与身份**：`GET /api/v1/me` 的 `scopes` 如实报告当前凭据的范围；
   `GET /api/v1/capabilities` 只为当前凭据实际能做的操作列
-  `share.list` / `share.content.read` / `share.state.read`，并在出现读
-  操作时附带 `conditionalReads`（两套 ETag 语义）与
+  `share.list` / `share.content.read` / `share.state.read`（T14 起读
+  族另含 `share.history.read` / `share.revision.read`，见下节），并在
+  出现读操作时附带 `conditionalReads`（两套 ETag 语义）与
   `managementAuthorization`（401/403/404 契约）说明。create-only 凭据的
   能力输出与 T05/T08 时完全一致。
 - **备份覆盖**：范围与授权随备份走——摘要比对逐 Key 的 `scopes` 原文与
@@ -234,3 +235,83 @@ T13 启用 `share:update` 范围与 grant 的 `update` 权限：后台「API 管
 - 备份覆盖：开关原样随备份走；恢复演练固件含开启开关的 Key、一条
   update 授权与一条 API 更新操作记录，并对 `can_update` 做篡改
   判失败（见 [备份与恢复手册](backup-restore.md)）。
+
+## 授权历史读取与条件恢复（T14）
+
+T14 把 T07 的历史面以**独立的、按授权收口的 API 表面**开放给合作
+者：后台历史仍只属于所有者（仪表盘会话），公开可见性与解锁 Cookie
+仍不构成任何历史权限。
+
+### `GET /api/v1/shares/:id/revisions`
+
+已授权 Share 的历史元信息分页：只返回版本、捕获时间、来源、主体
+类型、恢复来源与清除状态——永不聚合正文。
+
+- **前提**：`share:read` 范围 + 目标 Share 的 read 授权（编辑授权
+  蕴含 read）。判定违例与 T12 同族：缺凭据 401；缺范围 403
+  `insufficient_scope`；无授权/不存在 404 `share_not_found`（不可区
+  分）；publish 授权不蕴含 read，publish-only 授权在此仍是 404。
+- **分页**：`limit` 默认 20、上限 100（超限收敛；非整数或小于 1
+  返回 400 `invalid_limit`）；`offset` 默认 0（负数或非整数 400
+  `invalid_offset`）；按版本号倒序。响应含 `total` 与
+  `currentRevision`，每条带 `current` 标记。指针与元信息在仓库层
+  以**同一快照**读出（Postgres 为单条语句、内存 Adapter 为同一同
+  步步），`current` 标记永不与同响应内的指针自相矛盾。
+- **墓碑**：已清除版本仍以元信息列出（`purged: true` 与清除时间），
+  响应不含其标题、简介或正文。
+
+### `GET /api/v1/shares/:id/revisions/:revision`
+
+指定版本的完整规范快照（正文、codeType、标题、简介、主题、来源与
+恢复来源）：
+
+- 前提同上（read 范围 + read 授权）。版本不存在 404
+  `revision_not_found`；已清除返回 410 `revision_unavailable` 并附
+  墓碑元信息，永不返回伪造或残缺的快照。
+- 响应带该快照**自身**的强 ETag `"content:<Share ID>:<Revision>"`
+  （内容家族按其覆盖的版本命名，当前与历史同规则），并支持
+  `If-None-Match` 弱比较命中 304；`private, no-store`。
+
+### `POST /api/v1/shares/:id/restore`
+
+把指定版本恢复为当前内容，与后台恢复共用同一个仓库事务（操作台
+账、回放先于前置条件判定、相同内容无操作、审计），不另立规则：
+
+- **前提**：凭据须同时持有 `share:read` 与 `share:update` 范围，
+  且对目标 Share 持有 update 授权——恢复按内容编辑处理。违例判
+  定：缺范围 403；无授权/不存在 404（不可区分）。事务内部以 Key
+  行锁复核凭据版本与授权行（先提交的轮换/撤销先行生效），复核在
+  回放判定之前——已撤销或已轮换的凭据不能凭旧请求标识回放。
+- **请求体（严格、小体积）**：经 16 KB 小请求解析器（超限
+  413）；只接受一个字段 `revision`（十进制版本字符串），其他
+  字段以 400 `invalid_field` 指名拒绝，缺失 400 `missing_field`。
+- **强制条件头**：`If-Match` 必须是**当前**内容 Revision 的强标
+  签（缺失 428；过期/弱标签/通配/访问家族标签 412
+  `content_conflict`，响应附 `current` 当前快照）；
+  `Idempotency-Key` 必填（缺失/格式非法 400）。同标识同输入重放
+  原始结果，同标识换来源或换基线 409 `idempotency_conflict`；来
+  源版本已清除 410 `revision_unavailable`；恢复结果版本事后被清
+  除时，重放因其回执已被清除同事务抹除而返回 410
+  `operation_result_unavailable`；维护暂停时（连同重放）503
+  `maintenance`。写完后可经 `GET /api/v1/operations/:requestId`
+  在本 Key 命名空间内确认（记录在 `key:managed:<Key ID>` 命名空
+  间，绝不写入后台命名空间）。
+- **语义**：真实恢复写一条新 Revision（`source: "api-restore"`、
+  主体类型 `api_key`、`restored_from_revision` 记录来源）；来源与
+  当前相同时是无操作成功（`contentChanged: false`），不写
+  Revision 但照常记账。恢复**不改变** URL、密码、有效期、
+  `access_revision`、Key 授权、发布状态、收藏与浏览量；已下架、
+  已过期的 Share 在授权下仍可恢复与读历史（管理授权与公开可见
+  性分别判断）。
+- **没有 Key 清除入口**：清除历史不存在任何 API 路由，能力文档
+  也永不列 purge 操作——清除仍是所有者在后台会话 + CSRF + 版本
+  确认下的专属动作（T10）。
+- **能力**：`GET /api/v1/capabilities` 在当前凭据持有 read 范围时
+  列 `share.history.read` / `share.revision.read`（后者同时进入
+  `conditionalReads`，ETag 家族为内容家族）；仅当托管 Key 同时
+  持有 read+update 范围时才列 `share.restore` 并在
+  `conditionalWrites` 附其 `If-Match` + 幂等键规则。
+- **备份覆盖**：恢复操作记录与其它操作记录一样随备份逐行往返；
+  恢复演练固件含第三条已提交记录——托管 Key 命名空间内的
+  `share.restore`（回执为恢复形状，不含正文），断言精确往返（见
+  [备份与恢复手册](backup-restore.md)）。

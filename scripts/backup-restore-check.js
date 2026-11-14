@@ -48,6 +48,10 @@
 //     operation record with its encrypted receipt, all restored
 //     exactly; a restored-only flip of the grant's can_update flag is
 //     rejected by name
+//   - granted history restore state (T14) round-trips: a third
+//     committed operation record — a share.restore in the fixture
+//     Key's managed namespace (never the dashboard namespace) with
+//     its restore-shaped encrypted receipt — restores exactly
 //
 // No production data is involved; both fixture databases are dropped at the
 // end unless --keep is passed.
@@ -340,6 +344,30 @@ async function seedFixtures(pool, { hasAccessRevision }) {
          receipt_encrypted, result_state, created_at
        ) VALUES ($1, $2, 'share.content.update', $3, $4, $3, $5::bigint, $6::bigint, $7, 'committed', $8)`,
       ['key:managed:drillkey1', 'drill-request-0002', 'drill-protected', 'b'.repeat(64), BIG_CONTENT_REVISION, BIG_ACCESS_REVISION, updateReceipt, BASE_TIME + 31]
+    );
+
+    // A committed history-restore operation by the same Key (T14):
+    // the record lives in the MANAGED-KEY namespace — a Key restore
+    // never writes under the dashboard namespace — and its receipt is
+    // the restore shape (source and previous Revisions, resulting
+    // content Revision, no body). The drill proves it round-trips
+    // exactly like the create and update records.
+    const restoreReceipt = encryptSecret(JSON.stringify({
+      kind: 'share.restore',
+      shareId: 'drill-protected',
+      sourceRevision: '1',
+      previousRevision: '9007199254740992',
+      contentRevision: BIG_CONTENT_REVISION,
+      contentChanged: true
+    }));
+
+    await pool.query(
+      `INSERT INTO public.publish_operations (
+         actor_namespace, request_id, action, target_id, request_hmac,
+         result_share_id, result_revision, result_access_revision,
+         receipt_encrypted, result_state, created_at
+       ) VALUES ($1, $2, 'share.restore', $3, $4, $3, $5::bigint, $6::bigint, $7, 'committed', $8)`,
+      ['key:managed:drillkey1', 'drill-request-0003', 'drill-protected', 'c'.repeat(64), BIG_CONTENT_REVISION, BIG_ACCESS_REVISION, restoreReceipt, BASE_TIME + 32]
     );
   }
 
@@ -712,8 +740,8 @@ async function main() {
       const operationCount = await restorePool.query(
         'SELECT COUNT(*)::int AS count FROM public.publish_operations'
       );
-      check('restored publish_operations carries both seeded operation records',
-        operationCount.rows[0].count === 2);
+      check('restored publish_operations carries all three seeded operation records',
+        operationCount.rows[0].count === 3);
 
       await restorePool.query(
         "UPDATE public.publish_operations SET result_state = 'result_unavailable', receipt_encrypted = NULL WHERE request_id = 'drill-request-0001'"

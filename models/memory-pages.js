@@ -646,8 +646,39 @@ class MemoryPageRepository {
   // Key authorization, publish state, favorite and view count are never
   // written here. A snapshot whose payload was cleared (a purge
   // tombstone) is not a valid restore source.
-  async restoreRevision({ id, sourceRevision, precondition = {}, operation = null }) {
+  // `apiCredential` + `grantCheck` + `restoreMeta` serve the
+  // Key-authenticated restore (T14, issue #38), mirroring the Postgres
+  // adapter and the T13 content update: inside the gate — this
+  // adapter's write transaction — the credential version and the
+  // caller's current grant on this Share are re-verified BEFORE a
+  // committed operation may replay, so a rotation, deletion or
+  // revocation that committed first refuses the in-flight restore, and
+  // a revoked Key cannot replay its own earlier result. `restoreMeta`
+  // names the snapshot provenance for the API actor (source
+  // 'api-restore', actorType 'api_key'); dashboard callers pass none of
+  // these and keep the T09 owner provenance.
+  async restoreRevision({ id, sourceRevision, precondition = {}, operation = null, apiCredential = null, grantCheck = null, restoreMeta = null }) {
     const execute = () => this.publishingGate.runWrite(async () => {
+      this.recheckManagedCredential(apiCredential);
+
+      if (grantCheck) {
+        const record = this.shareGrants.get(this.grantRecordKey(grantCheck.keyId, id));
+        const permissions = grantPermissionsFromRow(record);
+
+        if (!permissions[grantCheck.permission]) {
+          return {
+            outcome: 'executed',
+            result: {
+              status: 'grant_not_found',
+              accessRevision: null,
+              contentRevision: null,
+              contentChanged: false,
+              current: null
+            }
+          };
+        }
+      }
+
       if (operation) {
         const resolved = this.resolveExistingOperation(operation);
 
@@ -685,9 +716,9 @@ class MemoryPageRepository {
         expectedAccessRevision: null,
         advanceAccessRevision: false,
         contentMeta: {
-          source: 'admin-restore',
-          actorType: 'owner',
-          actorId: null,
+          source: restoreMeta?.source || 'admin-restore',
+          actorType: restoreMeta?.actorType || 'owner',
+          actorId: restoreMeta?.actorId ?? null,
           restoredFromRevision: toContentRevisionString(sourceRevision)
         }
       });
@@ -1346,6 +1377,82 @@ class MemoryPageRepository {
         expiresAt: page.expires_at ?? null,
         accessRevision: toAccessRevisionString(page.access_revision)
       }
+    };
+  }
+
+  // Granted history list for the v1 API (T14, issue #38): the Revision
+  // metadata of one granted Share, newest first, paginated exactly like
+  // the dashboard history browser — metadata only, never the snapshot
+  // body, so listing history cannot become an unbounded content
+  // aggregation. Returns null when the Key holds no grant on the Share
+  // (or the Share is gone) — the route answers the same 404 either way.
+  // The Share's current_revision pointer is read in the SAME
+  // synchronous step as the Revision records (this adapter's reads are
+  // not interleaved), so the currentRevision the route derives each
+  // entry's `current` flag from can never contradict the listed rows.
+  // Deliberately NOT judged by public visibility: a granted manager
+  // reads the history of an unpublished or expired Share exactly like
+  // the owner does in the admin.
+  async getGrantedShareRevisions({ keyId, shareId, limit = 20, offset = 0 }) {
+    const record = this.shareGrants.get(this.grantRecordKey(keyId, shareId));
+    const page = this.pages.get(shareId);
+
+    if (!record || !page) {
+      return null;
+    }
+
+    const currentRevision = toContentRevisionString(page.current_revision);
+    const byRevision = this.revisions.get(shareId);
+    const sorted = byRevision
+      ? Array.from(byRevision.values())
+        .sort((left, right) => (BigInt(left.revision) < BigInt(right.revision) ? 1 : -1))
+      : [];
+
+    return {
+      permissions: grantPermissionsFromRow(record),
+      shareId: page.id,
+      currentRevision,
+      total: sorted.length,
+      revisions: sorted.slice(offset, offset + limit).map(entry => ({
+        revision: entry.revision,
+        created_at: entry.created_at,
+        source: entry.source,
+        actor_type: entry.actor_type,
+        restored_from_revision: entry.restored_from_revision ?? null,
+        purged_at: entry.purged_at ?? null
+      }))
+    };
+  }
+
+  // Granted single-Revision read for the v1 API (T14): one complete
+  // snapshot of one granted Share, together with the Share's current
+  // pointer read in the same synchronous step, so the `current` flag
+  // the route derives is coherent with the snapshot it accompanies.
+  // Returns null when the Key holds no grant (or the Share is gone);
+  // `snapshot` is null when the Revision does not exist. A purged
+  // Revision returns its tombstone record (payload already null) — the
+  // route answers 410 and never a fabricated snapshot.
+  async getGrantedShareRevision({ keyId, shareId, revision }) {
+    const record = this.shareGrants.get(this.grantRecordKey(keyId, shareId));
+    const page = this.pages.get(shareId);
+
+    if (!record || !page) {
+      return null;
+    }
+
+    // Pointer and snapshot are copied in one synchronous step (no
+    // await between them), so a concurrent write cannot slip in and
+    // make the pair contradict itself.
+    const currentRevision = toContentRevisionString(page.current_revision);
+    const byRevision = this.revisions.get(shareId);
+    const entry = byRevision?.get(toContentRevisionString(revision));
+    const snapshot = entry ? { ...entry } : null;
+
+    return {
+      permissions: grantPermissionsFromRow(record),
+      shareId: page.id,
+      currentRevision,
+      snapshot
     };
   }
 

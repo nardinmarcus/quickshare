@@ -2435,6 +2435,29 @@ function historyRevisionMetaJson(record) {
   };
 }
 
+// History metadata for the v1 API (T14, issue #38): the dashboard
+// history shape without the management-time text renderings, plus the
+// `current` flag. The flag is derived ONLY from the currentRevision
+// the repository read in the same snapshot as the entries themselves,
+// so a response can never mark a Revision current that its own pointer
+// disagrees with.
+function apiRevisionMetaJson(record, currentRevision) {
+  const revision = toContentRevisionString(record.revision);
+
+  return {
+    revision,
+    createdAt: Number(record.created_at),
+    source: record.source,
+    actorType: record.actor_type,
+    restoredFromRevision: record.restored_from_revision == null
+      ? null
+      : toContentRevisionString(record.restored_from_revision),
+    purged: record.purged_at != null || record.html_content === null,
+    purgedAt: record.purged_at == null ? null : Number(record.purged_at),
+    current: currentRevision !== null && revision !== null && revision === currentRevision
+  };
+}
+
 app.get('/admin/pages/:id/revisions', requireDashboardApiAdmin, async (req, res) => {
   try {
     const sharedPage = await pageRepository.getById(req.params.id);
@@ -4729,7 +4752,457 @@ app.put('/api/v1/shares/:id/content', privateNoStore, requireApiKey, requireApiS
   }
 });
 
+// Granted-Share history list (T14, issue #38): the Revision metadata
+// of a Share the credential is granted to READ — version, capture
+// time, source, restore provenance, purge state — newest first,
+// paginated like the dashboard history browser (default 20, max 100).
+// Metadata only: this surface never aggregates snapshot bodies.
+// Authorization is the T12 conjunction: read scope (403 without it)
+// AND a read grant on this Share (404 without one — the same 404 as a
+// nonexistent Share, and a publish-only grant does not imply read).
+// Management authorization is judged independently of public
+// visibility, and neither the share access cookie nor public view
+// rights authorize this surface. The dashboard history stays
+// owner-only (T07); this is a separate, grant-scoped API surface.
+// Reads stay available during write maintenance.
+app.get('/api/v1/shares/:id/revisions', privateNoStore, requireApiKey, requireApiScope('share:read'), async (req, res) => {
+  const credential = req.apiCredential || legacyCredentialIdentity();
+
+  let limit = 20;
+
+  if (req.query.limit !== undefined) {
+    const parsedLimit = Number(req.query.limit);
+
+    if (!Number.isInteger(parsedLimit) || parsedLimit < 1) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid limit',
+        code: 'invalid_limit',
+        retryable: false
+      });
+    }
+
+    limit = Math.min(parsedLimit, 100);
+  }
+
+  let offset = 0;
+
+  if (req.query.offset !== undefined) {
+    const parsedOffset = Number(req.query.offset);
+
+    if (!Number.isInteger(parsedOffset) || parsedOffset < 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid offset',
+        code: 'invalid_offset',
+        retryable: false
+      });
+    }
+
+    offset = parsedOffset;
+  }
+
+  try {
+    const result = await pageRepository.getGrantedShareRevisions({
+      keyId: credential.keyId,
+      shareId: req.params.id,
+      limit,
+      offset
+    });
+
+    if (!result || !result.permissions.read) {
+      return res.status(404).json({
+        success: false,
+        error: 'Share not found',
+        code: 'share_not_found',
+        retryable: false
+      });
+    }
+
+    return res.json({
+      success: true,
+      shareId: result.shareId,
+      currentRevision: result.currentRevision,
+      total: result.total,
+      limit,
+      offset,
+      revisions: result.revisions.map(record => apiRevisionMetaJson(record, result.currentRevision))
+    });
+  } catch (error) {
+    console.error('Granted share history list failed:', error);
+    return res.status(500).json({ success: false, error: '服务器错误' });
+  }
+});
+
+// Granted-Share single-Revision read (T14): the complete snapshot of
+// one Revision of a granted Share — the canonical snapshot GET of the
+// parent spec's API contract. A purged Revision is a tombstone: its
+// metadata stays visible in the history list, but its payload answers
+// 410 here, exactly as in the dashboard. The response carries the
+// snapshot's own strong content ETag (the content family names the
+// Revision it covers, current or not) and honors If-None-Match with
+// the same weak comparison as the current-content read.
+app.get('/api/v1/shares/:id/revisions/:revision', privateNoStore, requireApiKey, requireApiScope('share:read'), async (req, res) => {
+  const credential = req.apiCredential || legacyCredentialIdentity();
+  const revision = toContentRevisionString(req.params.revision);
+
+  if (revision === null) {
+    return res.status(404).json({
+      success: false,
+      error: 'Revision not found',
+      code: 'revision_not_found',
+      retryable: false
+    });
+  }
+
+  try {
+    const result = await pageRepository.getGrantedShareRevision({
+      keyId: credential.keyId,
+      shareId: req.params.id,
+      revision
+    });
+
+    if (!result || !result.permissions.read) {
+      return res.status(404).json({
+        success: false,
+        error: 'Share not found',
+        code: 'share_not_found',
+        retryable: false
+      });
+    }
+
+    if (!result.snapshot) {
+      return res.status(404).json({
+        success: false,
+        error: 'Revision not found',
+        code: 'revision_not_found',
+        retryable: false
+      });
+    }
+
+    const snapshot = result.snapshot;
+
+    if (isSnapshotPurged(snapshot)) {
+      return res.status(410).json({
+        success: false,
+        error: 'Revision content has been purged',
+        code: 'revision_unavailable',
+        retryable: false,
+        revision: apiRevisionMetaJson(snapshot, result.currentRevision)
+      });
+    }
+
+    const etag = formatContentEtag(req.params.id, snapshot.revision);
+    res.set('ETag', etag);
+
+    if (ifNoneMatchMatches(req.get('if-none-match'), etag)) {
+      return res.status(304).end();
+    }
+
+    return res.json({
+      success: true,
+      revision: {
+        ...apiRevisionMetaJson(snapshot, result.currentRevision),
+        codeType: snapshot.code_type,
+        title: snapshot.title,
+        description: snapshot.description,
+        markdownTheme: snapshot.markdown_theme,
+        htmlContent: snapshot.html_content,
+        contentEtag: etag
+      }
+    });
+  } catch (error) {
+    console.error('Granted share revision read failed:', error);
+    return res.status(500).json({ success: false, error: '服务器错误' });
+  }
+});
+
+// Granted-Share history restore (T14, issue #38): a managed Key with
+// the read AND update scopes and an update grant on this Share makes
+// one of its Revisions current again. The restore reuses the
+// dashboard's restore transaction wholesale — the same repository
+// operation, replay-before-precondition resolution, restored-from
+// provenance, identical-content no-op and audit — in the Key's own
+// operation namespace; it is not a second restore rule set. The body
+// (the small-request parser: a restore names a version, it does not
+// carry content) holds exactly one field, `revision`; the concrete
+// content If-Match of the CURRENT Revision and an Idempotency-Key are
+// both mandatory (parent spec #24 §7/§8). Only content fields move:
+// the restore never touches the URL, password, expiry,
+// access_revision, Key authorization, publish state, favorite or view
+// count. There is deliberately NO Key-facing purge endpoint — history
+// purge stays an owner dashboard action (T10).
+app.post('/api/v1/shares/:id/restore', privateNoStore, requireApiKey, requireApiScopesAll('share:read', 'share:update'), parseSmallJsonBody, async (req, res) => {
+  const credential = req.apiCredential || legacyCredentialIdentity();
+  const shareId = req.params.id;
+
+  // The request identifier is mandatory on this surface (parent spec
+  // #24 §8): absent or malformed is a client error, never a silent
+  // downgrade to a non-idempotent write.
+  const idem = parseIdempotencyKey(req.get('idempotency-key'));
+
+  if (!idem.valid) {
+    return res.status(400).json({
+      success: false,
+      error: 'A valid Idempotency-Key header is required',
+      code: 'invalid_idempotency_key',
+      retryable: false
+    });
+  }
+
+  const requestId = idem.value;
+
+  try {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body
+      : null;
+
+    if (!body) {
+      return res.status(400).json({
+        success: false,
+        error: 'Request body must be a JSON object',
+        code: 'invalid_body',
+        retryable: false
+      });
+    }
+
+    for (const field of Object.keys(body)) {
+      if (field !== 'revision') {
+        return res.status(400).json({
+          success: false,
+          error: `Field cannot be set through the restore: ${field}`,
+          code: 'invalid_field',
+          field,
+          retryable: false
+        });
+      }
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(body, 'revision')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required field: revision',
+        code: 'missing_field',
+        field: 'revision',
+        retryable: false
+      });
+    }
+
+    const sourceRevision = toContentRevisionString(body.revision);
+
+    if (sourceRevision === null) {
+      return res.status(400).json({
+        success: false,
+        error: 'revision must be a positive decimal version string',
+        code: 'invalid_field',
+        field: 'revision',
+        retryable: false
+      });
+    }
+
+    // The grant half of the authorization conjunction, judged before
+    // any state is read for validation: no update grant — or no such
+    // Share — is the same 404, so this surface cannot probe which
+    // Shares exist. The repository re-verifies the grant inside the
+    // restore transaction; this check only fails fast.
+    const grant = await pageRepository.getShareGrant(credential.keyId, shareId);
+
+    if (!grant || !grant.permissions.update) {
+      return res.status(404).json({
+        success: false,
+        error: 'Share not found',
+        code: 'share_not_found',
+        retryable: false
+      });
+    }
+
+    const page = await pageRepository.getById(shareId);
+
+    if (!page) {
+      return res.status(404).json({
+        success: false,
+        error: 'Share not found',
+        code: 'share_not_found',
+        retryable: false
+      });
+    }
+
+    // Write maintenance outranks precondition validation (T04): while
+    // paused, even a replay of this restore is refused at the gate,
+    // and the operation stays confirmable through the operations
+    // query.
+    if (typeof pageRepository.getPublishingWritesPaused === 'function'
+      && await pageRepository.getPublishingWritesPaused()) {
+      return sendPublishingMaintenance(res);
+    }
+
+    const contentState = contentPreconditionState(req, shareId);
+    const ip = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+
+    const outcome = await pageRepository.restoreRevision({
+      id: shareId,
+      sourceRevision,
+      precondition: {
+        expectedContentRevision: contentState.expectedContentRevision,
+        contentPreconditionMissing: contentState.contentPreconditionMissing,
+        contentPreconditionInvalid: contentState.contentPreconditionInvalid,
+        ip
+      },
+      operation: {
+        actorNamespace: managedKeyNamespace(credential.keyId),
+        requestId,
+        action: 'share.restore',
+        targetId: shareId,
+        // The digest binds the identifier to this exact request
+        // (parent spec §8), computed from the request alone — the
+        // source version and the caller's expected current version —
+        // so a byte-identical retry digests identically in any state,
+        // while any other source or baseline under the same
+        // identifier is a conflict. It matches the dashboard
+        // restore's digest for the same inputs; the namespaces keep
+        // the two actors' records apart.
+        requestHmac: computeRequestHmac({
+          action: 'share.restore',
+          targetId: shareId,
+          presence: {
+            sourceRevision: 1,
+            expectedContentRevision: contentState.digestValue !== null ? 1 : 0
+          },
+          values: {
+            sourceRevision,
+            expectedContentRevision: contentState.digestValue
+          }
+        })
+      },
+      apiCredential: credential,
+      grantCheck: { keyId: credential.keyId, permission: 'update' },
+      restoreMeta: { source: 'api-restore', actorType: 'api_key', actorId: credential.keyId }
+    });
+
+    if (outcome.outcome === 'unavailable') {
+      return respondOperationUnavailable(res, requestId);
+    }
+
+    if (outcome.outcome === 'replayed') {
+      const receipt = operationReceipt(outcome.operation);
+
+      if (!outcome.shareState || !receipt || receipt.kind !== 'share.restore' || receipt.shareId !== shareId) {
+        return respondOperationUnavailable(res, requestId);
+      }
+
+      return res.json({
+        success: true,
+        replayed: true,
+        requestId,
+        action: 'share.restore',
+        shareId,
+        sourceRevision: receipt.sourceRevision,
+        previousRevision: receipt.previousRevision,
+        contentRevision: receipt.contentRevision,
+        contentEtag: formatContentEtag(shareId, receipt.contentRevision),
+        contentChanged: receipt.contentChanged === true,
+        unchanged: receipt.contentChanged !== true
+      });
+    }
+
+    const result = outcome.result;
+
+    if (result.status === 'grant_not_found' || result.status === 'not_found') {
+      return res.status(404).json({
+        success: false,
+        error: 'Share not found',
+        code: 'share_not_found',
+        retryable: false
+      });
+    }
+
+    if (result.status === 'source_not_found') {
+      return res.status(404).json({
+        success: false,
+        error: 'Revision not found',
+        code: 'revision_not_found',
+        retryable: false
+      });
+    }
+
+    if (result.status === 'source_unavailable') {
+      return res.status(410).json({
+        success: false,
+        error: '该版本内容已被清除，无法恢复',
+        code: 'revision_unavailable',
+        retryable: false
+      });
+    }
+
+    if (result.status === 'precondition_required') {
+      return res.status(428).json({
+        success: false,
+        error: '缺少内容版本前置条件 If-Match，请刷新后重试',
+        code: 'content_precondition_required',
+        requestId,
+        contentRevision: result.contentRevision,
+        contentEtag: formatContentEtag(shareId, result.contentRevision),
+        retryable: false
+      });
+    }
+
+    if (result.status === 'content_conflict') {
+      return res.status(412).json({
+        success: false,
+        error: '内容已被更新，恢复未执行，请确认最新版本后重试',
+        code: 'content_conflict',
+        requestId,
+        contentRevision: result.contentRevision,
+        contentEtag: formatContentEtag(shareId, result.contentRevision),
+        current: result.current,
+        retryable: false
+      });
+    }
+
+    return res.json({
+      success: true,
+      requestId,
+      action: 'share.restore',
+      shareId,
+      sourceRevision: result.sourceRevision,
+      previousRevision: result.previousRevision,
+      contentRevision: result.contentRevision,
+      contentEtag: formatContentEtag(shareId, result.contentRevision),
+      contentChanged: result.contentChanged === true,
+      unchanged: result.contentChanged !== true
+    });
+  } catch (error) {
+    console.error('Granted share restore failed:', error);
+    // The credential was rotated or deleted after this request
+    // verified it: the write was refused inside its transaction
+    // (T05/T14). From the client's side the presented credential is
+    // simply no longer valid.
+    if (isApiKeyCredentialChangedError(error)) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid API key',
+        code: 'api_key_credential_changed',
+        retryable: false
+      });
+    }
+    if (isIdempotencyConflictError(error)) {
+      return res.status(409).json({
+        success: false,
+        error: 'Idempotency-Key was already used with a different request',
+        code: 'idempotency_conflict',
+        requestId,
+        retryable: false
+      });
+    }
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
+    return res.status(500).json({ success: false, error: '服务器错误' });
+  }
+});
+
 app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (req, res) => {
+
   // Idempotency-Key (T08): with the header, the create runs in the
   // caller's credential namespace — same key + same input replays the
   // original result, same key + different input is a 409. Without the
