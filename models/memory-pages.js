@@ -316,7 +316,7 @@ class MemoryPageRepository {
   async create(page, options = {}) {
     return this.publishingGate.runWrite(async () => {
       this.recheckManagedCredential(options.apiCredential);
-      return this.createUnlocked(page, options.revisionMeta);
+      return this.createUnlocked(page, options.revisionMeta, options.apiCredential);
     });
   }
 
@@ -444,7 +444,7 @@ class MemoryPageRepository {
         const prepared = await prepare();
 
         try {
-          this.createUnlocked(prepared.page, revisionMeta);
+          this.createUnlocked(prepared.page, revisionMeta, apiCredential);
         } catch (error) {
           lastError = error;
 
@@ -572,8 +572,36 @@ class MemoryPageRepository {
   // (conflict, missing precondition, not found) record nothing, so a
   // later retry of the same identifier re-executes instead of replaying
   // a failure.
-  async saveContentIdempotent({ id, options, precondition = {}, operation = null }) {
+  // `apiCredential` + `grantCheck` serve the Key-authenticated content
+  // update (T13, issue #37), mirroring the Postgres adapter: inside the
+  // gate — this adapter's write transaction — the credential version
+  // and the caller's current grant on this Share are re-verified BEFORE
+  // a committed operation may replay, so a rotation, deletion or
+  // revocation that committed first refuses the in-flight write, and a
+  // revoked Key cannot replay its own earlier result. Dashboard
+  // callers pass neither and keep T09 behavior.
+  async saveContentIdempotent({ id, options, precondition = {}, operation = null, apiCredential = null, grantCheck = null }) {
     const execute = () => this.publishingGate.runWrite(async () => {
+      this.recheckManagedCredential(apiCredential);
+
+      if (grantCheck) {
+        const record = this.shareGrants.get(this.grantRecordKey(grantCheck.keyId, id));
+        const permissions = grantPermissionsFromRow(record);
+
+        if (!permissions[grantCheck.permission]) {
+          return {
+            outcome: 'executed',
+            result: {
+              status: 'grant_not_found',
+              accessRevision: null,
+              contentRevision: null,
+              contentChanged: false,
+              current: null
+            }
+          };
+        }
+      }
+
       if (operation) {
         const resolved = this.resolveExistingOperation(operation);
 
@@ -904,7 +932,7 @@ class MemoryPageRepository {
     }
   }
 
-  async createUnlocked(page, revisionMeta = {}) {
+  async createUnlocked(page, revisionMeta = {}, apiCredential = null) {
     if (this.pages.has(page.id)) {
       const error = new Error('UNIQUE constraint failed: pages.id');
       error.code = 'SQLITE_CONSTRAINT';
@@ -939,6 +967,28 @@ class MemoryPageRepository {
       actorType: revisionMeta.actorType || 'owner',
       actorId: revisionMeta.actorId ?? null
     }, page.createdAt);
+
+    // Auto-edit grants (T13, issue #37): a managed Key whose owner
+    // enabled auto_grant_new_share_edit receives read+update grants on
+    // its own new Share in the same gated step as the create — never
+    // publish, never for Shares that already existed. Callers that are
+    // not the creating Key itself (clone, web publish) pass no
+    // credential and never trigger this.
+    if (apiCredential && apiCredential.type === 'managed') {
+      const keyRecord = this.apiKeys.get(apiCredential.keyId);
+
+      if (keyRecord && keyRecord.auto_grant_new_share_edit === true) {
+        this.shareGrants.set(this.grantRecordKey(apiCredential.keyId, page.id), {
+          api_key_id: apiCredential.keyId,
+          share_id: page.id,
+          can_read: true,
+          can_update: true,
+          can_publish: false,
+          created_at: page.createdAt,
+          updated_at: page.createdAt
+        });
+      }
+    }
 
     return { id: page.id };
   }
@@ -1031,6 +1081,34 @@ class MemoryPageRepository {
         last_used_at: record.last_used_at,
         credential_version: toCredentialVersionString(record.credential_version),
         scopes: [...record.scopes],
+        auto_grant_new_share_edit: record.auto_grant_new_share_edit === true
+      };
+    });
+  }
+
+  // Auto-edit opt-in (T13): flips auto_grant_new_share_edit in one
+  // gated write, mirroring the Postgres adapter. The flag is read
+  // inside the create's gated step, so a toggle and a create can never
+  // interleave ambiguously. Returns the public record, or null when
+  // the Key does not exist.
+  async updateApiKeyAutoGrant(id, enabled) {
+    return this.publishingGate.runWrite(async () => {
+      const record = this.apiKeys.get(id);
+
+      if (!record) {
+        return null;
+      }
+
+      record.auto_grant_new_share_edit = enabled === true;
+
+      return {
+        id: record.id,
+        name: record.name,
+        key_prefix: record.key_prefix,
+        created_at: record.created_at,
+        last_used_at: record.last_used_at,
+        credential_version: toCredentialVersionString(record.credential_version),
+        scopes: [...parseApiKeyScopes(record.scopes)],
         auto_grant_new_share_edit: record.auto_grant_new_share_edit === true
       };
     });

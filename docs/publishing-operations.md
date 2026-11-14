@@ -192,6 +192,31 @@ accessRevision}`（无任何秘密材料）。真实翻转推进 `access_revisio
 识、同一前置条件重试直接重放回执——重放先于前置条件判定，因此重
 试时版本已推进也不会误报 412。
 
+## API 授权内容更新（T13）
+
+`PUT /api/v1/shares/:id/content`（见
+[API 身份与能力发现](api-capabilities.md) 的 T13 一节）不是第二套
+编辑规则：它调用与后台保存同一个仓库操作
+（`saveContentIdempotent`），动作名 `share.content.update`，命名空间
+为凭据自己的 `key:managed:<Key ID>`，摘要绑定归一化后的四字段正文
+候选与基线内容版本，回执为 `{kind, shareId, contentChanged,
+contentRevision, accessRevision}`。因此无操作判定、Revision 写入、
+`page.content.update` 审计与版本推进与后台完全一致，两个入口在同
+一基线上并发时只有一个提交成功，另一个得到内容冲突。
+
+与后台入口的差别只在授权复核的位置：API 调用在仓库事务内、操作
+查找与前置条件判定**之前**，先以 Key 行锁复核凭据版本，再复核
+grant 行仍持有 update 权限。于是先提交的轮换/撤销能拒绝在途写，
+而已提交操作也不能被已撤销的凭据凭请求标识回放——这与父规格 #24
+§8「回放前先复核凭据与授权」的顺序一致。凭据命名空间隔离照旧：
+确认与重放都只认本 Key 命名空间内的记录。
+
+同一票的自动编辑授权也走创建事务本身：Key 开启
+`auto_grant_new_share_edit` 后，其新建 Share 的 read/update 授权在
+创建事务内、快照写入之后插入（普通创建与幂等创建共用），与 Share
+行、Revision 与操作记录同成同败；幂等重放不进入首次执行路径，因
+此不产生重复授权。
+
 ## 历史清除与回执（T10）
 
 所有者在后台永久清除某个非当前 Revision（见

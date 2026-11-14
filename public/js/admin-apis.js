@@ -74,7 +74,7 @@
     const scopesCell = document.createElement('td');
     scopesCell.className = 'api-key-scopes';
     const heldScopes = Array.isArray(apiKey.scopes) ? apiKey.scopes : ['share:create'];
-    for (const [scope, label] of [['share:create', '创建'], ['share:read', '读取已授权 Share']]) {
+    for (const [scope, label] of [['share:create', '创建'], ['share:read', '读取已授权 Share'], ['share:update', '编辑已授权 Share']]) {
       const option = document.createElement('label');
       option.className = 'api-scope-option';
       const checkbox = document.createElement('input');
@@ -300,11 +300,12 @@
     }
   }
 
-  // --- Per-Share read grants (T12) -------------------------------------
+  // --- Per-Share grants (T12; edit grant + auto-edit opt-in, T13) -----
   // The grant panels are owner tooling: they list what the API itself
-  // never exposes (which Shares a Key may read) and grant/revoke the
-  // read permission. Only the read permission exists in this UI — the
-  // edit/publish grants arrive with their own capabilities.
+  // never exposes (which Shares a Key may touch) and grant/revoke the
+  // read and update permissions. The publish permission still has no
+  // API behavior and is not offered here. The auto-edit toggle opts
+  // the Key into read+update grants on its OWN future creations only.
 
   function grantableShares() {
     try {
@@ -376,6 +377,10 @@
   async function grantAccess(panel, select) {
     const keyId = panel.dataset.apiKeyId;
     const shareId = select.value;
+    const permissionSelect = panel.querySelector('[data-grant-permission]');
+    const permissions = permissionSelect && permissionSelect.value === 'update'
+      ? { read: true, update: true }
+      : { read: true };
 
     if (!keyId || !shareId) return;
 
@@ -387,19 +392,56 @@
           'Content-Type': 'application/json',
           'X-CSRF-Token': csrfToken()
         },
-        body: JSON.stringify({ shareId, permissions: { read: true } })
+        body: JSON.stringify({ shareId, permissions })
       });
       const data = await response.json();
 
       if (!response.ok || !data.success) {
-        throw new Error(data.error || '授予只读失败');
+        throw new Error(data.error || '授予权限失败');
       }
 
       select.value = '';
-      notify('success', '已授予只读权限');
+      notify('success', permissions.update ? '已授予编辑权限（含读取）' : '已授予只读权限');
       await loadGrants(panel);
     } catch (error) {
       notify('error', error.message);
+    }
+  }
+
+  async function toggleAutoGrant(panel, checkbox) {
+    const keyId = panel.dataset.apiKeyId;
+    const enabled = checkbox.checked;
+
+    if (!keyId) return;
+
+    checkbox.disabled = true;
+
+    try {
+      const response = await fetch('/admin/apis/keys/' + encodeURIComponent(keyId) + '/auto-grant', {
+        method: 'PUT',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfToken()
+        },
+        body: JSON.stringify({ enabled })
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || '保存自动编辑设置失败');
+      }
+
+      checkbox.checked = data.apiKey.auto_grant_new_share_edit === true;
+      notify('success', enabled
+        ? '已开启自动编辑：该密钥新建的 Share 将自动授予其读取+编辑权限'
+        : '已关闭自动编辑未来新建');
+    } catch (error) {
+      // Never leave the checkbox showing a state the server refused.
+      checkbox.checked = !enabled;
+      notify('error', error.message);
+    } finally {
+      checkbox.disabled = false;
     }
   }
 
@@ -446,6 +488,10 @@
       grantAccess(panel, form.querySelector('[data-grant-share]'));
     });
 
+    panel.querySelector('[data-auto-grant-toggle]')?.addEventListener('change', function (event) {
+      toggleAutoGrant(panel, event.target);
+    });
+
     panel.querySelector('[data-grant-list]')?.addEventListener('click', function (event) {
       const button = event.target.closest('.api-grant-revoke-btn');
 
@@ -478,6 +524,20 @@
     list.className = 'api-grant-list';
     list.dataset.grantList = '';
 
+    // A freshly created Key starts with the auto-edit opt-in off, like
+    // the server-rendered panels of existing Keys.
+    const autoGrantOption = document.createElement('label');
+    autoGrantOption.className = 'api-auto-grant-option';
+    const autoGrantToggle = document.createElement('input');
+    autoGrantToggle.type = 'checkbox';
+    autoGrantToggle.className = 'api-auto-grant-checkbox';
+    autoGrantToggle.dataset.autoGrantToggle = '';
+    autoGrantToggle.checked = apiKey.auto_grant_new_share_edit === true;
+    autoGrantOption.append(
+      autoGrantToggle,
+      document.createTextNode(' 自动编辑未来新建：该密钥新建 Share 时自动获得读取+编辑授权（不含上下架，不追溯既有 Share；需要先具备「读取」与「编辑」范围）')
+    );
+
     const form = document.createElement('form');
     form.className = 'api-grant-form';
     form.dataset.grantForm = '';
@@ -497,13 +557,24 @@
       select.appendChild(option);
     }
 
+    const permissionSelect = document.createElement('select');
+    permissionSelect.className = 'cyber-input api-grant-permission-select';
+    permissionSelect.dataset.grantPermission = '';
+    const readOption = document.createElement('option');
+    readOption.value = 'read';
+    readOption.textContent = '只读';
+    const updateOption = document.createElement('option');
+    updateOption.value = 'update';
+    updateOption.textContent = '编辑（含读取）';
+    permissionSelect.append(readOption, updateOption);
+
     const submit = document.createElement('button');
     submit.className = 'cyber-btn cyber-btn-secondary';
     submit.type = 'submit';
-    submit.textContent = '授予只读';
-    form.append(select, submit);
+    submit.textContent = '授予';
+    form.append(select, permissionSelect, submit);
 
-    panel.append(heading, list, form);
+    panel.append(heading, list, autoGrantOption, form);
     card.appendChild(panel);
     wireGrantPanel(panel);
   }

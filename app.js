@@ -700,6 +700,29 @@ function requireApiScope(...scopes) {
   };
 }
 
+// Conjunctive scope guard (T13, parent spec #24 §6): the content
+// update operation requires the update scope AND the read scope —
+// update implies read at the grant level, and the spec binds the same
+// implication to scopes, so a credential holding only one of the pair
+// is refused 403 here instead of being half-authorized deeper in.
+function requireApiScopesAll(...scopes) {
+  return (req, res, next) => {
+    const credential = req.apiCredential || legacyCredentialIdentity();
+    const held = credential.scopes || [];
+
+    if (scopes.every(scope => held.includes(scope))) {
+      return next();
+    }
+
+    return res.status(403).json({
+      success: false,
+      error: 'Insufficient scope for this operation',
+      code: 'insufficient_scope',
+      retryable: false
+    });
+  };
+}
+
 // If-None-Match evaluation for the conditional resource reads (T12).
 // GET requests use the RFC 7232 WEAK comparison: a candidate matches
 // when it is `*`, or when its opaque tag — ignoring a `W/` prefix —
@@ -1806,7 +1829,12 @@ app.delete('/admin/apis/keys/:id', requireDashboardAdmin, requireDashboardCsrf, 
 // as unsupported instead of silently stored. A scope by itself still
 // authorizes no specific Share: resource access needs the matching
 // grant as well.
-const API_KEY_ASSIGNABLE_SCOPES = Object.freeze(['share:create', 'share:read']);
+// The scopes the owner may assign from this dashboard. Every entry
+// has a live server-side consumer: create (T05/T08), read (T12) and
+// update (T13). share:publish stays unassignable until its own API
+// operations ship — an assignable scope with no behavior would be a
+// dead switch.
+const API_KEY_ASSIGNABLE_SCOPES = Object.freeze(['share:create', 'share:read', 'share:update']);
 
 app.put('/admin/apis/keys/:id/scopes', requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
   try {
@@ -1862,6 +1890,88 @@ app.put('/admin/apis/keys/:id/scopes', requireDashboardAdmin, parseSmallJson, re
   }
 });
 
+// Auto-edit opt-in (T13): the owner chooses whether this Key
+// automatically receives read+update grants on the Shares IT creates
+// from now on. Enabling requires the Key to already hold the read and
+// update scopes (parent spec #24 §6: the option requires read/update
+// scopes) — otherwise the grants it would mint could never be used,
+// and the toggle would be a dead switch. The flag never applies
+// retroactively and never grants publish.
+app.put('/admin/apis/keys/:id/auto-grant', requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
+  try {
+    if (typeof req.body?.enabled !== 'boolean') {
+      return res.status(400).json({
+        success: false,
+        error: 'enabled must be a boolean',
+        code: 'invalid_auto_grant',
+        retryable: false
+      });
+    }
+
+    const enabled = req.body.enabled;
+    const existing = await pageRepository.getApiKeyById(req.params.id);
+
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: 'API key not found'
+      });
+    }
+
+    if (enabled) {
+      const scopes = parseApiKeyScopes(existing.scopes);
+
+      if (!scopes.includes('share:read') || !scopes.includes('share:update')) {
+        return res.status(400).json({
+          success: false,
+          error: 'Auto-edit requires the share:read and share:update scopes',
+          code: 'auto_grant_requires_scopes',
+          retryable: false
+        });
+      }
+    }
+
+    const updated = await pageRepository.updateApiKeyAutoGrant(req.params.id, enabled);
+
+    if (!updated) {
+      return res.status(404).json({
+        success: false,
+        error: 'API key not found'
+      });
+    }
+
+    pageRepository.createAuditLog({
+      action: 'api_key.auto_grant',
+      pageId: null,
+      details: JSON.stringify({ apiKeyId: updated.id, enabled }),
+      ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+    }).catch((err) => { console.error('Audit log failed:', err); });
+
+    return res.json({
+      success: true,
+      apiKey: {
+        id: updated.id,
+        name: updated.name,
+        key_prefix: updated.key_prefix,
+        created_at: updated.created_at,
+        last_used_at: updated.last_used_at,
+        credential_version: toCredentialVersionString(updated.credential_version),
+        scopes: [...parseApiKeyScopes(updated.scopes)],
+        auto_grant_new_share_edit: updated.auto_grant_new_share_edit === true
+      }
+    });
+  } catch (error) {
+    console.error('Update API key auto-grant failed:', error);
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to update API key auto-grant'
+    });
+  }
+});
+
 // The owner's grant list for one Key (T12): which Shares this Key may
 // touch and with which resource permissions. Dashboard session only —
 // grants are owner-managed credential metadata, never exposed through
@@ -1899,12 +2009,14 @@ app.get('/admin/apis/keys/:id/grants', requireDashboardApiAdmin, async (req, res
   }
 });
 
-// Grant (T12): the owner authorizes one Key on one Share. This ticket's
-// dashboard grants the READ permission — the only resource permission
-// whose behavior ships here; update/publish grants arrive with their
-// own endpoints, and a request naming them is refused rather than
-// stored as a dead switch. The repository applies the Key-then-Share
-// lock order inside the publishing gate.
+// Grant (T12, update added by T13): the owner authorizes one Key on
+// one Share. The dashboard grants the READ permission and — since the
+// content update endpoint shipped — the UPDATE permission (which the
+// grant model stores together with read: an editor must be able to
+// read back what it edits). The publish permission still has no API
+// behavior, so a request naming it is refused rather than stored as a
+// dead switch. The repository applies the Key-then-Share lock order
+// inside the publishing gate.
 app.post('/admin/apis/keys/:id/grants', requireDashboardAdmin, parseSmallJson, requireDashboardCsrf, async (req, res) => {
   try {
     const shareId = typeof req.body?.shareId === 'string' ? req.body.shareId.trim() : '';
@@ -1919,10 +2031,10 @@ app.post('/admin/apis/keys/:id/grants', requireDashboardAdmin, parseSmallJson, r
       });
     }
 
-    if (permissions.update || permissions.publish) {
+    if (permissions.publish) {
       return res.status(400).json({
         success: false,
-        error: 'Only the read permission can be granted from this dashboard yet',
+        error: 'Only the read and update permissions can be granted from this dashboard yet',
         code: 'grant_permission_not_available',
         retryable: false
       });
@@ -4257,6 +4369,362 @@ app.get('/api/v1/shares/:id/state', privateNoStore, requireApiKey, requireApiSco
     });
   } catch (error) {
     console.error('Granted share state read failed:', error);
+    return res.status(500).json({ success: false, error: '服务器错误' });
+  }
+});
+
+// Granted-Share content update (T13, issue #37): a managed Key with
+// the read AND update scopes and an update grant on this Share
+// replaces its content with a complete snapshot. The write reuses the
+// dashboard's content transaction wholesale — the same repository
+// operation protocol, compare-and-swap, no-op rule and audit — in the
+// Key's own operation namespace; it is not a second editing rule set.
+// The full snapshot is strict (parent spec #24 §7): htmlContent,
+// title, description and markdownTheme are all required, codeType may
+// be sent but must equal the Share's fixed type, an unknown Markdown
+// Preset is a 400 rather than a silent substitution, and any field
+// outside the snapshot — access policy, favorite, counters, publish
+// state — is refused instead of being silently ignored. Both the
+// concrete content If-Match and an Idempotency-Key are required.
+// Management authorization is judged independently of public
+// visibility: an unpublished or expired Share updates exactly like a
+// live one here.
+app.put('/api/v1/shares/:id/content', privateNoStore, requireApiKey, requireApiScopesAll('share:read', 'share:update'), parseShareJson, async (req, res) => {
+  const credential = req.apiCredential || legacyCredentialIdentity();
+  const shareId = req.params.id;
+
+  // The request identifier is mandatory on this surface (parent spec
+  // #24 §8): absent or malformed is a client error, never a silent
+  // downgrade to a non-idempotent write.
+  const idem = parseIdempotencyKey(req.get('idempotency-key'));
+
+  if (!idem.valid) {
+    return res.status(400).json({
+      success: false,
+      error: 'A valid Idempotency-Key header is required',
+      code: 'invalid_idempotency_key',
+      retryable: false
+    });
+  }
+
+  const requestId = idem.value;
+
+  try {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body
+      : null;
+
+    if (!body) {
+      return res.status(400).json({
+        success: false,
+        error: 'Request body must be a JSON object',
+        code: 'invalid_body',
+        retryable: false
+      });
+    }
+
+    const allowedFields = ['htmlContent', 'title', 'description', 'markdownTheme', 'codeType'];
+
+    for (const field of Object.keys(body)) {
+      if (!allowedFields.includes(field)) {
+        return res.status(400).json({
+          success: false,
+          error: `Field cannot be set through the content update: ${field}`,
+          code: 'invalid_field',
+          field,
+          retryable: false
+        });
+      }
+    }
+
+    for (const field of ['htmlContent', 'title', 'description', 'markdownTheme']) {
+      if (!Object.prototype.hasOwnProperty.call(body, field)) {
+        return res.status(400).json({
+          success: false,
+          error: `Missing required field: ${field}`,
+          code: 'missing_field',
+          field,
+          retryable: false
+        });
+      }
+    }
+
+    if (typeof body.htmlContent !== 'string' || body.htmlContent.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'htmlContent must be a non-empty string',
+        code: 'invalid_content',
+        retryable: false
+      });
+    }
+
+    if ((body.title !== null && typeof body.title !== 'string')
+      || (body.description !== null && typeof body.description !== 'string')
+      || (body.markdownTheme !== null && typeof body.markdownTheme !== 'string')
+      || (body.codeType !== undefined && typeof body.codeType !== 'string')) {
+      return res.status(400).json({
+        success: false,
+        error: 'title, description, markdownTheme and codeType must be strings or null',
+        code: 'invalid_field',
+        retryable: false
+      });
+    }
+
+    // The grant half of the authorization conjunction, judged before
+    // any state is read for validation: no update grant — or no such
+    // Share — is the same 404, so this surface cannot probe which
+    // Shares exist. The repository re-verifies the grant inside the
+    // write transaction; this check only fails fast.
+    const grant = await pageRepository.getShareGrant(credential.keyId, shareId);
+
+    if (!grant || !grant.permissions.update) {
+      return res.status(404).json({
+        success: false,
+        error: 'Share not found',
+        code: 'share_not_found',
+        retryable: false
+      });
+    }
+
+    const page = await pageRepository.getById(shareId);
+
+    if (!page) {
+      return res.status(404).json({
+        success: false,
+        error: 'Share not found',
+        code: 'share_not_found',
+        retryable: false
+      });
+    }
+
+    // codeType is fixed at creation in this milestone (parent spec
+    // #24 §3): it may be repeated in the snapshot, never changed.
+    if (body.codeType !== undefined && body.codeType !== page.code_type) {
+      return res.status(400).json({
+        success: false,
+        error: 'codeType cannot change after creation',
+        code: 'code_type_mismatch',
+        retryable: false
+      });
+    }
+
+    // Strict Preset validation: for a Markdown Share the theme must
+    // name a real Preset — an unknown one is a 400, never the silent
+    // default substitution the create/dashboard paths apply — and for
+    // every other type the snapshot's theme is null (parent spec #24
+    // §7).
+    const isMarkdown = page.code_type === 'markdown';
+    let markdownTheme = null;
+
+    if (isMarkdown) {
+      const knownPreset = typeof body.markdownTheme === 'string'
+        && getMarkdownThemeOptions().some(option => option.id === body.markdownTheme);
+
+      if (!knownPreset) {
+        return res.status(400).json({
+          success: false,
+          error: 'Unknown Markdown theme preset',
+          code: 'invalid_markdown_theme',
+          retryable: false
+        });
+      }
+
+      markdownTheme = body.markdownTheme;
+    } else if (body.markdownTheme !== null) {
+      return res.status(400).json({
+        success: false,
+        error: 'markdownTheme must be null for a non-Markdown Share',
+        code: 'invalid_markdown_theme',
+        retryable: false
+      });
+    }
+
+    // Write maintenance outranks precondition validation (T04): while
+    // paused, even a replay of this update is refused at the gate, and
+    // the operation stays confirmable through the operations query.
+    if (typeof pageRepository.getPublishingWritesPaused === 'function'
+      && await pageRepository.getPublishingWritesPaused()) {
+      return sendPublishingMaintenance(res);
+    }
+
+    const contentState = contentPreconditionState(req, shareId);
+    const normalizedTitle = body.title ? body.title.trim() || null : null;
+    const normalizedDescription = body.description ? body.description.trim() || null : null;
+
+    const updateOptions = {
+      htmlContent: body.htmlContent,
+      title: normalizedTitle,
+      description: normalizedDescription,
+      markdownTheme
+    };
+
+    // The digest binds the identifier to this exact request (parent
+    // spec §8), computed from the request alone — before any derived
+    // value exists — so a byte-identical retry digests identically in
+    // any state, while any other payload or expectation under the
+    // same identifier is a conflict.
+    const present = (value) => value !== undefined && value !== null;
+    const requestHmac = computeRequestHmac({
+      action: 'share.content.update',
+      targetId: shareId,
+      presence: {
+        htmlContent: 1,
+        title: present(body.title) ? 1 : 0,
+        description: present(body.description) ? 1 : 0,
+        markdownTheme: present(body.markdownTheme) ? 1 : 0,
+        codeType: present(body.codeType) ? 1 : 0,
+        expectedContentRevision: contentState.digestValue !== null ? 1 : 0
+      },
+      values: {
+        htmlContent: body.htmlContent,
+        title: normalizedTitle,
+        description: normalizedDescription,
+        markdownTheme,
+        codeType: present(body.codeType) ? body.codeType : null,
+        expectedContentRevision: contentState.digestValue
+      }
+    });
+
+    const ip = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const outcome = await pageRepository.saveContentIdempotent({
+      id: shareId,
+      options: updateOptions,
+      precondition: {
+        expectedAccessRevision: null,
+        accessPreconditionMissing: false,
+        advanceAccessRevision: false,
+        expectedContentRevision: contentState.expectedContentRevision,
+        contentPreconditionMissing: contentState.contentPreconditionMissing,
+        contentPreconditionInvalid: contentState.contentPreconditionInvalid,
+        contentMeta: { source: 'api-update', actorType: 'api_key', actorId: credential.keyId },
+        ip
+      },
+      operation: {
+        actorNamespace: managedKeyNamespace(credential.keyId),
+        requestId,
+        action: 'share.content.update',
+        targetId: shareId,
+        requestHmac
+      },
+      apiCredential: credential,
+      grantCheck: { keyId: credential.keyId, permission: 'update' }
+    });
+
+    const base = config.shareBaseUrl || `${req.protocol}://${req.get('host')}`;
+    const url = `${base.replace(/\/+$/, '')}/view/${shareId}`;
+
+    if (outcome.outcome === 'unavailable') {
+      return respondOperationUnavailable(res, requestId);
+    }
+
+    if (outcome.outcome === 'replayed') {
+      const receipt = operationReceipt(outcome.operation);
+
+      if (!receipt || receipt.kind !== 'share.content.update' || receipt.shareId !== shareId) {
+        return respondOperationUnavailable(res, requestId);
+      }
+
+      return res.json({
+        success: true,
+        replayed: true,
+        requestId,
+        action: 'share.content.update',
+        shareId,
+        url,
+        contentChanged: receipt.contentChanged === true,
+        contentRevision: receipt.contentRevision,
+        contentEtag: formatContentEtag(shareId, receipt.contentRevision),
+        accessRevision: receipt.accessRevision
+      });
+    }
+
+    const result = outcome.result;
+
+    if (result.status === 'grant_not_found' || result.status === 'not_found') {
+      return res.status(404).json({
+        success: false,
+        error: 'Share not found',
+        code: 'share_not_found',
+        retryable: false
+      });
+    }
+
+    if (result.status === 'precondition_required') {
+      return res.status(428).json({
+        success: false,
+        error: '缺少内容版本前置条件 If-Match，请刷新后重试',
+        code: 'content_precondition_required',
+        requestId,
+        contentRevision: result.contentRevision,
+        contentEtag: formatContentEtag(shareId, result.contentRevision),
+        retryable: false
+      });
+    }
+
+    if (result.status === 'content_conflict') {
+      // The candidate was NOT applied and the caller's draft is
+      // preserved; the response carries the current remote snapshot so
+      // the caller can show the difference and decide — the latest
+      // revision is never filled in silently (parent spec #24 §7,
+      // user story 36).
+      return res.status(412).json({
+        success: false,
+        error: '内容已被更新，你的稿件未被覆盖，请查看差异后决定如何处理',
+        code: 'content_conflict',
+        requestId,
+        contentRevision: result.contentRevision,
+        contentEtag: formatContentEtag(shareId, result.contentRevision),
+        current: result.current,
+        retryable: false
+      });
+    }
+
+    return res.json({
+      success: true,
+      requestId,
+      action: 'share.content.update',
+      shareId,
+      url,
+      contentChanged: result.contentChanged === true,
+      contentRevision: result.contentRevision,
+      contentEtag: formatContentEtag(shareId, result.contentRevision),
+      accessRevision: result.accessRevision,
+      share: {
+        id: shareId,
+        contentRevision: result.contentRevision,
+        htmlContent: updateOptions.htmlContent,
+        codeType: page.code_type,
+        title: updateOptions.title,
+        description: updateOptions.description,
+        markdownTheme: updateOptions.markdownTheme
+      }
+    });
+  } catch (error) {
+    console.error('Granted share content update failed:', error);
+    // The credential was rotated or deleted after this request
+    // verified it: the write was refused inside its transaction
+    // (T05/T13). From the client's side the presented credential is
+    // simply no longer valid.
+    if (isApiKeyCredentialChangedError(error)) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid API key',
+        code: 'api_key_credential_changed',
+        retryable: false
+      });
+    }
+    if (isIdempotencyConflictError(error)) {
+      return res.status(409).json({
+        success: false,
+        error: 'Idempotency-Key was already used with a different request',
+        code: 'idempotency_conflict',
+        requestId,
+        retryable: false
+      });
+    }
+    if (respondIfPublishingGate(res, error)) {
+      return;
+    }
     return res.status(500).json({ success: false, error: '服务器错误' });
   }
 });

@@ -97,10 +97,10 @@ function credentialVersionMatches(current, expected) {
 // what KIND of operation a credential may attempt; a per-Share grant
 // (utils/shareGrants.js) says WHICH Shares it may touch. Authorization
 // for a managed resource is always the conjunction of the two. The
-// scope vocabulary is fixed; this ticket implements create and read —
-// update and publish scopes exist in the vocabulary (and in stored
-// rows) but no route consumes them yet, and the admin only assigns the
-// scopes whose behavior is implemented (see app.js).
+// scope vocabulary is fixed; create (T05/T08), read (T12) and update
+// (T13) have consuming routes, while publish remains vocabulary for a
+// later ticket — and the admin only assigns the scopes whose behavior
+// is implemented (see app.js).
 const API_KEY_SCOPES = Object.freeze([
   'share:create',
   'share:read',

@@ -185,6 +185,45 @@ async function recheckManagedCredential(client, credential) {
   }
 }
 
+// Auto-edit grants for a managed Key's own creations (T13, issue #37;
+// parent spec #24 §6): when the Key's owner enabled
+// auto_grant_new_share_edit, a Share created BY that Key receives
+// read+update grants for the Key in the SAME transaction as the create
+// — never publish, never retroactive (only creations committed while
+// the flag is on). Runs inside the caller's create transaction, after
+// recheckManagedCredential has locked the Key row, so the flag is read
+// under the same lock that serializes rotation and flag changes. A
+// plain INSERT is deliberate: a grant row that somehow already exists
+// for the fresh Share ID is a data inconsistency, and its failure must
+// roll the whole create back rather than silently keep a grant the
+// create did not make. Returns true when grants were written.
+async function insertAutoEditGrants(client, credential, shareId, now = Date.now()) {
+  if (!credential || credential.type !== 'managed') {
+    return false;
+  }
+
+  const keyResult = await client.query(
+    'SELECT auto_grant_new_share_edit FROM api_keys WHERE id = $1',
+    [credential.keyId]
+  );
+
+  if (keyResult.rows[0]?.auto_grant_new_share_edit !== true) {
+    return false;
+  }
+
+  await client.query(
+    `
+      INSERT INTO public.share_grants (
+        api_key_id, share_id, can_read, can_update, can_publish, created_at, updated_at
+      )
+      VALUES ($1, $2, TRUE, TRUE, FALSE, $3, $3)
+    `,
+    [credential.keyId, shareId, now]
+  );
+
+  return true;
+}
+
 // Inserts the Share row itself (no snapshot). The caller owns the
 // transaction and writes the Revision baseline right after, so a Share
 // never exists without its baseline once this code writes it.
@@ -546,6 +585,11 @@ class PostgresPageRepository {
         description: page.description || null,
         markdown_theme: page.markdownTheme || null
       }, '1', options.revisionMeta || { source: 'web-create', actorType: 'owner' }, page.createdAt);
+
+      // Auto-edit grants (T13): a managed Key whose owner opted in
+      // receives read+update grants on its own new Share in this same
+      // transaction; a failure here rolls the create back whole.
+      await insertAutoEditGrants(client, options.apiCredential, page.id, page.createdAt);
     });
 
     return { id: page.id };
@@ -597,6 +641,11 @@ class PostgresPageRepository {
             description: prepared.page.description || null,
             markdown_theme: prepared.page.markdownTheme || null
           }, '1', revisionMeta || { source: 'web-create', actorType: 'owner' }, prepared.page.createdAt);
+
+          // Auto-edit grants (T13): only a first execution reaches
+          // here — a replay resolved above returns before any insert,
+          // so a retried create can never duplicate the grants.
+          await insertAutoEditGrants(client, apiCredential, prepared.page.id, prepared.page.createdAt);
 
           if (audit) {
             await client.query(
@@ -749,11 +798,51 @@ class PostgresPageRepository {
   // first execution reaches applyPageUpdate. A successful save (changed
   // or unchanged) records its result in the same transaction as the
   // projection, snapshot and audit; failures record nothing.
-  async saveContentIdempotent({ id, options, precondition = {}, operation = null }) {
+  // `apiCredential` + `grantCheck` serve the Key-authenticated content
+  // update (T13, issue #37): before any replay is honored or any
+  // version precondition is judged, the transaction re-verifies the
+  // credential version it first authenticated with (T05's recheck,
+  // which also takes the Key row lock) and re-reads the caller's grant
+  // on this Share under that lock. A rotation, deletion or revocation
+  // that committed first therefore refuses the in-flight write — a
+  // revoked Key cannot even replay its own earlier result (parent spec
+  // #24 §8) — while one that arrives later waits behind this
+  // transaction. Dashboard callers pass neither and keep T09 behavior.
+  async saveContentIdempotent({ id, options, precondition = {}, operation = null, apiCredential = null, grantCheck = null }) {
     return withPublishingWrite(this.pool, async (client) => {
       if (operation) {
         await acquireOperationLock(client, operation);
+      }
 
+      await recheckManagedCredential(client, apiCredential);
+
+      if (grantCheck) {
+        const grantResult = await client.query(
+          `
+            SELECT can_read, can_update, can_publish
+            FROM public.share_grants
+            WHERE api_key_id = $1 AND share_id = $2
+            LIMIT 1
+          `,
+          [grantCheck.keyId, id]
+        );
+        const permissions = grantPermissionsFromRow(grantResult.rows[0]);
+
+        if (!permissions[grantCheck.permission]) {
+          return {
+            outcome: 'executed',
+            result: {
+              status: 'grant_not_found',
+              accessRevision: null,
+              contentRevision: null,
+              contentChanged: false,
+              current: null
+            }
+          };
+        }
+      }
+
+      if (operation) {
         const resolved = await resolveExistingOperation(client, operation);
 
         if (resolved) {
@@ -1969,6 +2058,27 @@ class PostgresPageRepository {
         RETURNING id, name, key_prefix, created_at, last_used_at, credential_version::text AS credential_version, scopes, auto_grant_new_share_edit
       `,
       [id, serializeApiKeyScopes(scopes)]
+    ));
+
+    return result.rows[0] || null;
+  }
+
+  // Auto-edit opt-in (T13): flips auto_grant_new_share_edit in one
+  // gated write. The flag is read inside the create transaction under
+  // the Key row lock (see insertAutoEditGrants), so toggling it can
+  // never interleave with a create it should or should not cover: the
+  // toggle either commits before the create's lock (and applies) or
+  // waits behind it (and does not). Returns the public record, or null
+  // when the Key does not exist.
+  async updateApiKeyAutoGrant(id, enabled) {
+    const result = await withPublishingWrite(this.pool, client => client.query(
+      `
+        UPDATE api_keys
+        SET auto_grant_new_share_edit = $2
+        WHERE id = $1
+        RETURNING id, name, key_prefix, created_at, last_used_at, credential_version::text AS credential_version, scopes, auto_grant_new_share_edit
+      `,
+      [id, enabled === true]
     ));
 
     return result.rows[0] || null;

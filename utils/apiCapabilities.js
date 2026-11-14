@@ -11,9 +11,13 @@
 // advertised only to a managed credential whose scopes include them. The
 // legacy environment Key is create-only by construction and never sees a
 // management operation here. Nothing in this definition may advertise an
-// operation the routes do not implement, and no write operation beyond
-// Share creation exists yet: update/publish scopes are stored vocabulary
-// for later tickets, not advertised capabilities.
+// operation the routes do not implement. The granted content update
+// (T13, issue #37) is the one management write: it is advertised only to
+// a managed credential holding BOTH the read and update scopes, because
+// that is exactly the conjunction its route enforces — the per-Share
+// update grant is additionally required at call time and, being
+// per-resource data, is never part of this document. The publish scope
+// remains stored vocabulary for a later ticket, not a capability.
 
 const config = require('../config');
 const { getMarkdownThemeOptions } = require('./markdownThemeCatalog');
@@ -57,6 +61,18 @@ const SHARE_STATE_READ_OPERATION = Object.freeze({
   id: 'share.state.read',
   method: 'GET',
   path: '/api/v1/shares/:id/state'
+});
+
+// Granted content update (T13): full-snapshot replacement of one
+// granted Share's content. Requires the read AND update scopes plus an
+// update grant on the target, a concrete content If-Match and an
+// Idempotency-Key; it reuses the dashboard content transaction, so its
+// result is confirmable through operation.status in the caller's own
+// namespace exactly like a create.
+const SHARE_CONTENT_UPDATE_OPERATION = Object.freeze({
+  id: 'share.content.update',
+  method: 'PUT',
+  path: '/api/v1/shares/:id/content'
 });
 
 const CONNECTION_OPERATIONS = Object.freeze([
@@ -135,6 +151,82 @@ function buildCapabilities({ credentialType, scopes } = {}) {
 
   operations.push(...readOperations);
 
+  // Granted content update (T13): advertised only when the credential
+  // could actually attempt it — managed, holding BOTH the read and the
+  // update scope. The grant half of the conjunction is per-resource
+  // data and stays out of this document.
+  const canUpdate = isManaged && hasScope('share:read') && hasScope('share:update');
+
+  if (canUpdate) {
+    operations.push({ ...SHARE_CONTENT_UPDATE_OPERATION });
+  }
+
+  const conditionalWrites = [];
+
+  if (hasScope('share:create')) {
+    conditionalWrites.push({
+      operation: SHARE_CREATE_OPERATION.id,
+      requiresIfMatch: false,
+      requiresIdempotencyKey: false,
+      // Optional idempotent create (T08): sending an Idempotency-Key
+      // makes the create safe to retry — the same key with the same
+      // input replays the original result, the same key with different
+      // input is refused, and a committed outcome stays confirmable
+      // via operation.status. Without the header the create is NOT
+      // idempotent and behaves exactly as before.
+      idempotency: {
+        header: 'Idempotency-Key',
+        required: false,
+        replaySupported: true,
+        keyFormat: '16-128 characters of [A-Za-z0-9_-]; clients generate a UUID v4',
+        confirmationOperation: 'operation.status',
+        conflict: { status: 409, code: 'idempotency_conflict', retryable: false },
+        resultUnavailable: { status: 410, code: 'operation_result_unavailable', retryable: false },
+        invalidKey: { status: 400, code: 'invalid_idempotency_key', retryable: false }
+      },
+      // Publishing writes pass the write-maintenance gate (T04): during
+      // a maintenance window creation is refused, while the connection
+      // checks (me / capabilities) stay available.
+      maintenanceRefusal: { status: 503, code: 'maintenance', retryable: true },
+      // A managed-Key write re-verifies the credential version it first
+      // authenticated with; a rotation or delete that committed first
+      // refuses the write with 401 instead of publishing (T05).
+      credentialRecheck: { status: 401, code: 'api_key_credential_changed', retryable: false }
+    });
+  }
+
+  if (canUpdate) {
+    conditionalWrites.push({
+      operation: SHARE_CONTENT_UPDATE_OPERATION.id,
+      requiresIfMatch: true,
+      requiresIdempotencyKey: true,
+      // Mandatory idempotent update (T13): the Idempotency-Key is not
+      // optional here — without it the write is refused 400 — and the
+      // concrete content If-Match names the exact Revision the caller
+      // based its snapshot on. A retry with the same identifier and
+      // input replays the committed result (even after the tag has
+      // gone stale); the same identifier with different input is a
+      // 409; the outcome stays confirmable via operation.status.
+      idempotency: {
+        header: 'Idempotency-Key',
+        required: true,
+        replaySupported: true,
+        keyFormat: '16-128 characters of [A-Za-z0-9_-]; clients generate a UUID v4',
+        confirmationOperation: 'operation.status',
+        conflict: { status: 409, code: 'idempotency_conflict', retryable: false },
+        resultUnavailable: { status: 410, code: 'operation_result_unavailable', retryable: false },
+        invalidKey: { status: 400, code: 'invalid_idempotency_key', retryable: false }
+      },
+      maintenanceRefusal: { status: 503, code: 'maintenance', retryable: true },
+      // The write re-verifies, inside its transaction, both the
+      // credential version it first authenticated with and the
+      // caller's current grant: a rotation, deletion or revocation
+      // that committed first refuses the write (401 / 404) instead of
+      // letting it land under an authorization that no longer exists.
+      credentialRecheck: { status: 401, code: 'api_key_credential_changed', retryable: false }
+    });
+  }
+
   const document = {
     protocolVersion: API_PROTOCOL_VERSION,
     credentialType: credentialType || null,
@@ -148,37 +240,7 @@ function buildCapabilities({ credentialType, scopes } = {}) {
       smallRequestBody: config.smallBodyLimit,
       smallRequestBodyBytes: parseByteLimit(config.smallBodyLimit)
     },
-    conditionalWrites: hasScope('share:create') ? [
-      {
-        operation: SHARE_CREATE_OPERATION.id,
-        requiresIfMatch: false,
-        requiresIdempotencyKey: false,
-        // Optional idempotent create (T08): sending an Idempotency-Key
-        // makes the create safe to retry — the same key with the same
-        // input replays the original result, the same key with different
-        // input is refused, and a committed outcome stays confirmable
-        // via operation.status. Without the header the create is NOT
-        // idempotent and behaves exactly as before.
-        idempotency: {
-          header: 'Idempotency-Key',
-          required: false,
-          replaySupported: true,
-          keyFormat: '16-128 characters of [A-Za-z0-9_-]; clients generate a UUID v4',
-          confirmationOperation: 'operation.status',
-          conflict: { status: 409, code: 'idempotency_conflict', retryable: false },
-          resultUnavailable: { status: 410, code: 'operation_result_unavailable', retryable: false },
-          invalidKey: { status: 400, code: 'invalid_idempotency_key', retryable: false }
-        },
-        // Publishing writes pass the write-maintenance gate (T04): during
-        // a maintenance window creation is refused, while the connection
-        // checks (me / capabilities) stay available.
-        maintenanceRefusal: { status: 503, code: 'maintenance', retryable: true },
-        // A managed-Key write re-verifies the credential version it first
-        // authenticated with; a rotation or delete that committed first
-        // refuses the write with 401 instead of publishing (T05).
-        credentialRecheck: { status: 401, code: 'api_key_credential_changed', retryable: false }
-      }
-    ] : []
+    conditionalWrites
   };
 
   if (readOperations.length > 0) {
@@ -218,6 +280,7 @@ module.exports = {
   CONNECTION_OPERATIONS,
   CREATE_ONLY_SCOPES,
   SHARE_CONTENT_READ_OPERATION,
+  SHARE_CONTENT_UPDATE_OPERATION,
   SHARE_CREATE_OPERATION,
   SHARE_LIST_OPERATION,
   SHARE_STATE_READ_OPERATION,
