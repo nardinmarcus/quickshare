@@ -12,6 +12,12 @@ const {
   MemoryPublishingGate,
   isPublishingPausedError
 } = require('../utils/publishing');
+const {
+  ApiKeyCredentialChangedError,
+  credentialVersionMatches,
+  nextCredentialVersion,
+  toCredentialVersionString
+} = require('../utils/apiKeyIdentity');
 
 function filterAdminPages(pages, options = {}) {
   const search = options.search || '';
@@ -149,8 +155,26 @@ class MemoryPageRepository {
     });
   }
 
-  async create(page) {
-    return this.publishingGate.runWrite(async () => this.createUnlocked(page));
+  async create(page, options = {}) {
+    return this.publishingGate.runWrite(async () => {
+      // A managed-Key API write re-verifies, inside the gate (the memory
+      // Adapter's write transaction), the credential version the request
+      // first authenticated with (T05). The gate serializes this check
+      // against rotation/delete, mirroring the Postgres row lock: if either
+      // committed first, the recorded version no longer matches and the
+      // write is refused instead of publishing under a revoked credential.
+      const credential = options.apiCredential;
+
+      if (credential && credential.type === 'managed') {
+        const apiKey = this.apiKeys.get(credential.keyId);
+
+        if (!apiKey || !credentialVersionMatches(apiKey.credential_version, credential.credentialVersion)) {
+          throw new ApiKeyCredentialChangedError();
+        }
+      }
+
+      return this.createUnlocked(page);
+    });
   }
 
   async createUnlocked(page) {
@@ -194,7 +218,8 @@ class MemoryPageRepository {
         key_hash: apiKey.keyHash,
         key_prefix: apiKey.keyPrefix,
         created_at: apiKey.createdAt,
-        last_used_at: null
+        last_used_at: null,
+        credential_version: '1'
       };
 
       this.apiKeys.set(record.id, record);
@@ -203,7 +228,36 @@ class MemoryPageRepository {
         name: record.name,
         key_prefix: record.key_prefix,
         created_at: record.created_at,
-        last_used_at: record.last_used_at
+        last_used_at: record.last_used_at,
+        credential_version: record.credential_version
+      };
+    });
+  }
+
+  // Rotation (T05): keeps the logical Key ID, name and creation time,
+  // replaces the secret hash/prefix and advances the credential version, so
+  // every previously issued secret stops working the moment this commits.
+  // Runs through the publishing gate like every other Key management write.
+  // Returns the public record (never the hash), or null when missing.
+  async rotateApiKey(id, { keyHash, keyPrefix } = {}) {
+    return this.publishingGate.runWrite(async () => {
+      const record = this.apiKeys.get(id);
+
+      if (!record) {
+        return null;
+      }
+
+      record.key_hash = keyHash;
+      record.key_prefix = keyPrefix;
+      record.credential_version = nextCredentialVersion(record.credential_version);
+
+      return {
+        id: record.id,
+        name: record.name,
+        key_prefix: record.key_prefix,
+        created_at: record.created_at,
+        last_used_at: record.last_used_at,
+        credential_version: toCredentialVersionString(record.credential_version)
       };
     });
   }

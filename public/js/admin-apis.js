@@ -35,7 +35,7 @@
     const row = document.createElement('tr');
     row.id = 'api-keys-empty';
     const cell = document.createElement('td');
-    cell.colSpan = 5;
+    cell.colSpan = 6;
     cell.className = 'api-key-empty';
     cell.textContent = '尚未创建托管密钥。';
     row.appendChild(cell);
@@ -67,6 +67,8 @@
     prefixCode.textContent = apiKey.key_prefix;
     prefix.appendChild(prefixCode);
 
+    const version = createCell(String(apiKey.credential_version || '1'), 'api-key-version');
+
     const created = document.createElement('td');
     const createdTime = document.createElement('time');
     createdTime.dateTime = new Date(Number(apiKey.created_at)).toISOString();
@@ -77,6 +79,13 @@
 
     const actions = document.createElement('td');
     actions.className = 'admin-actions-col';
+    const rotate = document.createElement('button');
+    rotate.type = 'button';
+    rotate.className = 'admin-rotate-btn api-key-rotate-btn';
+    rotate.dataset.apiKeyId = apiKey.id;
+    rotate.dataset.apiKeyName = apiKey.name;
+    rotate.setAttribute('aria-label', '轮换 API 密钥 ' + apiKey.name);
+    rotate.innerHTML = '<i class="fas fa-sync-alt" aria-hidden="true"></i><span class="sr-only">轮换</span>';
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'admin-delete-btn api-key-delete-btn';
@@ -84,10 +93,55 @@
     remove.dataset.apiKeyName = apiKey.name;
     remove.setAttribute('aria-label', '删除 API 密钥 ' + apiKey.name);
     remove.innerHTML = '<i class="fas fa-trash-alt" aria-hidden="true"></i><span class="sr-only">删除</span>';
-    actions.appendChild(remove);
+    actions.append(rotate, remove);
 
-    row.append(name, prefix, created, lastUsed, actions);
+    row.append(name, prefix, version, created, lastUsed, actions);
     keyRows.prepend(row);
+  }
+
+  async function rotateKey(button) {
+    const id = button.dataset.apiKeyId;
+    const name = button.dataset.apiKeyName || '此密钥';
+
+    if (!id || !window.confirm('确定轮换“' + name + '”吗？旧密钥会立即失效，使用旧密钥的自动化任务必须改用轮换后显示的新密钥。')) {
+      return;
+    }
+
+    button.disabled = true;
+
+    try {
+      const response = await fetch('/admin/apis/keys/' + encodeURIComponent(id) + '/rotate', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfToken()
+        },
+        body: JSON.stringify({})
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || '轮换 API 密钥失败');
+      }
+
+      // The new secret is shown exactly once, in the same panel used for a
+      // freshly created key; it is never rendered into the table.
+      secretValue.textContent = data.apiKey.secret;
+      secretPanel.hidden = false;
+
+      const row = button.closest('tr');
+      const prefixCode = row?.querySelector('.api-key-prefix');
+      if (prefixCode) prefixCode.textContent = data.apiKey.key_prefix;
+      const versionCell = row?.querySelector('.api-key-version');
+      if (versionCell) versionCell.textContent = String(data.apiKey.credential_version || '');
+
+      notify('success', 'API 密钥已轮换，请立即复制新密钥');
+    } catch (error) {
+      notify('error', error.message);
+    } finally {
+      button.disabled = false;
+    }
   }
 
   async function deleteKey(button) {
@@ -185,6 +239,13 @@
   });
 
   keyRows.addEventListener('click', function (event) {
+    const rotateButton = event.target.closest('.api-key-rotate-btn');
+
+    if (rotateButton) {
+      rotateKey(rotateButton);
+      return;
+    }
+
     const button = event.target.closest('.api-key-delete-btn');
 
     if (button) deleteKey(button);

@@ -5,6 +5,10 @@ const {
   managementRecentStart
 } = require('../utils/management-time');
 const { toAccessRevisionString } = require('../utils/shareAccess');
+const {
+  ApiKeyCredentialChangedError,
+  credentialVersionMatches
+} = require('../utils/apiKeyIdentity');
 const { isPublishingPausedError } = require('../utils/publishing');
 const {
   acquirePublishingWriteGate,
@@ -201,29 +205,59 @@ class PostgresPageRepository {
     }
   }
 
-  async create(page) {
-    await withPublishingWrite(this.pool, client => client.query(
-      `
-        INSERT INTO pages (
-          id, html_content, created_at, password_hash, encrypted_password, is_protected,
-          code_type, title, description, expires_at, markdown_theme, access_revision
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1)
-      `,
-      [
-        page.id,
-        page.htmlContent,
-        page.createdAt,
-        page.passwordHash || null,
-        page.encryptedPassword || null,
-        page.isProtected ? 1 : 0,
-        page.codeType || 'html',
-        page.title || null,
-        page.description || null,
-        page.expiresAt || null,
-        page.markdownTheme || null
-      ]
-    ));
+  async create(page, options = {}) {
+    await withPublishingWrite(this.pool, async (client) => {
+      // A managed-Key API write re-verifies its credential inside the write
+      // transaction (T05). The spec's lock order is fixed: maintenance gate
+      // first (already held by withPublishingWrite), then the managed Key
+      // row. Locking the Key row FOR UPDATE and comparing the stored
+      // credential_version against the version the request first
+      // authenticated with means a rotation or delete that committed first
+      // refuses this write, and a rotation that arrives later waits for
+      // this transaction instead of slipping in underneath it.
+      const credential = options.apiCredential;
+
+      if (credential && credential.type === 'managed') {
+        const keyResult = await client.query(
+          `
+            SELECT credential_version::text AS credential_version
+            FROM api_keys
+            WHERE id = $1
+            FOR UPDATE
+          `,
+          [credential.keyId]
+        );
+        const currentVersion = keyResult.rows[0]?.credential_version;
+
+        if (currentVersion === undefined
+          || !credentialVersionMatches(currentVersion, credential.credentialVersion)) {
+          throw new ApiKeyCredentialChangedError();
+        }
+      }
+
+      await client.query(
+        `
+          INSERT INTO pages (
+            id, html_content, created_at, password_hash, encrypted_password, is_protected,
+            code_type, title, description, expires_at, markdown_theme, access_revision
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1)
+        `,
+        [
+          page.id,
+          page.htmlContent,
+          page.createdAt,
+          page.passwordHash || null,
+          page.encryptedPassword || null,
+          page.isProtected ? 1 : 0,
+          page.codeType || 'html',
+          page.title || null,
+          page.description || null,
+          page.expiresAt || null,
+          page.markdownTheme || null
+        ]
+      );
+    });
 
     return { id: page.id };
   }
@@ -627,9 +661,9 @@ class PostgresPageRepository {
   async createApiKey(apiKey) {
     const result = await withPublishingWrite(this.pool, client => client.query(
       `
-        INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, name, key_prefix, created_at, last_used_at
+        INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at, credential_version)
+        VALUES ($1, $2, $3, $4, $5, 1)
+        RETURNING id, name, key_prefix, created_at, last_used_at, credential_version::text AS credential_version
       `,
       [apiKey.id, apiKey.name, apiKey.keyHash, apiKey.keyPrefix, apiKey.createdAt]
     ));
@@ -640,7 +674,7 @@ class PostgresPageRepository {
   async listApiKeys() {
     const result = await this.pool.query(
       `
-        SELECT id, name, key_prefix, created_at, last_used_at
+        SELECT id, name, key_prefix, created_at, last_used_at, credential_version::text AS credential_version
         FROM api_keys
         ORDER BY created_at DESC
       `
@@ -651,9 +685,30 @@ class PostgresPageRepository {
 
   async getApiKeyById(id) {
     const result = await this.pool.query(
-      'SELECT id, name, key_hash, key_prefix, created_at, last_used_at FROM api_keys WHERE id = $1 LIMIT 1',
+      'SELECT id, name, key_hash, key_prefix, created_at, last_used_at, credential_version::text AS credential_version FROM api_keys WHERE id = $1 LIMIT 1',
       [id]
     );
+
+    return result.rows[0] || null;
+  }
+
+  // Rotation (T05): a single gated UPDATE keeps the logical Key ID, name
+  // and creation time, replaces the secret hash/prefix and advances the
+  // credential version atomically. The row lock taken by the UPDATE waits
+  // for any in-flight API write that locked the Key row first (and vice
+  // versa), so the version advance and the invalidation of the old secret
+  // are one indivisible step. Returns the public record (never the hash),
+  // or null when the Key does not exist.
+  async rotateApiKey(id, { keyHash, keyPrefix } = {}) {
+    const result = await withPublishingWrite(this.pool, client => client.query(
+      `
+        UPDATE api_keys
+        SET key_hash = $2, key_prefix = $3, credential_version = credential_version + 1
+        WHERE id = $1
+        RETURNING id, name, key_prefix, created_at, last_used_at, credential_version::text AS credential_version
+      `,
+      [id, keyHash, keyPrefix]
+    ));
 
     return result.rows[0] || null;
   }

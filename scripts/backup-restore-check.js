@@ -16,6 +16,10 @@
 //     full-schema fixture is seeded with publishing_writes_paused = true
 //     and the restored database must still be paused (explicitly skipped
 //     on a legacy 001-003 schema, where the column does not exist)
+//   - the managed Key credential_version (migration 006, T05) round-trips
+//     exactly (fixture Key is seeded with a non-default version) and a
+//     restored-only tamper of it is rejected by verify (explicitly
+//     skipped on a legacy 001-003 schema, where the column does not exist)
 //
 // No production data is involved; both fixture databases are dropped at the
 // end unless --keep is passed.
@@ -133,11 +137,22 @@ async function seedFixtures(pool, { hasAccessRevision }) {
     expiresAt: BASE_TIME - 1000
   }, '1'));
 
-  await pool.query(
-    `INSERT INTO public.api_keys (id, name, key_hash, key_prefix, created_at, last_used_at)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    ['drillkey1', 'Drill key', await hashSecret('drill-api-secret'), 'qs_drill', BASE_TIME + 5, null]
-  );
+  if (hasAccessRevision) {
+    // Full schema includes migration 006: seed a non-default credential
+    // version so the drill proves the version itself is backed up and
+    // restored, not silently reset to 1.
+    await pool.query(
+      `INSERT INTO public.api_keys (id, name, key_hash, key_prefix, created_at, last_used_at, credential_version)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      ['drillkey1', 'Drill key', await hashSecret('drill-api-secret'), 'qs_drill', BASE_TIME + 5, null, 7]
+    );
+  } else {
+    await pool.query(
+      `INSERT INTO public.api_keys (id, name, key_hash, key_prefix, created_at, last_used_at)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      ['drillkey1', 'Drill key', await hashSecret('drill-api-secret'), 'qs_drill', BASE_TIME + 5, null]
+    );
+  }
 
   const audit = async (action, pageId, details, offset) => {
     await pool.query(
@@ -192,6 +207,8 @@ async function main() {
     log('SKIP access_revision assertions: schema 004 absent (legacy 001-003 fixture)');
     skipped.push('publishing_writes_paused assertions skipped: schema 005 absent (legacy 001-003 fixture)');
     log('SKIP publishing_writes_paused assertions: schema 005 absent (legacy 001-003 fixture)');
+    skipped.push('credential_version assertions skipped: schema 006 absent (legacy 001-003 fixture)');
+    log('SKIP credential_version assertions: schema 006 absent (legacy 001-003 fixture)');
   }
 
   if (!process.env.SESSION_SECRET) {
@@ -359,6 +376,34 @@ async function main() {
       && tamperReport !== null
       && tamperReport.ok === false
       && tamperReport.failures.some(failure => failure.includes('drill-')));
+
+    if (hasAccessRevision) {
+      const versionResult = await restorePool.query(
+        "SELECT credential_version::text AS version FROM public.api_keys WHERE id = 'drillkey1'"
+      );
+      check(
+        'non-default credential_version 7 restored exactly',
+        versionResult.rows[0].version === '7'
+      );
+
+      await restorePool.query(
+        "UPDATE public.api_keys SET credential_version = credential_version + 1 WHERE id = 'drillkey1'"
+      );
+
+      const versionTamperResult = await runScript('verify-backup.js', verifyArgs, childEnv);
+      let versionTamperReport = null;
+
+      try {
+        versionTamperReport = parseStdoutJson(versionTamperResult, 'verify-backup.js (credential tampered)');
+      } catch (error) {
+        // handled by the check below
+      }
+
+      check('verify rejects a restored-only credential_version tamper', versionTamperResult.code !== 0
+        && versionTamperReport !== null
+        && versionTamperReport.ok === false
+        && versionTamperReport.failures.some(failure => failure.includes('credential_version')));
+    }
 
     const summary = {
       ok: failures.length === 0,
