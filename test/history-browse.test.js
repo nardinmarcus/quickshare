@@ -399,7 +399,8 @@ test('admin detail page ships the history section and the shared diff scripts', 
   assert.ok(detail.text.includes('sandbox="allow-downloads allow-forms allow-modals allow-popups allow-scripts"'));
   assert.ok(detail.text.includes('/js/source-diff.js'));
   assert.ok(detail.text.includes('/js/admin-history.js'));
-  // History browsing ships no restore/purge shell in this ticket.
-  assert.ok(!detail.text.includes('history-restore'));
+  // T07 shipped browsing only; T09 adds the restore shell (asserted in
+  // test/restore-revisions.test.js). Purge remains a later ticket.
+  assert.ok(detail.text.includes('history-restore'));
   assert.ok(!detail.text.includes('history-purge'));
 });

@@ -234,7 +234,7 @@
 
   <section class="card admin-card" id="history-section">
     <h2 class="admin-section-title">历史版本</h2>
-    <p class="admin-history-note">只读浏览此分享的内容历史：可查看单个版本的源码与预览，并比较任意两个版本。此处不提供恢复或清除操作。</p>
+    <p class="admin-history-note">浏览此分享的内容历史：可查看单个版本的源码与预览、比较任意两个版本，并将某个版本恢复为新的当前版本。恢复只改内容，不改变密码、有效期等访问策略。此处不提供清除操作。</p>
     <p id="history-status" aria-live="polite">正在加载历史…</p>
     <button type="button" class="cyber-btn cyber-btn-secondary" id="history-retry" hidden>重试</button>
     <div id="history-list"></div>
@@ -282,6 +282,15 @@
         <button type="button" class="cyber-btn cyber-btn-secondary" id="history-preview-close">关闭预览</button>
       </div>
     </div>
+    <div id="history-restore" hidden>
+      <h3 class="admin-history-subtitle">恢复版本 <span id="history-restore-title"></span></h3>
+      <p id="history-restore-status" aria-live="polite"></p>
+      <p class="admin-history-note">恢复会将所选版本的内容写入为新的当前 Revision，并记录恢复来源；若所选版本与当前内容相同，则不会产生新版本。当前密码、有效期、发布状态、收藏与浏览量不会改变。</p>
+      <div class="admin-edit-actions">
+        <button type="button" class="cyber-btn" id="history-restore-confirm">确认恢复</button>
+        <button type="button" class="cyber-btn cyber-btn-secondary" id="history-restore-cancel">取消</button>
+      </div>
+    </div>
   </section>
 
   <section class="card admin-card" id="content-section">
@@ -318,6 +327,7 @@
 <script src="/js/admin-time.js"></script>
 <script src="/js/theme-sampler.js"></script>
 <script src="/js/source-diff.js"></script>
+<script src="/js/publish-intent.js"></script>
 <script src="/js/admin-detail.js"></script>
 <script src="/js/admin-history.js"></script>
 <%- include('partials/footer', { page }) %>

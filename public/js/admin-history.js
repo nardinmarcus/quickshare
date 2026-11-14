@@ -12,8 +12,10 @@
   // Every asynchronous surface carries a sequence guard: switching the
   // list page, the source target, the preview target or the comparison
   // target discards the previous run's late results instead of painting
-  // them over the newer target. There is deliberately no restore or
-  // purge control here — this ticket ships browsing only.
+  // them over the newer target. T09 adds restore: a Revision can be
+  // written forward as the new current Revision behind an explicit
+  // confirmation that names the source and the current version. Purge
+  // remains a later ticket — there is deliberately no purge control.
 
   const section = document.getElementById('history-section');
   if (!section) return;
@@ -46,6 +48,11 @@
   const previewTitle = document.getElementById('history-preview-title');
   const previewFrame = document.getElementById('history-preview-frame');
   const previewCloseBtn = document.getElementById('history-preview-close');
+  const restorePanel = document.getElementById('history-restore');
+  const restoreTitle = document.getElementById('history-restore-title');
+  const restoreStatus = document.getElementById('history-restore-status');
+  const restoreConfirmBtn = document.getElementById('history-restore-confirm');
+  const restoreCancelBtn = document.getElementById('history-restore-cancel');
   const pageDataElement = document.getElementById('page-data');
 
   const PAGE_LIMIT = 20;
@@ -53,6 +60,7 @@
     'web-create': '网页创建',
     'api-create': 'API 创建',
     'admin-edit': '后台编辑',
+    'admin-restore': '历史恢复',
     'admin-clone': '后台克隆',
     baseline: '基线回填',
     'legacy-update': '旧版更新'
@@ -67,7 +75,15 @@
   }
 
   const shareId = pageData.id || '';
-  const currentRevision = pageData.currentRevision || null;
+  // Mutable: a successful restore (T09) advances the current version and
+  // its ETag without a page reload, and the list badge follows.
+  let currentRevision = pageData.currentRevision || null;
+  let currentEtag = pageData.contentEtag || '';
+
+  function csrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute('content') : '';
+  }
 
   let listPageIndex = 0;
   let listTotal = 0;
@@ -158,6 +174,14 @@
         showSource(item.revision);
       });
 
+      const restoreBtn = document.createElement('button');
+      restoreBtn.type = 'button';
+      restoreBtn.className = 'cyber-btn cyber-btn-secondary';
+      restoreBtn.textContent = '恢复';
+      restoreBtn.addEventListener('click', function () {
+        showRestore(item.revision);
+      });
+
       const compareBtn = document.createElement('button');
       compareBtn.type = 'button';
       compareBtn.className = 'cyber-btn cyber-btn-secondary';
@@ -168,7 +192,7 @@
         toggleCompareSelection(item.revision);
       });
 
-      actions.append(previewBtn, sourceBtn, compareBtn);
+      actions.append(previewBtn, sourceBtn, restoreBtn, compareBtn);
       row.append(main, actions);
       listEl.appendChild(row);
     });
@@ -443,9 +467,209 @@
     }
   }
 
+  // --- Restore (T09) ------------------------------------------------------
+  //
+  // Restoring writes the chosen snapshot forward as a NEW Revision that
+  // records its source; the snapshot itself is never rewritten, and only
+  // content fields move — password, expiry, access policy, publish
+  // state, favorite and view count are untouched. The confirmation names
+  // both the source and the current version, and the request carries the
+  // current content ETag as its version condition plus an operation
+  // identifier: one pending restore intent per (source, expected ETag)
+  // pair, kept across a lost response or a page reload through
+  // sessionStorage, so confirming again replays the committed result
+  // instead of restoring twice. Error statuses are never retried
+  // automatically and never adopt a new baseline silently — a 412
+  // refreshes the displayed current version and asks the owner to
+  // confirm again explicitly.
+  const restoreIntentStorageKey = 'quickshare-admin-restore-intent:' + shareId;
+  let restoreIntent = null;
+  let pendingRestore = null;
+  let restoreBusy = false;
+
+  try {
+    const storedRestore = window.sessionStorage.getItem(restoreIntentStorageKey);
+    if (storedRestore) {
+      restoreIntent = JSON.parse(storedRestore);
+    }
+  } catch (error) {
+    restoreIntent = null;
+  }
+
+  function persistRestoreIntent() {
+    try {
+      if (restoreIntent) {
+        window.sessionStorage.setItem(restoreIntentStorageKey, JSON.stringify(restoreIntent));
+      } else {
+        window.sessionStorage.removeItem(restoreIntentStorageKey);
+      }
+    } catch (error) {
+      // Storage unavailable: the in-memory intent still applies.
+    }
+  }
+
+  function requestIdForRestore(sourceRevision) {
+    const intentKey = sourceRevision + '|' + currentEtag;
+
+    if (restoreIntent && restoreIntent.intentKey === intentKey && restoreIntent.requestId) {
+      return restoreIntent.requestId;
+    }
+
+    restoreIntent = {
+      requestId: window.PublishIntent
+        ? window.PublishIntent.generateRequestId()
+        : 'restore-' + Date.now() + '-' + Math.random().toString(36).slice(2),
+      intentKey
+    };
+    persistRestoreIntent();
+    return restoreIntent.requestId;
+  }
+
+  function clearRestoreIntent() {
+    restoreIntent = null;
+    persistRestoreIntent();
+  }
+
+  function renderRestorePanel() {
+    if (!pendingRestore) {
+      restorePanel.hidden = true;
+      return;
+    }
+
+    restorePanel.hidden = false;
+    restoreTitle.textContent = 'Revision ' + pendingRestore.sourceRevision
+      + ' → 当前 Revision ' + (currentRevision || '（尚未建立基线）');
+    restoreConfirmBtn.disabled = restoreBusy;
+  }
+
+  function showRestore(sourceRevision) {
+    pendingRestore = { sourceRevision };
+    restoreStatus.textContent = sourceRevision === currentRevision
+      ? '所选版本就是当前版本：确认后不会产生新版本，恢复结果仍会被记录。'
+      : '';
+    renderRestorePanel();
+    restorePanel.scrollIntoView({ block: 'nearest' });
+  }
+
+  function hideRestore() {
+    pendingRestore = null;
+    renderRestorePanel();
+  }
+
+  function publishRevisionChanged() {
+    window.dispatchEvent(new CustomEvent('quickshare:revision-changed', {
+      detail: { contentRevision: currentRevision, contentEtag: currentEtag }
+    }));
+  }
+
+  async function confirmRestore() {
+    if (!pendingRestore || restoreBusy) return;
+
+    const sourceRevision = pendingRestore.sourceRevision;
+    const requestId = requestIdForRestore(sourceRevision);
+
+    restoreBusy = true;
+    restoreConfirmBtn.disabled = true;
+    restoreStatus.textContent = '正在恢复…';
+
+    try {
+      const response = await fetch(apiUrl('/revisions/' + encodeURIComponent(sourceRevision) + '/restore'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-CSRF-Token': csrfToken(),
+          'If-Match': currentEtag,
+          'Idempotency-Key': requestId
+        },
+        body: JSON.stringify({})
+      });
+      const data = await response.json().catch(() => null);
+
+      if (response.status === 412 && data && data.code === 'content_conflict') {
+        // The current version moved: refresh the displayed baseline and
+        // let the owner confirm again explicitly. The next confirm is a
+        // new intent (the expected ETag changed); nothing auto-retries
+        // and no baseline is adopted without this explicit step.
+        currentRevision = data.contentRevision || currentRevision;
+        currentEtag = data.contentEtag || currentEtag;
+        publishRevisionChanged();
+        restoreStatus.textContent = '内容已被更新，当前已是 Revision ' + data.contentRevision
+          + '，恢复未执行。请确认最新版本后再次点击确认恢复。';
+        renderRestorePanel();
+        loadList();
+        return;
+      }
+
+      if (response.status === 409 && data && data.code === 'idempotency_conflict') {
+        clearRestoreIntent();
+        restoreStatus.textContent = '该恢复操作标识已用于其他请求，操作标识已重置，请确认后重试。';
+        return;
+      }
+
+      if (response.status === 410) {
+        clearRestoreIntent();
+        restoreStatus.textContent = data && data.code === 'revision_unavailable'
+          ? '该版本内容已被清除，无法恢复。'
+          : '该恢复的原结果已不可用（分享可能已被删除）。';
+        return;
+      }
+
+      if (response.status === 404) {
+        restoreStatus.textContent = '该版本不存在，恢复未执行。';
+        return;
+      }
+
+      if (response.status === 428) {
+        restoreStatus.textContent = '缺少版本前置条件，恢复未执行。请取消后重新打开恢复确认。';
+        return;
+      }
+
+      if (response.status === 503) {
+        restoreStatus.textContent = '发布维护中，暂时无法恢复，请稍后再试。';
+        return;
+      }
+
+      if (!response.ok || !data || !data.success) {
+        throw new Error((data && data.error) || '恢复失败');
+      }
+
+      clearRestoreIntent();
+      currentRevision = data.contentRevision;
+      currentEtag = data.contentEtag || currentEtag;
+      publishRevisionChanged();
+      hideRestore();
+
+      // Refresh the list first, then report: loadList owns the status
+      // line while it runs and would wipe a message set before it.
+      await loadList();
+
+      statusEl.textContent = data.unchanged
+        ? 'Revision ' + data.sourceRevision + ' 与当前内容相同，未产生新版本。'
+          + (data.replayed ? '（此前提交已生效）' : '')
+        : '已恢复：Revision ' + data.sourceRevision + ' 已写入为新的当前版本 Revision '
+          + data.contentRevision + '。'
+          + (data.replayed ? '（此前提交已生效）' : '');
+    } catch (error) {
+      // A network failure leaves the outcome unknown: the intent is
+      // kept, so confirming again replays the committed result instead
+      // of restoring twice. Nothing is ever retried automatically.
+      restoreStatus.textContent = '网络异常，恢复结果未知。可再次点击确认恢复：将使用同一操作标识，服务器会返回已提交的结果，不会重复恢复。';
+    } finally {
+      restoreBusy = false;
+      if (pendingRestore) {
+        restoreConfirmBtn.disabled = false;
+      }
+    }
+  }
+
   // --- Wiring ---------------------------------------------------------------
 
   retryBtn.addEventListener('click', loadList);
+
+  restoreConfirmBtn.addEventListener('click', confirmRestore);
+
+  restoreCancelBtn.addEventListener('click', hideRestore);
 
   prevBtn.addEventListener('click', function () {
     if (listPageIndex <= 0) return;
