@@ -1039,7 +1039,21 @@ class PostgresPageRepository {
   // Precondition failures (missing 428 / stale 412 family, judged here
   // against the locked row) record nothing. Replay resolution precedes
   // every judgment, exactly like restore.
-  async setPublishedState({ id, published, precondition = {}, operation = null, ip = null }) {
+  //
+  // `apiCredential` + `grantCheck` serve the Key-authenticated
+  // unpublish/republish (T15, issue #39), under the same discipline as
+  // the T13 content update and the T14 restore: after the operation
+  // lock, the transaction re-verifies the credential version (taking
+  // the Key row lock) and re-reads the caller's grant BEFORE any
+  // replay is honored or any precondition is judged, so a rotation,
+  // deletion or revocation that committed first refuses the in-flight
+  // transition and a revoked Key cannot replay its own earlier result
+  // (parent spec #24 §8). Dashboard callers pass neither and keep the
+  // T11 owner behavior unchanged. The state operation's record keeps
+  // `resultRevision: null` — its receipt carries no content payload —
+  // so a later Revision purge (T10) never scrubs it and the committed
+  // transition stays confirmable.
+  async setPublishedState({ id, published, precondition = {}, operation = null, ip = null, apiCredential = null, grantCheck = null }) {
     const targetPublished = published === true;
     const expected = precondition.expectedAccessRevision == null
       ? null
@@ -1048,7 +1062,37 @@ class PostgresPageRepository {
     return withPublishingWrite(this.pool, async (client) => {
       if (operation) {
         await acquireOperationLock(client, operation);
+      }
 
+      await recheckManagedCredential(client, apiCredential);
+
+      if (grantCheck) {
+        const grantResult = await client.query(
+          `
+            SELECT can_read, can_update, can_publish
+            FROM public.share_grants
+            WHERE api_key_id = $1 AND share_id = $2
+            LIMIT 1
+          `,
+          [grantCheck.keyId, id]
+        );
+        const permissions = grantPermissionsFromRow(grantResult.rows[0]);
+
+        if (!permissions[grantCheck.permission]) {
+          return {
+            outcome: 'executed',
+            result: {
+              status: 'grant_not_found',
+              published: null,
+              changed: false,
+              accessRevision: null,
+              contentRevision: null
+            }
+          };
+        }
+      }
+
+      if (operation) {
         const resolved = await resolveExistingOperation(client, operation);
 
         if (resolved) {

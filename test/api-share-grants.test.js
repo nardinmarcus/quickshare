@@ -214,17 +214,18 @@ test('a create-only managed Key is refused with 403 until the owner assigns the 
     ['share.create', 'connection.me', 'connection.capabilities', 'operation.status']
   );
 
-  // The publish scope is not assignable from the dashboard yet: its
-  // API behavior does not exist, so the switch is refused rather than
-  // stored as a no-op. (The update scope became assignable with T13,
-  // when its endpoint shipped; T13's own suite covers assigning it.)
-  const premature = await jsonRequest('/admin/apis/keys/t12-scope-key/scopes', {
+  // The publish scope became assignable with T15, when its API
+  // operations shipped (the update scope had become assignable with
+  // T13). Before their tickets, both were refused rather than stored
+  // as dead switches; T15's own suite exercises the publish
+  // operations end to end.
+  const publishScope = await jsonRequest('/admin/apis/keys/t12-scope-key/scopes', {
     method: 'PUT',
     headers: { Cookie: cookie, 'X-CSRF-Token': csrf },
     body: { scopes: ['share:create', 'share:publish'] }
   });
-  assert.equal(premature.status, 400);
-  assert.equal(premature.json.code, 'invalid_scopes');
+  assert.equal(publishScope.status, 200, publishScope.text);
+  assert.deepEqual(publishScope.json.apiKey.scopes, ['share:create', 'share:publish']);
 
   const unknown = await jsonRequest('/admin/apis/keys/t12-scope-key/scopes', {
     method: 'PUT',
@@ -304,12 +305,17 @@ test('admin grant makes exactly one Share readable: list, content and state with
   const unknownKey = await grantViaAdmin(cookie, csrf, 'no-such-key', 't12-main-share');
   assert.equal(unknownKey.status, 404);
 
-  // The publish permission has no API behavior yet; asking the
-  // dashboard to store a publish grant is refused rather than faked.
-  // (Edit grants became available with T13; its suite covers them.)
-  const deadSwitch = await grantViaAdmin(cookie, csrf, 't12-main-key', 't12-main-share', { publish: true });
-  assert.equal(deadSwitch.status, 400);
-  assert.equal(deadSwitch.json.code, 'grant_permission_not_available');
+  // The publish permission is grantable since T15, when the
+  // unpublish/republish endpoints shipped (edit grants became
+  // available with T13). It is granted here on a separate Key/Share
+  // pair so this test's read flow stays untouched — a grant replaces
+  // the permission set — and T15's own suite exercises the publish
+  // operations end to end. Publish alone implies neither read nor
+  // update.
+  await seedKey('t12-publish-grant-key');
+  const publishGrant = await grantViaAdmin(cookie, csrf, 't12-publish-grant-key', 't12-other-share', { publish: true });
+  assert.equal(publishGrant.status, 201, publishGrant.text);
+  assert.deepEqual(publishGrant.json.grant.permissions, { read: false, update: false, publish: true });
 
   const grants = await jsonRequest('/admin/apis/keys/t12-main-key/grants', {
     headers: { Cookie: cookie }

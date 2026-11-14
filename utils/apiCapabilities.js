@@ -16,8 +16,7 @@
 // a managed credential holding BOTH the read and update scopes, because
 // that is exactly the conjunction its route enforces — the per-Share
 // update grant is additionally required at call time and, being
-// per-resource data, is never part of this document. The publish scope
-// remains stored vocabulary for a later ticket, not a capability.
+// per-resource data, is never part of this document.
 //
 // Granted history reads and conditional restore arrived with T14 (issue
 // #38): the history list and single-Revision read join the read family
@@ -26,6 +25,14 @@
 // the dashboard restore transaction in the Key's own namespace. There
 // is NO history-purge operation for Keys anywhere in this document:
 // purge stays an owner dashboard action (T10).
+//
+// Granted publish-state transitions arrived with T15 (issue #39): the
+// unpublish and republish operations are advertised only to a managed
+// credential holding the publish scope — edit rights never imply them
+// — and each additionally requires a publish grant on the target at
+// call time. They are conditional writes against the STATE
+// representation: the mandatory If-Match is the access-family tag the
+// state read returns, never a content tag.
 
 const config = require('../config');
 const { getMarkdownThemeOptions } = require('./markdownThemeCatalog');
@@ -111,6 +118,23 @@ const SHARE_RESTORE_OPERATION = Object.freeze({
   id: 'share.restore',
   method: 'POST',
   path: '/api/v1/shares/:id/restore'
+});
+
+// Granted publish-state transitions (T15): two endpoints, one per
+// target state, each reusing the dashboard's publish-state transaction.
+// Both require the publish scope plus a publish grant on the target,
+// the concrete state (access-family) If-Match and an Idempotency-Key;
+// neither changes the password, the expiry, the content or the URL.
+const SHARE_UNPUBLISH_OPERATION = Object.freeze({
+  id: 'share.unpublish',
+  method: 'POST',
+  path: '/api/v1/shares/:id/unpublish'
+});
+
+const SHARE_REPUBLISH_OPERATION = Object.freeze({
+  id: 'share.republish',
+  method: 'POST',
+  path: '/api/v1/shares/:id/republish'
 });
 
 const CONNECTION_OPERATIONS = Object.freeze([
@@ -213,6 +237,19 @@ function buildCapabilities({ credentialType, scopes } = {}) {
     operations.push({ ...SHARE_RESTORE_OPERATION });
   }
 
+  // Granted publish-state transitions (T15): advertised only when the
+  // credential could actually attempt them — managed, holding the
+  // publish scope. Edit scopes do NOT unlock this advertisement, and
+  // the publish scope alone never advertises the read or update
+  // families above. The grant half of the conjunction is per-resource
+  // data and stays out of this document.
+  const canPublish = isManaged && hasScope('share:publish');
+
+  if (canPublish) {
+    operations.push({ ...SHARE_UNPUBLISH_OPERATION });
+    operations.push({ ...SHARE_REPUBLISH_OPERATION });
+  }
+
   const conditionalWrites = [];
 
   if (hasScope('share:create')) {
@@ -306,6 +343,48 @@ function buildCapabilities({ credentialType, scopes } = {}) {
     });
   }
 
+  if (canPublish) {
+    // Mandatory idempotent publish-state transitions (T15): the same
+    // operation protocol as the other management writes, against the
+    // STATE representation — the Idempotency-Key is required, and the
+    // If-Match names the access Revision the caller based its decision
+    // on (the publish family's tag is the access tag the state read
+    // returns, never a content tag). A same-identifier retry replays
+    // the committed result — including an "unchanged" result, which
+    // records the operation without advancing the access Revision —
+    // while the opposite transition or a different baseline under the
+    // same identifier is a 409. A real transition advances the access
+    // Revision, so every previously issued unlock cookie dies on both
+    // transitions.
+    const publishStateIdempotency = {
+      header: 'Idempotency-Key',
+      required: true,
+      replaySupported: true,
+      keyFormat: '16-128 characters of [A-Za-z0-9_-]; clients generate a UUID v4',
+      confirmationOperation: 'operation.status',
+      conflict: { status: 409, code: 'idempotency_conflict', retryable: false },
+      resultUnavailable: { status: 410, code: 'operation_result_unavailable', retryable: false },
+      invalidKey: { status: 400, code: 'invalid_idempotency_key', retryable: false }
+    };
+
+    for (const operation of [SHARE_UNPUBLISH_OPERATION, SHARE_REPUBLISH_OPERATION]) {
+      conditionalWrites.push({
+        operation: operation.id,
+        requiresIfMatch: true,
+        requiresIdempotencyKey: true,
+        idempotency: { ...publishStateIdempotency },
+        maintenanceRefusal: { status: 503, code: 'maintenance', retryable: true },
+        // The write re-verifies, inside its transaction, both the
+        // credential version it first authenticated with and the
+        // caller's current publish grant: a rotation, deletion or
+        // revocation that committed first refuses the write (401 /
+        // 404) instead of letting it land under an authorization that
+        // no longer exists.
+        credentialRecheck: { status: 401, code: 'api_key_credential_changed', retryable: false }
+      });
+    }
+  }
+
   const document = {
     protocolVersion: API_PROTOCOL_VERSION,
     credentialType: credentialType || null,
@@ -367,9 +446,11 @@ module.exports = {
   SHARE_CREATE_OPERATION,
   SHARE_HISTORY_READ_OPERATION,
   SHARE_LIST_OPERATION,
+  SHARE_REPUBLISH_OPERATION,
   SHARE_RESTORE_OPERATION,
   SHARE_REVISION_READ_OPERATION,
   SHARE_STATE_READ_OPERATION,
+  SHARE_UNPUBLISH_OPERATION,
   buildCapabilities,
   getMarkdownThemePresetIds,
   parseByteLimit

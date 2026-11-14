@@ -108,7 +108,8 @@ ID、体积限制与条件写规则。T05 阶段两类凭据均为 **create-only
 `share:create`、`share:read`、`share:update`、`share:publish`；T12 阶段
 可用并可分配的只有 `create` 与 `read`（`update`/`publish` 的操作面随
 各自后续票落地，后台不显示不存在的操作开关）。`update` 已随 T13 启用
-（见文末 T13 一节），`publish` 仍未启用。
+（见下 T13 一节），`publish` 已随 T15 启用（见文末 T15 一节）——至此
+四个范围全部可分配，集合外仍只有未知范围会被拒绝。
 
 - **迁移**：迁移 010 给已有托管 Key 规范化为 create-only；
   `auto_grant_new_share_edit`（「新创建 Share 自动给可编辑授权」）以字段
@@ -176,8 +177,9 @@ ID、体积限制与条件写规则。T05 阶段两类凭据均为 **create-only
 ## 授权更新与自动编辑授权（T13）
 
 T13 启用 `share:update` 范围与 grant 的 `update` 权限：后台「API 管理」
-页现在可分配 `share:update` 范围、可授予**编辑授权**（read+update），
-`share:publish` 仍不在可分配集合内（其操作面尚未落地）。
+页现在可分配 `share:update` 范围、可授予**编辑授权**（read+update）。
+`share:publish` 当时仍不在可分配集合内（其操作面尚未落地），已随
+T15 启用（见文末 T15 一节）。
 
 ### `PUT /api/v1/shares/:id/content`
 
@@ -315,3 +317,62 @@ T14 把 T07 的历史面以**独立的、按授权收口的 API 表面**开放�
   恢复演练固件含第三条已提交记录——托管 Key 命名空间内的
   `share.restore`（回执为恢复形状，不含正文），断言精确往返（见
   [备份与恢复手册](backup-restore.md)）。
+
+## 授权下架与重新发布（T15）
+
+T15 启用 `share:publish` 范围与 grant 的 `publish` 权限：后台「API
+管理」页现在可分配 `share:publish` 范围（「上下架已授权 Share」），
+授权面板新增**上下架授权**选项。publish 是独立权限：编辑授权（read+
+update）**不**自动包含它，自动编辑未来新建也永不授 publish；
+publish-only 授权**不**蕴含 read——它只能读取受限状态、做条件上下
+架，正文、历史与列表元信息都不因此扩权。
+
+### `POST /api/v1/shares/:id/unpublish` 与 `POST /api/v1/shares/:id/republish`
+
+改变指定 Share 的发布状态，与后台下架/重新发布共用同一个仓库事务
+（操作台账、访问版本 CAS、无操作判定、审计 `page.publish.update`），
+不另立规则：
+
+- **前提**：凭据须持有 `share:publish` 范围，且对目标 Share 持有
+  publish 授权。判定违例：缺范围 403 `insufficient_scope`——**编辑
+  凭据（read+update 范围与编辑授权）在此同样是 403**，编辑权不蕴
+  含上下架权；无 publish 授权/Share 不存在 404 `share_not_found`
+  （不可区分）。事务内部以 Key 行锁复核凭据版本与授权行（先提交的
+  轮换/撤销先行生效），复核在回放判定之前——已撤销或已轮换的凭据
+  不能凭旧请求标识回放自己的旧结果。
+- **请求体（严格、小体积）**：端点本身即目标状态，请求体必须为
+  空对象（或不带体）；任何字段以 400 `invalid_field` 指名拒绝——
+  不能借上下架顺带改密码、有效期或正文。
+- **强制条件头**：`If-Match` 必须是当前**状态**表示的强标签
+  `"access:<Share ID>:<Access Revision>"`——上下架比较的是状态表
+  示，内容标签不能代替访问标签（两族标签不可互换）；缺失 428
+  `access_precondition_required`；过期/弱标签/通配/列表/内容家族标
+  签/他 Share 标签 412 `access_conflict`，428/412 响应都附当前
+  `accessRevision` 与 `accessEtag` 供刷新重试。`Idempotency-Key`
+  必填（缺失/格式非法 400 `invalid_idempotency_key`）。同标识同输
+  入重放原始结果；同标识换动作（下架↔重新发布）或换基线 409
+  `idempotency_conflict`；维护暂停时（连同重放）503 `maintenance`。
+  写完后可经 `GET /api/v1/operations/:requestId` 在本 Key 命名空间
+  内确认结果。
+- **语义（与后台下架完全一致）**：真实切换翻转 `published` 并推进
+  `access_revision`——下架与重新发布都使先前签发的解锁 Cookie 立
+  即失效，重新发布不复活旧 Cookie；密码、有效期、内容 Revision、
+  历史、收藏与原 URL 一概不变，已过期仍按原有效期过期（重新发布
+  不延长）。已是目标状态时是无操作成功（`changed: false`，不推进
+  访问版本、不写审计），但照常记账、可以重放与确认。状态操作记
+  录的回执只含状态字段（published/changed/访问版本），不含任何正
+  文派生数据，因此事后清除某内容版本**不会**抹除它——已提交的上
+  下架结果在内容清除后仍可按请求标识确认。
+- **publish-only 的可见面**：状态 GET（`GET /api/v1/shares/:id/state`）
+  只返回 published、isProtected、expiresAt、accessRevision 四项，
+  对所有获授权调用者响应一致；列表中 publish-only 条目的标题/描
+  述/主题被中性化置空；正文、单版快照、历史列表全部 403/404，不
+  因 publish 扩权。
+- **能力**：`GET /api/v1/capabilities` 仅当当前凭据为托管 Key 且持
+  有 `share:publish` 范围时才列 `share.unpublish` / `share.republish`
+  并在 `conditionalWrites` 附其 `If-Match`（状态家族）+ 幂等键规
+  则；只持有编辑范围的凭据不列，legacy 凭据不列。
+- **备份覆盖**：授权摘要逐条覆盖 `can_publish`，状态操作记录与其
+  它操作记录一样随备份逐行往返；恢复演练固件含 publish 授权与托
+  管 Key 命名空间内的 `share.unpublish` 记录，并对 `can_publish`
+  做篡改判失败（见 [备份与恢复手册](backup-restore.md)）。
