@@ -25,6 +25,7 @@ const {
   parseExpectedAccessRevision,
   toAccessRevisionString
 } = require('./utils/shareAccess');
+const { projectPublicMetadata } = require('./utils/publicProjection');
 const {
   formatManagementDateTime,
   toManagementDateTimeLocal
@@ -1950,14 +1951,23 @@ app.get('/api/pages/:id', async (req, res) => {
       setPrivateNoStore(res);
     }
 
+    // Unified public projection (T02): a locked protected Share exposes
+    // only neutral metadata until the requester presents a valid access
+    // credential. The unlock judgment reuses T01's revision-bound cookie
+    // check, so a credential revoked by a policy change no longer unlocks
+    // the real title/description either.
+    const hasValidAccess = page.is_protected !== 1
+      || hasPageAccess(req, page.id, page.access_revision);
+    const projected = projectPublicMetadata(page, hasValidAccess);
+
     return res.json({
       success: true,
       page: {
         id: page.id,
         createdAt: page.created_at,
         codeType: page.code_type,
-        title: page.title,
-        description: page.description,
+        title: projected.title,
+        description: projected.description,
         isProtected: page.is_protected === 1,
         expiresAt: page.expires_at,
         accessRevision: toAccessRevisionString(page.access_revision),
