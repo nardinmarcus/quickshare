@@ -26,6 +26,11 @@ const {
   toAccessRevisionString
 } = require('./utils/shareAccess');
 const { projectPublicMetadata } = require('./utils/publicProjection');
+const {
+  formatContentEtag,
+  parseContentIfMatch,
+  toContentRevisionString
+} = require('./utils/contentRevision');
 const { isPublishingGateError } = require('./utils/publishing');
 const {
   API_CONTENT_TYPES,
@@ -782,7 +787,7 @@ function normalizeCodeType(content, requestedCodeType) {
   return VALID_CODE_TYPES.has(detectedType) ? detectedType : 'html';
 }
 
-async function createPageWithRetry(data, apiCredential) {
+async function createPageWithRetry(data, { apiCredential, revisionMeta } = {}) {
   let lastError = null;
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -792,7 +797,7 @@ async function createPageWithRetry(data, apiCredential) {
       await pageRepository.create({
         ...data,
         id
-      }, { apiCredential });
+      }, { apiCredential, revisionMeta });
 
       return id;
     } catch (error) {
@@ -864,6 +869,16 @@ async function createPageFromInput(input, { apiCredential } = {}) {
   const resolvedTheme = normalizedCodeType === 'markdown'
     ? resolveMarkdownThemeId(markdownTheme)
     : null;
+  // Every creation entry writes the Revision 1 baseline with the new
+  // Share (T06); the snapshot provenance records which entry and actor
+  // produced it.
+  const revisionMeta = apiCredential
+    ? {
+      source: 'api-create',
+      actorType: 'api_key',
+      actorId: apiCredential.keyId || null
+    }
+    : { source: 'web-create', actorType: 'owner', actorId: null };
   const id = await createPageWithRetry({
     htmlContent,
     passwordHash,
@@ -875,7 +890,7 @@ async function createPageFromInput(input, { apiCredential } = {}) {
     createdAt,
     expiresAt: expiry.value,
     markdownTheme: resolvedTheme
-  }, apiCredential);
+  }, { apiCredential, revisionMeta });
 
   return {
     error: null,
@@ -886,7 +901,9 @@ async function createPageFromInput(input, { apiCredential } = {}) {
     title: pageTitle,
     description: pageDescription,
     expiresAt: expiry.value,
-    markdownTheme: resolvedTheme
+    markdownTheme: resolvedTheme,
+    contentRevision: '1',
+    contentEtag: formatContentEtag(id, '1')
   };
 }
 
@@ -1572,6 +1589,12 @@ app.get('/admin/pages/:id', requireDashboardAdmin, async (req, res) => {
       isFavorite: sharedPage.is_favorite === true,
       password: visiblePagePassword(sharedPage),
       accessRevision: toAccessRevisionString(sharedPage.access_revision),
+      // Content Revision state (T06): the admin editor displays the
+      // current Revision and saves content against its strong ETag. A
+      // null revision means the Share predates the baseline backfill.
+      currentRevision: toContentRevisionString(sharedPage.current_revision),
+      contentEtag: formatContentEtag(sharedPage.id, sharedPage.current_revision),
+      published: sharedPage.published !== false,
       expiresAt: sharedPage.expires_at,
       markdownTheme: sharedPage.code_type === 'markdown'
         ? resolveMarkdownThemeId(sharedPage.markdown_theme)
@@ -1727,6 +1750,73 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
       });
     }
 
+    // Submitting content fields (title, description, body, or — for
+    // Markdown Shares — the theme Preset) is a content write and requires
+    // a concrete strong content If-Match (T06): a missing precondition is
+    // 428, and anything that is not exactly the current tag — weak,
+    // wildcard, list, bare/single-quoted token, access-family tag, tag
+    // for another Share, or a stale revision — is a 412 conflict whose
+    // response carries the current snapshot so the caller keeps its
+    // candidate and can compare. The latest revision is never filled in
+    // silently.
+    const touchesContent = title !== undefined
+      || description !== undefined
+      || htmlContent !== undefined
+      || (markdownTheme !== undefined && page.code_type === 'markdown');
+
+    // Write maintenance outranks precondition validation (T04): while
+    // publishing writes are paused, a save attempt on either family is a
+    // maintenance rejection, not a 428/412 — the gate refuses the write
+    // before any precondition could be honored.
+    const touchesWriteFamily = touchesContent
+      || isProtected !== undefined
+      || customPassword.provided
+      || expiresAt !== undefined;
+
+    if (touchesWriteFamily
+      && typeof pageRepository.getPublishingWritesPaused === 'function'
+      && await pageRepository.getPublishingWritesPaused()) {
+      return sendPublishingMaintenance(res);
+    }
+
+    let expectedContentRevision = null;
+
+    if (touchesContent) {
+      const parsedIfMatch = parseContentIfMatch(req.get('if-match'), page.id);
+      const currentContentRevision = toContentRevisionString(page.current_revision);
+
+      if (parsedIfMatch.status === 'missing') {
+        return res.status(428).json({
+          success: false,
+          error: '缺少内容版本前置条件 If-Match，请刷新后重试',
+          code: 'content_precondition_required',
+          contentRevision: currentContentRevision,
+          contentEtag: formatContentEtag(page.id, currentContentRevision)
+        });
+      }
+
+      if (parsedIfMatch.status !== 'ok'
+        || currentContentRevision === null
+        || parsedIfMatch.revision !== currentContentRevision) {
+        return res.status(412).json({
+          success: false,
+          error: '内容已被更新，你的稿件未被覆盖，请查看差异后决定如何处理',
+          code: 'content_conflict',
+          contentRevision: currentContentRevision,
+          contentEtag: formatContentEtag(page.id, currentContentRevision),
+          current: {
+            htmlContent: page.html_content,
+            codeType: page.code_type,
+            title: page.title,
+            description: page.description,
+            markdownTheme: page.markdown_theme
+          }
+        });
+      }
+
+      expectedContentRevision = parsedIfMatch.revision;
+    }
+
     // Submitting access-policy fields (protection, password, or expiry) is
     // an access-policy write and requires the caller's expectedAccessRevision
     // precondition (T01). Content-only saves do not need one and never
@@ -1792,12 +1882,15 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
       && updateOptions.expiresAt !== (page.expires_at ?? null);
     const accessPolicyChanged = updateOptions.isProtected !== undefined || expiryChanged;
 
-    const updateResult = await pageRepository.updatePageWithAccessPolicy(
+    const updateResult = await pageRepository.updatePageWithPreconditions(
       req.params.id,
       updateOptions,
       {
         expectedAccessRevision,
-        advanceAccessRevision: accessPolicyChanged
+        advanceAccessRevision: accessPolicyChanged,
+        expectedContentRevision,
+        contentMeta: { source: 'admin-edit', actorType: 'owner', actorId: null },
+        ip: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
       }
     );
 
@@ -1806,6 +1899,20 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
         success: false,
         error: '访问策略已被更新，请刷新后重试',
         accessRevision: updateResult.accessRevision
+      });
+    }
+
+    if (updateResult.status === 'content_conflict') {
+      // The candidate was NOT applied and the caller's draft is
+      // preserved; the response carries the current remote snapshot so
+      // the editor can show the difference and let the owner decide.
+      return res.status(412).json({
+        success: false,
+        error: '内容已被更新，你的稿件未被覆盖，请查看差异后决定如何处理',
+        code: 'content_conflict',
+        contentRevision: updateResult.contentRevision,
+        contentEtag: formatContentEtag(req.params.id, updateResult.contentRevision),
+        current: updateResult.current
       });
     }
 
@@ -1837,9 +1944,13 @@ app.put('/admin/pages/:id', requireDashboardAdmin, parseShareJson, requireDashbo
         password: visiblePagePassword(updatedPage),
         expiresAt: updatedPage.expires_at,
         accessRevision: toAccessRevisionString(updatedPage.access_revision),
+        currentRevision: toContentRevisionString(updatedPage.current_revision),
+        contentEtag: formatContentEtag(updatedPage.id, updatedPage.current_revision),
+        published: updatedPage.published !== false,
         markdownTheme: updatedPage.markdown_theme,
         createdAt: updatedPage.created_at
-      }
+      },
+      contentChanged: updateResult.contentChanged === true
     });
   } catch (error) {
     console.error('Update page failed:', error);
@@ -1940,6 +2051,8 @@ app.post('/admin/pages/:id/clone', requireDashboardAdmin, parseSmallForm, requir
       markdownTheme: page.code_type === 'markdown'
         ? resolveMarkdownThemeId(page.markdown_theme)
         : null
+    }, {
+      revisionMeta: { source: 'admin-clone', actorType: 'owner', actorId: null }
     });
 
     return res.redirect('/admin/pages/' + encodeURIComponent(newId));
@@ -1979,7 +2092,9 @@ app.post('/api/pages/create', privateNoStore, requireBrowserPublishAccess, parse
       title: result.title,
       description: result.description,
       expiresAt: result.expiresAt,
-      markdownTheme: result.markdownTheme
+      markdownTheme: result.markdownTheme,
+      contentRevision: result.contentRevision,
+      contentEtag: result.contentEtag
     });
   } catch (error) {
     console.error('Create page failed:', error);
@@ -2088,7 +2203,9 @@ app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (
       title: result.title,
       description: result.description,
       expiresAt: result.expiresAt,
-      markdownTheme: result.markdownTheme
+      markdownTheme: result.markdownTheme,
+      contentRevision: result.contentRevision,
+      contentEtag: result.contentEtag
     });
   } catch (error) {
     console.error('Share API failed:', error);
@@ -2161,6 +2278,18 @@ app.get('/api/pages/:id', async (req, res) => {
       || hasPageAccess(req, page.id, page.access_revision);
     const projected = projectPublicMetadata(page, hasValidAccess);
 
+    // The content GET carries the strong content ETag (T06, parent spec
+    // §4), but only for a requester who may see the real metadata: a
+    // locked Share's neutral projection must not leak even the revision
+    // counter, so neither the header nor the field is emitted for it.
+    const contentRevision = hasValidAccess
+      ? toContentRevisionString(page.current_revision)
+      : null;
+
+    if (contentRevision !== null) {
+      res.set('ETag', formatContentEtag(page.id, contentRevision));
+    }
+
     return res.json({
       success: true,
       page: {
@@ -2172,6 +2301,7 @@ app.get('/api/pages/:id', async (req, res) => {
         isProtected: page.is_protected === 1,
         expiresAt: page.expires_at,
         accessRevision: toAccessRevisionString(page.access_revision),
+        ...(contentRevision !== null ? { contentRevision } : {}),
         markdownTheme: page.markdown_theme
       }
     });

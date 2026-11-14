@@ -4,7 +4,18 @@ const {
   managementDateRange,
   managementRecentStart
 } = require('../utils/management-time');
-const { toAccessRevisionString } = require('../utils/shareAccess');
+const {
+  accessRevisionMatches,
+  nextAccessRevision,
+  toAccessRevisionString
+} = require('../utils/shareAccess');
+const {
+  computeSnapshotHash,
+  contentRevisionMatches,
+  contentSnapshotsEqual,
+  nextContentRevision,
+  toContentRevisionString
+} = require('../utils/contentRevision');
 const {
   ApiKeyCredentialChangedError,
   credentialVersionMatches
@@ -61,6 +72,77 @@ function buildPageUpdateFields(options, startIndex = 1) {
   }
 
   return { fields, params, nextParamIndex: paramIndex };
+}
+
+// The content fields that make up a Revision snapshot (T06), read from a
+// pages row. Everything else on the row — protection, expiry, favorite,
+// view count — is access/runtime state and never enters content history.
+function rowContentFields(row) {
+  return {
+    htmlContent: row.html_content,
+    codeType: row.code_type || 'html',
+    title: row.title ?? null,
+    description: row.description ?? null,
+    markdownTheme: row.markdown_theme ?? null
+  };
+}
+
+// Writes one immutable snapshot row for the page's given field set. The
+// capture time is supplied by the caller: creation time for a create,
+// edit time for an edit, and the backfill run's own time for a baseline —
+// never silently the Share's original creation time when the snapshot is
+// taken later.
+async function insertContentSnapshotRow(client, pageRow, revision, meta = {}, capturedAt = Date.now()) {
+  const fields = rowContentFields(pageRow);
+  const revisionString = toContentRevisionString(revision);
+
+  await client.query(
+    `
+      INSERT INTO share_revisions (
+        share_id, revision, html_content, code_type, title, description,
+        markdown_theme, snapshot_hash, source, actor_type, actor_id,
+        restored_from_revision, created_at
+      )
+      VALUES ($1, $2::bigint, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::bigint, $13)
+    `,
+    [
+      pageRow.id,
+      revisionString,
+      fields.htmlContent,
+      fields.codeType,
+      fields.title,
+      fields.description,
+      fields.markdownTheme,
+      computeSnapshotHash(pageRow.id, revisionString, fields),
+      meta.source || 'admin-edit',
+      meta.actorType || 'owner',
+      meta.actorId ?? null,
+      meta.restoredFromRevision ?? null,
+      capturedAt
+    ]
+  );
+}
+
+// Establishes the Revision 1 baseline for a Share that predates the
+// revision protocol (current_revision IS NULL), capturing its current
+// materialized fields exactly as they are. Runs inside the caller's
+// transaction; the row must already be locked by the caller. Returns true
+// when a baseline was written.
+async function ensureContentBaseline(client, pageRow, capturedAt = Date.now()) {
+  if (toContentRevisionString(pageRow.current_revision) !== null) {
+    return false;
+  }
+
+  await insertContentSnapshotRow(client, pageRow, '1', {
+    source: 'baseline',
+    actorType: 'operator'
+  }, capturedAt);
+  await client.query(
+    'UPDATE pages SET current_revision = 1 WHERE id = $1',
+    [pageRow.id]
+  );
+  pageRow.current_revision = '1';
+  return true;
 }
 
 function buildAdminPageFilter(options = {}) {
@@ -239,9 +321,10 @@ class PostgresPageRepository {
         `
           INSERT INTO pages (
             id, html_content, created_at, password_hash, encrypted_password, is_protected,
-            code_type, title, description, expires_at, markdown_theme, access_revision
+            code_type, title, description, expires_at, markdown_theme, access_revision,
+            current_revision, published
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, 1, TRUE)
         `,
         [
           page.id,
@@ -257,6 +340,18 @@ class PostgresPageRepository {
           page.markdownTheme || null
         ]
       );
+
+      // Content Revision baseline (T06): the Revision 1 snapshot is part
+      // of the same gated transaction as the Share itself, so a Share can
+      // never exist without its baseline once this code writes it.
+      await insertContentSnapshotRow(client, {
+        id: page.id,
+        html_content: page.htmlContent,
+        code_type: page.codeType || 'html',
+        title: page.title || null,
+        description: page.description || null,
+        markdown_theme: page.markdownTheme || null
+      }, '1', options.revisionMeta || { source: 'web-create', actorType: 'owner' }, page.createdAt);
     });
 
     return { id: page.id };
@@ -509,37 +604,191 @@ class PostgresPageRepository {
     });
   }
 
-  // Admin save that may combine content fields with access-policy fields
-  // (T01). Same compare-and-swap discipline as the protection write.
-  async updatePageWithAccessPolicy(id, options, precondition = {}) {
-    const { fields, params, nextParamIndex } = buildPageUpdateFields(options);
-    const expected = precondition.expectedAccessRevision == null
+  // The one admin content/access write path (T01 + T06). The page row is
+  // locked inside the publishing-gate transaction (the spec's lock order:
+  // gate first, then the Share row), and two independent precondition
+  // families are enforced in that same step; a combined save commits only
+  // when both pass:
+  //   - access family (T01): expectedAccessRevision compare-and-swap;
+  //     advanceAccessRevision moves it when the policy actually changed.
+  //   - content family (T06): expectedContentRevision compare-and-swap
+  //     against current_revision. When the merged candidate snapshot
+  //     differs byte-exactly from the current one, the materialized
+  //     projection, the new current_revision, an immutable snapshot row
+  //     and its audit record commit in this same transaction — any
+  //     failure (including a COMMIT-time failure) rolls all of them
+  //     back. An unchanged candidate writes no snapshot and reports
+  //     contentChanged: false.
+  // Callers that pass no content precondition (internal legacy writes)
+  // still cannot bypass Revision: their content changes snapshot too.
+  async updatePageWithPreconditions(id, options, precondition = {}) {
+    const expectedAccess = precondition.expectedAccessRevision == null
       ? null
       : toAccessRevisionString(precondition.expectedAccessRevision);
-
-    fields.push(`access_revision = CASE WHEN $${nextParamIndex} THEN access_revision + 1 ELSE access_revision END`);
-    params.push(Boolean(precondition.advanceAccessRevision));
-    params.push(id);
-    params.push(expected);
+    const expectedContent = precondition.expectedContentRevision == null
+      ? null
+      : toContentRevisionString(precondition.expectedContentRevision);
 
     return withPublishingWrite(this.pool, async (client) => {
-      const result = await client.query(
-        `
-          UPDATE pages
-          SET ${fields.join(', ')}
-          WHERE id = $${nextParamIndex + 1}
-            AND ($${nextParamIndex + 2}::bigint IS NULL OR access_revision = $${nextParamIndex + 2}::bigint)
-          RETURNING access_revision::text AS access_revision
-        `,
-        params
+      const selectResult = await client.query(
+        'SELECT * FROM pages WHERE id = $1 FOR UPDATE',
+        [id]
       );
+      const row = selectResult.rows[0];
 
-      if (result.rowCount > 0) {
-        return { status: 'updated', accessRevision: result.rows[0].access_revision };
+      if (!row) {
+        return {
+          status: 'not_found',
+          accessRevision: null,
+          contentRevision: null,
+          contentChanged: false,
+          current: null
+        };
       }
 
-      return this.accessPreconditionMiss(id, client);
+      await ensureContentBaseline(client, row);
+
+      const currentAccessRevision = toAccessRevisionString(row.access_revision);
+
+      if (expectedAccess !== null && !accessRevisionMatches(currentAccessRevision, expectedAccess)) {
+        return {
+          status: 'conflict',
+          accessRevision: currentAccessRevision,
+          contentRevision: toContentRevisionString(row.current_revision),
+          contentChanged: false,
+          current: null
+        };
+      }
+
+      const currentFields = rowContentFields(row);
+      const candidate = {
+        htmlContent: options.htmlContent !== undefined ? options.htmlContent : currentFields.htmlContent,
+        codeType: currentFields.codeType,
+        title: options.title !== undefined ? (options.title || null) : currentFields.title,
+        description: options.description !== undefined ? (options.description || null) : currentFields.description,
+        markdownTheme: options.markdownTheme !== undefined ? (options.markdownTheme || null) : currentFields.markdownTheme
+      };
+      const currentContentRevision = toContentRevisionString(row.current_revision);
+
+      if (expectedContent !== null && !contentRevisionMatches(currentContentRevision, expectedContent)) {
+        return {
+          status: 'content_conflict',
+          accessRevision: currentAccessRevision,
+          contentRevision: currentContentRevision,
+          contentChanged: false,
+          current: { ...currentFields }
+        };
+      }
+
+      const contentChanged = !contentSnapshotsEqual(candidate, currentFields);
+      const sets = [];
+      const params = [];
+      let paramIndex = 1;
+
+      if (options.expiresAt !== undefined) {
+        sets.push(`expires_at = $${paramIndex}`);
+        params.push(options.expiresAt || null);
+        paramIndex += 1;
+      }
+
+      if (options.isProtected !== undefined) {
+        sets.push(`is_protected = $${paramIndex}`);
+        params.push(options.isProtected ? 1 : 0);
+        paramIndex += 1;
+        sets.push(`password_hash = $${paramIndex}`);
+        params.push(options.passwordHash || null);
+        paramIndex += 1;
+        sets.push(`encrypted_password = $${paramIndex}`);
+        params.push(options.encryptedPassword || null);
+        paramIndex += 1;
+      }
+
+      let nextRevision = currentContentRevision;
+
+      if (contentChanged) {
+        nextRevision = nextContentRevision(currentContentRevision);
+        sets.push(`html_content = $${paramIndex}`);
+        params.push(candidate.htmlContent);
+        paramIndex += 1;
+        sets.push(`title = $${paramIndex}`);
+        params.push(candidate.title);
+        paramIndex += 1;
+        sets.push(`description = $${paramIndex}`);
+        params.push(candidate.description);
+        paramIndex += 1;
+        sets.push(`markdown_theme = $${paramIndex}`);
+        params.push(candidate.markdownTheme);
+        paramIndex += 1;
+        sets.push(`current_revision = $${paramIndex}::bigint`);
+        params.push(nextRevision);
+        paramIndex += 1;
+      }
+
+      if (precondition.advanceAccessRevision) {
+        sets.push('access_revision = access_revision + 1');
+      }
+
+      if (sets.length > 0) {
+        params.push(id);
+        await client.query(
+          `UPDATE pages SET ${sets.join(', ')} WHERE id = $${paramIndex}`,
+          params
+        );
+      }
+
+      if (contentChanged) {
+        const updatedRow = {
+          ...row,
+          html_content: candidate.htmlContent,
+          title: candidate.title,
+          description: candidate.description,
+          markdown_theme: candidate.markdownTheme
+        };
+        await insertContentSnapshotRow(
+          client,
+          updatedRow,
+          nextRevision,
+          precondition.contentMeta || {}
+        );
+        await client.query(
+          'INSERT INTO audit_logs (action, page_id, details, ip, created_at) VALUES ($1, $2, $3, $4, $5)',
+          [
+            'page.content.update',
+            id,
+            JSON.stringify({
+              fromRevision: currentContentRevision,
+              toRevision: nextRevision,
+              source: (precondition.contentMeta || {}).source || 'admin-edit'
+            }),
+            precondition.ip || null,
+            Date.now()
+          ]
+        );
+      }
+
+      return {
+        status: 'updated',
+        accessRevision: precondition.advanceAccessRevision
+          ? nextAccessRevision(currentAccessRevision)
+          : currentAccessRevision,
+        contentRevision: nextRevision,
+        contentChanged,
+        current: null
+      };
     });
+  }
+
+  // Admin save that may combine content fields with access-policy fields
+  // (T01). Kept for the pre-T06 call shape; it delegates to the unified
+  // path so its content changes also produce Revisions (no bypass).
+  async updatePageWithAccessPolicy(id, options, precondition = {}) {
+    const result = await this.updatePageWithPreconditions(id, options, {
+      ...precondition,
+      expectedContentRevision: null,
+      contentMeta: { source: 'admin-edit', actorType: 'owner' }
+    });
+
+    return { status: result.status, accessRevision: result.accessRevision };
   }
 
   // Explicit admin revocation entry (T01): advances the access revision
@@ -625,20 +874,88 @@ class PostgresPageRepository {
     };
   }
 
+  // Legacy unconditional write entry. It delegates to the unified path
+  // (T06) so even a caller without preconditions cannot change content
+  // without producing a Revision snapshot.
   async updatePage(id, options) {
-    const { fields, params, nextParamIndex } = buildPageUpdateFields(options);
+    const { fields } = buildPageUpdateFields(options);
 
     if (fields.length === 0) {
       return true;
     }
 
-    params.push(id);
-    const result = await withPublishingWrite(this.pool, client => client.query(
-      `UPDATE pages SET ${fields.join(', ')} WHERE id = $${nextParamIndex}`,
-      params
-    ));
+    const result = await this.updatePageWithPreconditions(id, options, {
+      contentMeta: { source: 'legacy-update', actorType: 'owner' }
+    });
+    return result.status === 'updated';
+  }
 
-    return result.rowCount > 0;
+  async getContentSnapshot(id, revision) {
+    const revisionString = toContentRevisionString(revision);
+
+    if (revisionString === null) {
+      return null;
+    }
+
+    const result = await this.pool.query(
+      `
+        SELECT share_id, revision::text AS revision, html_content, code_type,
+               title, description, markdown_theme, snapshot_hash, source,
+               actor_type, actor_id, restored_from_revision::text AS restored_from_revision,
+               created_at
+        FROM share_revisions
+        WHERE share_id = $1 AND revision = $2::bigint
+        LIMIT 1
+      `,
+      [id, revisionString]
+    );
+
+    return result.rows[0] || null;
+  }
+
+  async listContentSnapshots(id) {
+    const result = await this.pool.query(
+      `
+        SELECT share_id, revision::text AS revision, html_content, code_type,
+               title, description, markdown_theme, snapshot_hash, source,
+               actor_type, actor_id, restored_from_revision::text AS restored_from_revision,
+               created_at
+        FROM share_revisions
+        WHERE share_id = $1
+        ORDER BY revision ASC
+      `,
+      [id]
+    );
+
+    return result.rows;
+  }
+
+  // The baseline DML of the parent spec's rollout (issue #24 §11 step 4)
+  // as a repository operation: every Share without a baseline gains
+  // Revision 1 capturing its current fields, with the capture time of
+  // THIS run. A second run skips everything. The operator script
+  // (scripts/backfill-revision-baseline.js) wraps this with the required
+  // paused-and-drained window enforcement; this method only performs the
+  // DML inside one gated transaction.
+  async backfillRevisionBaselines({ now = Date.now() } = {}) {
+    return withPublishingWrite(this.pool, async (client) => {
+      const result = await client.query(
+        'SELECT * FROM pages WHERE current_revision IS NULL ORDER BY id FOR UPDATE'
+      );
+      let baselined = 0;
+
+      for (const row of result.rows) {
+        if (await ensureContentBaseline(client, row, now)) {
+          baselined += 1;
+        }
+      }
+
+      const countResult = await client.query(
+        'SELECT COUNT(*)::int AS count FROM pages WHERE current_revision IS NOT NULL'
+      );
+
+      return { baselined, skipped: countResult.rows[0].count };
+    });
   }
 
   async deletePage(id) {

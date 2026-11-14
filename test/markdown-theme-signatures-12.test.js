@@ -201,7 +201,7 @@ test('GitHub and Apple round-trip unchanged through preview, browser/API writes,
     });
     const adminUpdate = await jsonRequest(`/admin/pages/${adminSource.body.urlId}`, 'PUT', {
       markdownTheme: preset.id
-    });
+    }, { 'If-Match': `"content:${adminSource.body.urlId}:1"` });
     const adminStored = await app.locals.pageRepository.getById(adminSource.body.urlId);
     assert.equal(adminUpdate.status, 200);
     assert.equal(adminUpdate.body.page.markdownTheme, preset.id);

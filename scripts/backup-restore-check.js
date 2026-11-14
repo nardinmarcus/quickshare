@@ -20,6 +20,12 @@
 //     exactly (fixture Key is seeded with a non-default version) and a
 //     restored-only tamper of it is rejected by verify (explicitly
 //     skipped on a legacy 001-003 schema, where the column does not exist)
+//   - content Revision state (migration 007, T06) round-trips: the pages
+//     current_revision pointers (including an exact 64-bit value) and the
+//     immutable share_revisions snapshots (a two-Revision history on one
+//     fixture), and restored-only tampering with either a snapshot row or
+//     a current_revision pointer is rejected by verify (explicitly
+//     skipped on a legacy 001-003 schema, where neither exists)
 //
 // No production data is involved; both fixture databases are dropped at the
 // end unless --keep is passed.
@@ -37,12 +43,14 @@ const path = require('path');
 const { createPostgresPool } = require('../models/postgres-config');
 const { runMigrations } = require('../models/postgres-migrations');
 const { hashSecret, encryptSecret } = require('../utils/security');
+const { computeSnapshotHash } = require('../utils/contentRevision');
 const { parseArgs, runCommand } = require('./backup-lib');
 
 const SOURCE_DB = 'qs_backup_src_test';
 const RESTORE_DB = 'qs_backup_restore_test';
 const FIXTURE_PASSWORD = 'drill-fixture-password';
 const BIG_ACCESS_REVISION = '9007199254740993';
+const BIG_CONTENT_REVISION = '9007199254740993';
 const BASE_TIME = 1760000000000;
 
 const log = (message) => process.stderr.write(`[backup-check] ${message}\n`);
@@ -71,16 +79,19 @@ async function seedFixtures(pool, { hasAccessRevision }) {
   const passwordHash = await hashSecret(FIXTURE_PASSWORD);
   const encryptedPassword = encryptSecret(FIXTURE_PASSWORD);
   const revisionColumn = hasAccessRevision ? ', access_revision' : '';
+  // The full schema flag also covers migration 007: pages gain their
+  // current_revision pointer and published flag here.
+  const contentColumns = hasAccessRevision ? ', current_revision, published' : '';
 
   const insertPage = `
     INSERT INTO public.pages (
       id, html_content, created_at, password_hash, encrypted_password,
       is_protected, code_type, title, description, expires_at,
-      markdown_theme, view_count, is_favorite${revisionColumn}
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13${hasAccessRevision ? ', $14' : ''})
+      markdown_theme, view_count, is_favorite${revisionColumn}${contentColumns}
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13${hasAccessRevision ? ', $14, $15, $16' : ''})
   `;
 
-  const pageParams = (row, revision) => {
+  const pageParams = (row, revision, currentRevision) => {
     const params = [
       row.id, row.htmlContent, row.createdAt, row.passwordHash || null,
       row.encryptedPassword || null, row.isProtected || 0, row.codeType || 'html',
@@ -90,6 +101,8 @@ async function seedFixtures(pool, { hasAccessRevision }) {
 
     if (hasAccessRevision) {
       params.push(revision);
+      params.push(currentRevision || null);
+      params.push(true);
     }
 
     return params;
@@ -105,7 +118,7 @@ async function seedFixtures(pool, { hasAccessRevision }) {
     markdownTheme: 'github',
     viewCount: 42,
     isFavorite: true
-  }, '1'));
+  }, '1', '1'));
 
   await pool.query(insertPage, pageParams({
     id: 'drill-protected',
@@ -117,7 +130,7 @@ async function seedFixtures(pool, { hasAccessRevision }) {
     title: 'Drill protected',
     description: 'Protected drill fixture',
     expiresAt: BASE_TIME + 86400000
-  }, BIG_ACCESS_REVISION));
+  }, BIG_ACCESS_REVISION, BIG_CONTENT_REVISION));
 
   await pool.query(insertPage, pageParams({
     id: 'drill-revoked',
@@ -127,7 +140,7 @@ async function seedFixtures(pool, { hasAccessRevision }) {
     encryptedPassword,
     isProtected: 1,
     title: 'Drill revoked'
-  }, '7'));
+  }, '7', '2'));
 
   await pool.query(insertPage, pageParams({
     id: 'drill-expired',
@@ -135,7 +148,64 @@ async function seedFixtures(pool, { hasAccessRevision }) {
     createdAt: BASE_TIME + 4,
     title: 'Drill expired',
     expiresAt: BASE_TIME - 1000
-  }, '1'));
+  }, '1', '1'));
+
+  if (hasAccessRevision) {
+    // Full schema includes migration 007: every fixture Share gets its
+    // immutable snapshots — drill-revoked carries a two-Revision history
+    // and drill-protected points at an exact 64-bit current_revision.
+    // Hashes are computed with the real snapshot-hash function so the
+    // restored data must also pass verify's semantic integrity checks.
+    const snapshots = [
+      {
+        shareId: 'drill-public', revision: '1',
+        htmlContent: '# Drill public body', codeType: 'markdown',
+        title: 'Drill public', description: 'Public drill fixture', markdownTheme: 'github',
+        source: 'baseline', createdAt: BASE_TIME + 1000
+      },
+      {
+        shareId: 'drill-protected', revision: BIG_CONTENT_REVISION,
+        htmlContent: '<p>Drill protected body</p>', codeType: 'html',
+        title: 'Drill protected', description: 'Protected drill fixture', markdownTheme: null,
+        source: 'admin-edit', createdAt: BASE_TIME + 2000
+      },
+      {
+        shareId: 'drill-revoked', revision: '1',
+        htmlContent: '<p>Drill revoked body v1</p>', codeType: 'html',
+        title: 'Drill revoked', description: null, markdownTheme: null,
+        source: 'baseline', createdAt: BASE_TIME + 3000
+      },
+      {
+        shareId: 'drill-revoked', revision: '2',
+        htmlContent: '<p>Drill revoked body</p>', codeType: 'html',
+        title: 'Drill revoked', description: null, markdownTheme: null,
+        source: 'admin-edit', createdAt: BASE_TIME + 4000
+      },
+      {
+        shareId: 'drill-expired', revision: '1',
+        htmlContent: '<p>Drill expired body</p>', codeType: 'html',
+        title: 'Drill expired', description: null, markdownTheme: null,
+        source: 'baseline', createdAt: BASE_TIME + 5000
+      }
+    ];
+
+    for (const snapshot of snapshots) {
+      const snapshotHash = computeSnapshotHash(snapshot.shareId, snapshot.revision, snapshot);
+
+      await pool.query(
+        `INSERT INTO public.share_revisions (
+           share_id, revision, html_content, code_type, title, description,
+           markdown_theme, snapshot_hash, source, actor_type, actor_id,
+           restored_from_revision, created_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'owner', NULL, NULL, $10)`,
+        [
+          snapshot.shareId, snapshot.revision, snapshot.htmlContent, snapshot.codeType,
+          snapshot.title, snapshot.description, snapshot.markdownTheme, snapshotHash,
+          snapshot.source, snapshot.createdAt
+        ]
+      );
+    }
+  }
 
   if (hasAccessRevision) {
     // Full schema includes migration 006: seed a non-default credential
@@ -209,6 +279,8 @@ async function main() {
     log('SKIP publishing_writes_paused assertions: schema 005 absent (legacy 001-003 fixture)');
     skipped.push('credential_version assertions skipped: schema 006 absent (legacy 001-003 fixture)');
     log('SKIP credential_version assertions: schema 006 absent (legacy 001-003 fixture)');
+    skipped.push('content Revision assertions skipped: schema 007 absent (legacy 001-003 fixture)');
+    log('SKIP content Revision assertions: schema 007 absent (legacy 001-003 fixture)');
   }
 
   if (!process.env.SESSION_SECRET) {
@@ -403,6 +475,62 @@ async function main() {
         && versionTamperReport !== null
         && versionTamperReport.ok === false
         && versionTamperReport.failures.some(failure => failure.includes('credential_version')));
+    }
+
+    if (hasAccessRevision) {
+      const currentResult = await restorePool.query(
+        "SELECT current_revision::text AS revision FROM public.pages WHERE id = 'drill-protected'"
+      );
+      check(
+        `non-default current_revision ${BIG_CONTENT_REVISION} restored exactly`,
+        currentResult.rows[0].revision === BIG_CONTENT_REVISION
+      );
+      check('verify report accounts for the 5 Revision snapshots on 4 Shares',
+        report.contentRevisions !== undefined
+        && report.contentRevisions.tracked === true
+        && report.contentRevisions.snapshots === 5
+        && report.contentRevisions.sharesWithBaseline === 4);
+
+      const snapshotCount = await restorePool.query(
+        'SELECT COUNT(*)::int AS count FROM public.share_revisions'
+      );
+      check('restored share_revisions carries all 5 seeded snapshots', snapshotCount.rows[0].count === 5);
+
+      await restorePool.query(
+        "UPDATE public.share_revisions SET title = 'tampered snapshot title' WHERE share_id = 'drill-public' AND revision = 1"
+      );
+
+      const snapshotTamperResult = await runScript('verify-backup.js', verifyArgs, childEnv);
+      let snapshotTamperReport = null;
+
+      try {
+        snapshotTamperReport = parseStdoutJson(snapshotTamperResult, 'verify-backup.js (snapshot tampered)');
+      } catch (error) {
+        // handled by the check below
+      }
+
+      check('verify rejects a restored-only Revision snapshot tamper', snapshotTamperResult.code !== 0
+        && snapshotTamperReport !== null
+        && snapshotTamperReport.ok === false
+        && snapshotTamperReport.failures.some(failure => failure.includes('share_revisions')));
+
+      await restorePool.query(
+        "UPDATE public.pages SET current_revision = 424242 WHERE id = 'drill-public'"
+      );
+
+      const pointerTamperResult = await runScript('verify-backup.js', verifyArgs, childEnv);
+      let pointerTamperReport = null;
+
+      try {
+        pointerTamperReport = parseStdoutJson(pointerTamperResult, 'verify-backup.js (pointer tampered)');
+      } catch (error) {
+        // handled by the check below
+      }
+
+      check('verify rejects a restored-only current_revision pointer tamper', pointerTamperResult.code !== 0
+        && pointerTamperReport !== null
+        && pointerTamperReport.ok === false
+        && pointerTamperReport.failures.some(failure => failure.includes('current_revision')));
     }
 
     const summary = {

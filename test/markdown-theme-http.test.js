@@ -178,7 +178,7 @@ test('theme-only admin updates normalize the ID and preserve unrelated Share fie
 
   const response = await jsonRequest('/admin/pages/theme-only-update', 'PUT', {
     markdownTheme: '../../unsafe.css'
-  });
+  }, { 'If-Match': '"content:theme-only-update:1"' });
   const stored = await app.locals.pageRepository.getById('theme-only-update');
 
   assert.equal(response.status, 200);
@@ -203,7 +203,7 @@ test('admin theme writes normalize an empty value to ByteDance', async () => {
 
   const response = await jsonRequest('/admin/pages/empty-theme-update', 'PUT', {
     markdownTheme: ''
-  });
+  }, { 'If-Match': '"content:empty-theme-update:1"' });
   const stored = await app.locals.pageRepository.getById('empty-theme-update');
 
   assert.equal(response.status, 200);

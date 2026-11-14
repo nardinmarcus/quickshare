@@ -289,7 +289,7 @@ test('creator, API, metadata, admin, and public flows round-trip both stable IDs
 
     const updated = await jsonRequest(`/admin/pages/${created.body.urlId}`, 'PUT', {
       markdownTheme: id === 'google' ? 'airbnb' : 'google'
-    });
+    }, { 'If-Match': `"content:${created.body.urlId}:1"` });
     assert.equal(updated.status, 200);
     assert.equal(updated.body.page.markdownTheme, id === 'google' ? 'airbnb' : 'google');
 

@@ -13,6 +13,14 @@ const {
   isPublishingPausedError
 } = require('../utils/publishing');
 const {
+  computeSnapshotHash,
+  contentRevisionMatches,
+  contentSnapshotsEqual,
+  nextContentRevision,
+  snapshotPayloadOf,
+  toContentRevisionString
+} = require('../utils/contentRevision');
+const {
   ApiKeyCredentialChangedError,
   credentialVersionMatches,
   nextCredentialVersion,
@@ -60,32 +68,25 @@ function filterAdminPages(pages, options = {}) {
   return results;
 }
 
-function applyPageUpdate(page, options) {
-  if (options.title !== undefined) {
-    page.title = options.title || null;
-  }
-  if (options.description !== undefined) {
-    page.description = options.description || null;
-  }
-  if (options.htmlContent !== undefined) {
-    page.html_content = options.htmlContent;
-  }
-  if (options.expiresAt !== undefined) {
-    page.expires_at = options.expiresAt || null;
-  }
-  if (options.isProtected !== undefined) {
-    page.is_protected = options.isProtected ? 1 : 0;
-    page.password_hash = options.passwordHash || null;
-    page.encrypted_password = options.encryptedPassword || null;
-  }
-  if (options.markdownTheme !== undefined) {
-    page.markdown_theme = options.markdownTheme || null;
-  }
+// The content fields that make up a Revision snapshot (T06). Everything
+// else on a page row — protection, expiry, favorite, view count — is
+// access/runtime state and never enters content history.
+function currentContentFields(page) {
+  return {
+    htmlContent: page.html_content,
+    codeType: page.code_type || 'html',
+    title: page.title ?? null,
+    description: page.description ?? null,
+    markdownTheme: page.markdown_theme ?? null
+  };
 }
 
 class MemoryPageRepository {
   constructor() {
     this.pages = new Map();
+    // Immutable content snapshots (T06): share id -> Map of revision
+    // decimal string -> snapshot record. Mirrors public.share_revisions.
+    this.revisions = new Map();
     this.auditLogs = [];
     this.auditIdCounter = 0;
     this.apiKeys = new Map();
@@ -93,6 +94,92 @@ class MemoryPageRepository {
     // Same observable maintenance-gate protocol as the Postgres advisory
     // lock (T04): shared holds for writes, exclusive drain for pausing.
     this.publishingGate = new MemoryPublishingGate();
+  }
+
+  // Writes one immutable snapshot for the page's current materialized
+  // fields. The capture time is supplied by the caller: creation time for
+  // a create, edit time for an edit, and the backfill run's own time for
+  // a baseline — never silently the Share's original creation time when
+  // the snapshot is taken later.
+  writeContentSnapshot(page, revision, meta = {}, capturedAt = Date.now()) {
+    const revisionString = toContentRevisionString(revision);
+    const fields = currentContentFields(page);
+    const record = {
+      share_id: page.id,
+      revision: revisionString,
+      html_content: fields.htmlContent,
+      code_type: fields.codeType,
+      title: fields.title,
+      description: fields.description,
+      markdown_theme: fields.markdownTheme,
+      snapshot_hash: computeSnapshotHash(page.id, revisionString, fields),
+      source: meta.source || 'admin-edit',
+      actor_type: meta.actorType || 'owner',
+      actor_id: meta.actorId ?? null,
+      restored_from_revision: meta.restoredFromRevision ?? null,
+      created_at: capturedAt
+    };
+
+    if (!this.revisions.has(page.id)) {
+      this.revisions.set(page.id, new Map());
+    }
+    this.revisions.get(page.id).set(revisionString, record);
+    return record;
+  }
+
+  // Establishes the Revision 1 baseline for a Share that predates the
+  // revision protocol (current_revision still null), capturing its
+  // current materialized fields exactly as they are. Returns true when a
+  // baseline was written.
+  ensureContentBaseline(page, capturedAt = Date.now()) {
+    if (toContentRevisionString(page.current_revision) !== null) {
+      return false;
+    }
+
+    page.current_revision = '1';
+    this.writeContentSnapshot(page, '1', {
+      source: 'baseline',
+      actorType: 'operator'
+    }, capturedAt);
+    return true;
+  }
+
+  async getContentSnapshot(id, revision) {
+    const byRevision = this.revisions.get(id);
+    const record = byRevision?.get(toContentRevisionString(revision));
+    return record ? { ...record } : null;
+  }
+
+  async listContentSnapshots(id) {
+    const byRevision = this.revisions.get(id);
+
+    if (!byRevision) {
+      return [];
+    }
+
+    return Array.from(byRevision.values())
+      .sort((left, right) => (BigInt(left.revision) < BigInt(right.revision) ? -1 : 1))
+      .map(record => ({ ...record }));
+  }
+
+  // The baseline DML of the parent spec's rollout (issue #24 §11 step 4),
+  // for this Adapter: every Share without a baseline gains Revision 1
+  // capturing its current fields, with the capture time of THIS run. A
+  // second run skips everything. The Postgres operator script enforces
+  // the surrounding write-maintenance window; this method is the DML.
+  async backfillRevisionBaselines({ now = Date.now() } = {}) {
+    let baselined = 0;
+    let skipped = 0;
+
+    for (const page of this.pages.values()) {
+      if (this.ensureContentBaseline(page, now)) {
+        baselined += 1;
+      } else {
+        skipped += 1;
+      }
+    }
+
+    return { baselined, skipped };
   }
 
   async init() {
@@ -173,18 +260,18 @@ class MemoryPageRepository {
         }
       }
 
-      return this.createUnlocked(page);
+      return this.createUnlocked(page, options.revisionMeta);
     });
   }
 
-  async createUnlocked(page) {
+  async createUnlocked(page, revisionMeta = {}) {
     if (this.pages.has(page.id)) {
       const error = new Error('UNIQUE constraint failed: pages.id');
       error.code = 'SQLITE_CONSTRAINT';
       throw error;
     }
 
-    this.pages.set(page.id, {
+    const record = {
       id: page.id,
       html_content: page.htmlContent,
       created_at: page.createdAt,
@@ -197,9 +284,21 @@ class MemoryPageRepository {
       expires_at: page.expiresAt || null,
       markdown_theme: page.markdownTheme || null,
       access_revision: '1',
+      // Content Revision baseline (T06): creation writes Revision 1 and
+      // its immutable snapshot in the same step as the Share itself, and
+      // the Share starts published.
+      current_revision: '1',
+      published: true,
       is_favorite: false,
       view_count: 0
-    });
+    };
+
+    this.pages.set(page.id, record);
+    this.writeContentSnapshot(record, '1', {
+      source: revisionMeta.source || 'web-create',
+      actorType: revisionMeta.actorType || 'owner',
+      actorId: revisionMeta.actorId ?? null
+    }, page.createdAt);
 
     return { id: page.id };
   }
@@ -455,31 +554,122 @@ class MemoryPageRepository {
     });
   }
 
-  // Admin save that may combine content fields with access-policy fields
-  // (T01). Content-only saves pass no expected revision and never advance
-  // it; access-policy saves are compare-and-swap on the revision.
-  async updatePageWithAccessPolicy(id, options, precondition = {}) {
+  // The one admin content/access write path (T01 + T06). Two independent
+  // precondition families are enforced in the same gated step, and a
+  // combined save commits only when both pass:
+  //   - access family (T01): expectedAccessRevision compare-and-swap;
+  //     advanceAccessRevision moves it when the policy actually changed.
+  //   - content family (T06): expectedContentRevision compare-and-swap
+  //     against current_revision. When the merged candidate snapshot
+  //     differs byte-exactly from the current one, the materialized
+  //     projection, the new current_revision and an immutable snapshot
+  //     (plus its audit record) are written together; an unchanged
+  //     candidate writes nothing and reports contentChanged: false.
+  // Callers that pass no content precondition (internal legacy writes)
+  // still cannot bypass Revision: their content changes snapshot too.
+  async updatePageWithPreconditions(id, options, precondition = {}) {
     return this.publishingGate.runWrite(async () => {
       const page = this.pages.get(id);
 
       if (!page) {
-        return { status: 'not_found', accessRevision: null };
+        return {
+          status: 'not_found',
+          accessRevision: null,
+          contentRevision: null,
+          contentChanged: false,
+          current: null
+        };
       }
 
-      const currentRevision = toAccessRevisionString(page.access_revision);
+      this.ensureContentBaseline(page);
+
+      const currentAccessRevision = toAccessRevisionString(page.access_revision);
 
       if (precondition.expectedAccessRevision != null
-        && !accessRevisionMatches(currentRevision, precondition.expectedAccessRevision)) {
-        return { status: 'conflict', accessRevision: currentRevision };
+        && !accessRevisionMatches(currentAccessRevision, precondition.expectedAccessRevision)) {
+        return {
+          status: 'conflict',
+          accessRevision: currentAccessRevision,
+          contentRevision: toContentRevisionString(page.current_revision),
+          contentChanged: false,
+          current: null
+        };
       }
 
-      applyPageUpdate(page, options);
+      const currentFields = currentContentFields(page);
+      const candidate = {
+        htmlContent: options.htmlContent !== undefined ? options.htmlContent : currentFields.htmlContent,
+        codeType: currentFields.codeType,
+        title: options.title !== undefined ? (options.title || null) : currentFields.title,
+        description: options.description !== undefined ? (options.description || null) : currentFields.description,
+        markdownTheme: options.markdownTheme !== undefined ? (options.markdownTheme || null) : currentFields.markdownTheme
+      };
+      const currentContentRevision = toContentRevisionString(page.current_revision);
+
+      if (precondition.expectedContentRevision != null
+        && !contentRevisionMatches(currentContentRevision, precondition.expectedContentRevision)) {
+        return {
+          status: 'content_conflict',
+          accessRevision: currentAccessRevision,
+          contentRevision: currentContentRevision,
+          contentChanged: false,
+          current: { ...currentFields }
+        };
+      }
+
+      const contentChanged = !contentSnapshotsEqual(candidate, currentFields);
+
+      if (options.expiresAt !== undefined) {
+        page.expires_at = options.expiresAt || null;
+      }
+
+      if (options.isProtected !== undefined) {
+        page.is_protected = options.isProtected ? 1 : 0;
+        page.password_hash = options.passwordHash || null;
+        page.encrypted_password = options.encryptedPassword || null;
+      }
+
+      if (contentChanged) {
+        page.html_content = candidate.htmlContent;
+        page.title = candidate.title;
+        page.description = candidate.description;
+        page.markdown_theme = candidate.markdownTheme;
+        page.current_revision = nextContentRevision(currentContentRevision);
+        this.writeContentSnapshot(page, page.current_revision, precondition.contentMeta || {});
+        await this.createAuditLog({
+          action: 'page.content.update',
+          pageId: id,
+          details: JSON.stringify({
+            fromRevision: currentContentRevision,
+            toRevision: page.current_revision,
+            source: (precondition.contentMeta || {}).source || 'admin-edit'
+          }),
+          ip: precondition.ip || null
+        });
+      }
 
       if (precondition.advanceAccessRevision) {
-        page.access_revision = nextAccessRevision(currentRevision);
+        page.access_revision = nextAccessRevision(currentAccessRevision);
       }
 
-      return { status: 'updated', accessRevision: toAccessRevisionString(page.access_revision) };
+      return {
+        status: 'updated',
+        accessRevision: toAccessRevisionString(page.access_revision),
+        contentRevision: toContentRevisionString(page.current_revision),
+        contentChanged,
+        current: null
+      };
+    });
+  }
+
+  // Admin save that may combine content fields with access-policy fields
+  // (T01). Kept for the pre-T06 call shape; it delegates to the unified
+  // path so its content changes also produce Revisions (no bypass).
+  async updatePageWithAccessPolicy(id, options, precondition = {}) {
+    return this.updatePageWithPreconditions(id, options, {
+      ...precondition,
+      expectedContentRevision: null,
+      contentMeta: { source: 'admin-edit', actorType: 'owner' }
     });
   }
 
@@ -536,29 +726,34 @@ class MemoryPageRepository {
     });
   }
 
+  // Legacy unconditional write entry. It delegates to the unified path
+  // (T06) so even a caller without preconditions cannot change content
+  // without producing a Revision snapshot.
   async updatePage(id, options) {
-    return this.publishingGate.runWrite(async () => {
-      const page = this.pages.get(id);
-
-      if (!page) {
-        return false;
-      }
-
-      applyPageUpdate(page, options);
-
-      return true;
+    const result = await this.updatePageWithPreconditions(id, options, {
+      contentMeta: { source: 'legacy-update', actorType: 'owner' }
     });
+    return result.status === 'updated';
   }
 
   async deletePage(id) {
-    return this.publishingGate.runWrite(async () => this.pages.delete(id));
+    return this.publishingGate.runWrite(async () => {
+      const deleted = this.pages.delete(id);
+      if (deleted) {
+        this.revisions.delete(id);
+      }
+      return deleted;
+    });
   }
 
   async deletePages(ids) {
     return this.publishingGate.runWrite(async () => {
       let count = 0;
       ids.forEach((id) => {
-        if (this.pages.delete(id)) count += 1;
+        if (this.pages.delete(id)) {
+          this.revisions.delete(id);
+          count += 1;
+        }
       });
       return count;
     });
