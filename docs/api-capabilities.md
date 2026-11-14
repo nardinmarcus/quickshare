@@ -77,3 +77,24 @@ ID、体积限制与条件写规则。当前阶段两类凭据均为 **create-on
 完整备份/恢复核对覆盖 `api_keys.credential_version`（见
 [备份与恢复手册](backup-restore.md)）：恢复后逐 Key 比对精确版本，只改
 恢复库中的版本号会被核对拒绝。
+
+## 幂等创建与操作确认（T08）
+
+`POST /api/v1/share` 可选地接受 `Idempotency-Key` 请求头：
+
+- 带头时，创建按凭据命名空间幂等：同一 Key + 相同输入重放原始结果
+  （响应多 `requestId`，重放时另有 `replayed: true`）；同一 Key + 不同
+  输入返回 409 `idempotency_conflict`；结果已不可用时返回 410
+  `operation_result_unavailable`；请求头格式非法返回 400
+  `invalid_idempotency_key`。客户端应生成 UUID v4 作为请求标识。
+- 不带头时行为与以往完全一致（HTTP 200 与原有响应字段），且**不是**
+  幂等创建，文档与能力响应都不这样宣称。
+- 响应丢失后，用 `GET /api/v1/operations/:requestId` 按请求标识确认
+  结果：只返回状态与资源/版本标识（Share ID、内容 Revision、访问
+  Revision），永不返回密码、标题、描述或正文。该确认属于 create 能力
+  本身，不是 Share 管理授权；旧版 Key 只能确认自己命名空间内的创建。
+  生成密码只能通过重放原始创建请求、且当前访问策略未变更时取回。
+
+能力响应在 `conditionalWrites[0].idempotency` 中如实描述以上行为；
+完整约定（命名空间、摘要、固定处理顺序、回放规则、网页端待确认
+意图与克隆）见 [发布操作手册](publishing-operations.md)。

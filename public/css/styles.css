@@ -4793,6 +4793,27 @@ body:hover::-webkit-scrollbar,
   background: var(--error-bg);
 }
 
+.publish-orphan-choice {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--error-border);
+  border-radius: 8px;
+  background: var(--error-bg);
+}
+
+.publish-orphan-title {
+  margin: 0 0 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.publish-orphan-text {
+  margin: 0 0 10px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
 .publish-preview {
   gap: 14px;
 }

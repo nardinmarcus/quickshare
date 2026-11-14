@@ -21,6 +21,7 @@ const KNOWN_TABLES = [
   'api_keys',
   'audit_logs',
   'pages',
+  'publish_operations',
   'quickshare_schema_migrations',
   'share_revisions',
   'site_settings'
@@ -96,6 +97,48 @@ function buildRevisionSection(rows) {
 
   const aggregateDigest = sha256Hex(
     ordered.map(row => digests[revisionKey(row)]).join('\n')
+  );
+
+  return { count: rows.length, aggregateDigest, digests };
+}
+
+// Publish operation records (migration 008, T08). Every field is
+// digested — including the request HMAC, the result identifiers and the
+// receipt CIPHERTEXT (digested exactly like pages.encrypted_password:
+// the manifest never carries the ciphertext itself, let alone a
+// plaintext receipt) — so a restore that alters, drops or resurrects an
+// operation record is detected, and a tombstone can never quietly come
+// back as a committed result.
+const OPERATION_DIGEST_FIELDS = [
+  'actor_namespace',
+  'request_id',
+  'action',
+  'target_id',
+  'request_hmac',
+  'result_share_id',
+  'result_revision',
+  'result_access_revision',
+  'receipt_encrypted',
+  'result_state',
+  'created_at'
+];
+
+function operationKey(row) {
+  return `${row.actor_namespace}:${row.request_id}`;
+}
+
+function buildOperationSection(rows) {
+  const digests = {};
+  const ordered = [...rows].sort((left, right) => (
+    operationKey(left).localeCompare(operationKey(right))
+  ));
+
+  for (const row of ordered) {
+    digests[operationKey(row)] = rowDigest(row, OPERATION_DIGEST_FIELDS);
+  }
+
+  const aggregateDigest = sha256Hex(
+    ordered.map(row => digests[operationKey(row)]).join('\n')
   );
 
   return { count: rows.length, aggregateDigest, digests };
@@ -502,6 +545,21 @@ async function collectSnapshot(query) {
     revisions = buildRevisionSection(revisionRows);
   }
 
+  // Publish operation records (migration 008). Present only when the
+  // table exists; pre-008 snapshots carry no section and verification
+  // skips the operation assertions explicitly, mirroring Revisions.
+  let operations = null;
+  let operationRows = [];
+
+  if (tables.includes('publish_operations')) {
+    const operationResult = await query(
+      'SELECT * FROM public.publish_operations ORDER BY actor_namespace, request_id'
+    );
+
+    operationRows = operationResult.rows;
+    operations = buildOperationSection(operationRows);
+  }
+
   const apiKeyResult = await query('SELECT * FROM public.api_keys ORDER BY id');
   // credential_version arrives with migration 006 (T05); mirror the
   // access_revision treatment and only digest it when the column exists,
@@ -564,10 +622,11 @@ async function collectSnapshot(query) {
       highWaterCreatedAt: audit.highWaterCreatedAt
     },
     siteSettings,
-    revisions
+    revisions,
+    operations
   };
 
-  return { snapshot, pageRows, auditRows, revisionRows };
+  return { snapshot, pageRows, auditRows, revisionRows, operationRows };
 }
 
 // The manifest is the public record of a backup: it must let an operator
@@ -768,6 +827,10 @@ function compareSnapshots(expected, actual) {
 
   if (expected.revisions) {
     compareSections('share_revisions', expected.revisions, actual.revisions, failures);
+  }
+
+  if (expected.operations) {
+    compareSections('publish_operations', expected.operations, actual.operations, failures);
   }
 
   if (expected.pages.hasContentRevision) {

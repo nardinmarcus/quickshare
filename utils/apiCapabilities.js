@@ -34,7 +34,11 @@ const SHARE_CREATE_OPERATION = Object.freeze({
 
 const CONNECTION_OPERATIONS = Object.freeze([
   Object.freeze({ id: 'connection.me', method: 'GET', path: '/api/v1/me' }),
-  Object.freeze({ id: 'connection.capabilities', method: 'GET', path: '/api/v1/capabilities' })
+  Object.freeze({ id: 'connection.capabilities', method: 'GET', path: '/api/v1/capabilities' }),
+  // Operation confirmation (T08): scoped to the caller's own credential
+  // namespace and part of the create capability — it confirms what a
+  // create did, it does not manage Shares.
+  Object.freeze({ id: 'operation.status', method: 'GET', path: '/api/v1/operations/:requestId' })
 ]);
 
 function parseByteLimit(value) {
@@ -85,6 +89,22 @@ function buildCapabilities({ credentialType } = {}) {
         operation: SHARE_CREATE_OPERATION.id,
         requiresIfMatch: false,
         requiresIdempotencyKey: false,
+        // Optional idempotent create (T08): sending an Idempotency-Key
+        // makes the create safe to retry — the same key with the same
+        // input replays the original result, the same key with different
+        // input is refused, and a committed outcome stays confirmable
+        // via operation.status. Without the header the create is NOT
+        // idempotent and behaves exactly as before.
+        idempotency: {
+          header: 'Idempotency-Key',
+          required: false,
+          replaySupported: true,
+          keyFormat: '16-128 characters of [A-Za-z0-9_-]; clients generate a UUID v4',
+          confirmationOperation: 'operation.status',
+          conflict: { status: 409, code: 'idempotency_conflict', retryable: false },
+          resultUnavailable: { status: 410, code: 'operation_result_unavailable', retryable: false },
+          invalidKey: { status: 400, code: 'invalid_idempotency_key', retryable: false }
+        },
         // Publishing writes pass the write-maintenance gate (T04): during
         // a maintenance window creation is refused, while the connection
         // checks (me / capabilities) stay available.

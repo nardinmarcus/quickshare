@@ -357,3 +357,100 @@ window.Toast = {
     }
   });
 })();
+
+// --- Clone intents (T08) ---------------------------------------------------
+// Every clone form carries a persisted per-target request identifier in
+// a hidden requestId field. The intent is stored before submitting, so
+// if a clone's outcome is unknown (network failure, closed tab), 
+// resubmitting the same form replays the original clone instead of
+// minting another copy. The server confirms completion via the
+// clone_intent_done cookie — set on fresh AND replay responses alike —
+// and a matching cookie retires the stored intent, including after
+// back-navigation restores the page from cache (pageshow), which is the
+// path where a completed intent would otherwise be resubmitted.
+(function initCloneIntents() {
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+
+  function startCloneIntents() {
+  var forms = Array.prototype.slice.call(document.querySelectorAll('form[action*="/clone"]'));
+  if (!forms.length) return;
+
+  function storageKey(targetId) { return 'qs.cloneIntent.' + targetId; }
+
+  function readIntent(targetId) {
+    try { return window.localStorage.getItem(storageKey(targetId)) || null; } catch (error) { return null; }
+  }
+
+  function writeIntent(targetId, requestId) {
+    try { window.localStorage.setItem(storageKey(targetId), requestId); } catch (error) { /* storage unavailable */ }
+  }
+
+  function clearIntent(targetId) {
+    try { window.localStorage.removeItem(storageKey(targetId)); } catch (error) { /* storage unavailable */ }
+  }
+
+  function newRequestId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return window.crypto.randomUUID();
+    }
+    return 'clone-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12);
+  }
+
+  function targetIdOf(form) {
+    var match = /\/admin\/pages\/([^/]+)\/clone/.exec(form.getAttribute('action') || '');
+    return match ? decodeURIComponent(match[1]) : null;
+  }
+
+  function retireConfirmedIntents() {
+    var marker = document.cookie.split(';').map(function (part) { return part.trim(); })
+      .find(function (part) { return part.indexOf('clone_intent_done=') === 0 });
+    if (!marker) return;
+
+    var doneId = decodeURIComponent(marker.slice('clone_intent_done='.length));
+    forms.forEach(function (form) {
+      var targetId = targetIdOf(form);
+      if (targetId && readIntent(targetId) === doneId) {
+        clearIntent(targetId);
+      }
+    });
+    // The completion is consumed; expire the marker so it cannot retire
+    // an unrelated future intent that happens to reuse the value.
+    document.cookie = 'clone_intent_done=; Max-Age=0; path=/';
+  }
+
+  function refreshIntentFields() {
+    forms.forEach(function (form) {
+      var targetId = targetIdOf(form);
+      if (!targetId) return;
+
+      var intent = readIntent(targetId);
+      if (!intent) {
+        intent = newRequestId();
+        writeIntent(targetId, intent);
+      }
+
+      var field = form.querySelector('input[name="requestId"]');
+      if (!field) {
+        field = document.createElement('input');
+        field.type = 'hidden';
+        field.name = 'requestId';
+        form.appendChild(field);
+      }
+      field.value = intent;
+    });
+  }
+
+  retireConfirmedIntents();
+  refreshIntentFields();
+  window.addEventListener('pageshow', function () {
+    retireConfirmedIntents();
+    refreshIntentFields();
+  });
+  }
+
+  if (document.readyState === 'loading' && typeof document.addEventListener === 'function') {
+    document.addEventListener('DOMContentLoaded', startCloneIntents);
+  } else {
+    startCloneIntents();
+  }
+})();

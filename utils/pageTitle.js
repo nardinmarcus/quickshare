@@ -5,7 +5,13 @@ function normalizeTitle(value) {
     return '';
   }
 
-  return value.replace(/\s+/g, ' ').trim().slice(0, 160);
+  const collapsed = value.replace(/\s+/g, ' ').trim();
+  // Truncate by Unicode code points, never by UTF-16 code units: a plain
+  // slice(0, 160) can cut a surrogate pair in half and leave a lone
+  // surrogate, which is not valid Unicode and which Postgres refuses to
+  // store. Spreading iterates whole code points, so an astral character
+  // at the boundary is kept complete or dropped complete.
+  return [...collapsed].slice(0, 160).join('');
 }
 
 function decodeBasicHtmlEntities(value) {
@@ -82,5 +88,6 @@ function derivePageTitle(content, codeType, requestedTitle, createdAt) {
 }
 
 module.exports = {
-  derivePageTitle
+  derivePageTitle,
+  normalizeTitle
 };

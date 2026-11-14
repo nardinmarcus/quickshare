@@ -7,6 +7,9 @@
   <% if (typeof csrfToken !== 'undefined' && csrfToken) { %>
     <meta name="csrf-token" content="<%= csrfToken %>">
   <% } %>
+  <% if (typeof publishSessionTag !== 'undefined' && publishSessionTag) { %>
+    <meta name="publish-session-tag" content="<%= publishSessionTag %>">
+  <% } %>
 
   <link rel="icon" href="/icon/web/favicon.ico?v=<%= faviconVersion %>" sizes="any">
   <link rel="apple-touch-icon" href="/icon/web/apple-touch-icon.png?v=<%= faviconVersion %>">

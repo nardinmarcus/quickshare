@@ -26,6 +26,11 @@
 //     fixture), and restored-only tampering with either a snapshot row or
 //     a current_revision pointer is rejected by verify (explicitly
 //     skipped on a legacy 001-003 schema, where neither exists)
+//   - publish operation records (migration 008, T08) round-trip: the
+//     seeded committed operation (request HMAC, result identifiers,
+//     encrypted receipt) restores exactly, and a restored-only tamper
+//     that flips it to a tombstone is rejected by verify (explicitly
+//     skipped on a legacy 001-003 schema, where the table does not exist)
 //
 // No production data is involved; both fixture databases are dropped at the
 // end unless --keep is passed.
@@ -231,6 +236,36 @@ async function seedFixtures(pool, { hasAccessRevision }) {
       [action, pageId, JSON.stringify(details), '127.0.0.1', BASE_TIME + offset]
     );
   };
+
+  if (hasAccessRevision) {
+    // Full schema includes migration 008: seed a committed publish
+    // operation so the drill proves the record — request HMAC, result
+    // identifiers, version pointers and the encrypted receipt — is
+    // backed up and restored exactly (T08). The receipt is real
+    // ciphertext of a create receipt, never plaintext.
+    const receipt = encryptSecret(JSON.stringify({
+      kind: 'share.create',
+      shareId: 'drill-public',
+      password: null,
+      isProtected: false,
+      codeType: 'markdown',
+      title: 'Drill public',
+      description: 'Public drill fixture',
+      expiresAt: null,
+      markdownTheme: 'github',
+      contentRevision: '1',
+      contentEtag: 'drill-etag'
+    }));
+
+    await pool.query(
+      `INSERT INTO public.publish_operations (
+         actor_namespace, request_id, action, target_id, request_hmac,
+         result_share_id, result_revision, result_access_revision,
+         receipt_encrypted, result_state, created_at
+       ) VALUES ($1, $2, 'share.create', NULL, $3, 'drill-public', 1, 1, $4, 'committed', $5)`,
+      ['key:managed:drillkey1', 'drill-request-0001', 'a'.repeat(64), receipt, BASE_TIME + 30]
+    );
+  }
 
   await audit('page.create', 'drill-public', {}, 10);
   await audit('page.create', 'drill-protected', {}, 11);
@@ -531,6 +566,30 @@ async function main() {
         && pointerTamperReport !== null
         && pointerTamperReport.ok === false
         && pointerTamperReport.failures.some(failure => failure.includes('current_revision')));
+
+      const operationCount = await restorePool.query(
+        'SELECT COUNT(*)::int AS count FROM public.publish_operations'
+      );
+      check('restored publish_operations carries the seeded operation record',
+        operationCount.rows[0].count === 1);
+
+      await restorePool.query(
+        "UPDATE public.publish_operations SET result_state = 'result_unavailable', receipt_encrypted = NULL WHERE request_id = 'drill-request-0001'"
+      );
+
+      const operationTamperResult = await runScript('verify-backup.js', verifyArgs, childEnv);
+      let operationTamperReport = null;
+
+      try {
+        operationTamperReport = parseStdoutJson(operationTamperResult, 'verify-backup.js (operation tampered)');
+      } catch (error) {
+        // handled by the check below
+      }
+
+      check('verify rejects a restored-only publish_operations tamper', operationTamperResult.code !== 0
+        && operationTamperReport !== null
+        && operationTamperReport.ok === false
+        && operationTamperReport.failures.some(failure => failure.includes('publish_operations')));
     }
 
     const summary = {

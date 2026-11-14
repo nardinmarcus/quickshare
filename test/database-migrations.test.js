@@ -55,7 +55,8 @@ test('migrations contain every runtime table, column, index, and site setting', 
     '004_page_access_revision.sql',
     '005_publishing_writes_paused.sql',
     '006_api_key_credential_version.sql',
-    '007_share_revisions.sql'
+    '007_share_revisions.sql',
+    '008_publish_operations.sql'
   ]);
   assert.match(migrations[0].sql, /CREATE TABLE IF NOT EXISTS public\.pages/i);
   assert.match(migrations[0].sql, /ADD COLUMN IF NOT EXISTS password_hash/i);
@@ -88,6 +89,17 @@ test('migrations contain every runtime table, column, index, and site setting', 
   assert.match(migrations[6].sql, /CREATE TABLE IF NOT EXISTS public\.share_revisions/i);
   assert.match(migrations[6].sql, /snapshot_hash TEXT NOT NULL/i);
   assert.match(migrations[6].sql, /PRIMARY KEY \(share_id, revision\)/i);
+  // T08: the publish-operation record is keyed by (actor namespace,
+  // request id) — the uniqueness constraint the dedup guarantee rests
+  // on — and deliberately has no foreign key to pages, so a record
+  // survives its result Share as a content-free tombstone.
+  assert.match(migrations[7].sql, /CREATE TABLE IF NOT EXISTS public\.publish_operations/i);
+  assert.match(migrations[7].sql, /PRIMARY KEY \(actor_namespace, request_id\)/i);
+  assert.match(migrations[7].sql, /request_hmac TEXT NOT NULL/i);
+  assert.match(migrations[7].sql, /receipt_encrypted TEXT/i);
+  assert.match(migrations[7].sql, /result_state TEXT NOT NULL DEFAULT 'committed'/i);
+  assert.match(migrations[7].sql, /idx_publish_operations_result_share/i);
+  assert.doesNotMatch(migrations[7].sql, /REFERENCES public\.pages/i);
 });
 
 test('migration runner applies pending files once and releases its client', async () => {
@@ -104,8 +116,8 @@ test('migration runner applies pending files once and releases its client', asyn
   const second = await runMigrations(fake.pool, { logger: { info() {} } });
   const migrationSql = loadMigrations().map(migration => migration.sql.trim());
 
-  assert.deepEqual(first, { applied: ['001', '002', '003', '004', '005', '006', '007'], skipped: [] });
-  assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007'] });
+  assert.deepEqual(first, { applied: ['001', '002', '003', '004', '005', '006', '007', '008'], skipped: [] });
+  assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004', '005', '006', '007', '008'] });
   for (const sql of migrationSql) {
     assert.equal(fake.queries.filter(query => query.sql === sql).length, 1);
   }
