@@ -53,7 +53,24 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Install PostgreSQL 17 client tools
+        # The backup/restore drill requires pg_dump/pg_restore whose major
+        # version matches the postgres:17 service container. The runner
+        # image ships client 16 (ubuntu-24.04) or 18 (ubuntu-26.04); the
+        # drill correctly rejects both, so install the matching client
+        # from the PostgreSQL apt repository (PGDG).
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          /usr/lib/postgresql/17/bin/pg_dump --version
+
       - name: Run PostgreSQL integration tests
         env:
           POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/quickshare_test?sslmode=disable
+          # Point the drill at the matching client explicitly; a bare
+          # pg_dump on PATH may resolve to the image's 16/18 client.
+          QS_PG_BIN_DIR: /usr/lib/postgresql/17/bin
         run: npm run test:postgres
