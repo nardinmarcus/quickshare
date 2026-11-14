@@ -402,5 +402,6 @@ test('admin detail page ships the history section and the shared diff scripts', 
   // T07 shipped browsing only; T09 adds the restore shell (asserted in
   // test/restore-revisions.test.js). Purge remains a later ticket.
   assert.ok(detail.text.includes('history-restore'));
-  assert.ok(!detail.text.includes('history-purge'));
+  // T10: the purge panel now exists (it did not in T07's contract).
+  assert.ok(detail.text.includes('history-purge'));
 });

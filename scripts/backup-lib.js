@@ -64,7 +64,11 @@ const AUDIT_DIGEST_FIELDS = [
 // Content Revision snapshots (migration 007, T06). Every field of the
 // snapshot row is digested, including the stored integrity hash and the
 // provenance fields, so a restore that alters history in any way —
-// payload, hash, source, actor, capture time — is detected.
+// payload, hash, source, actor, capture time — is detected. purged_at
+// (migration 009, T10) is digested too: a tombstone's absence of
+// payload is part of the recorded state, so a restore that resurrects
+// a purged version — or purges one without a record — changes the
+// digest and fails verification.
 const REVISION_DIGEST_FIELDS = [
   'share_id',
   'revision',
@@ -78,7 +82,8 @@ const REVISION_DIGEST_FIELDS = [
   'actor_type',
   'actor_id',
   'restored_from_revision',
-  'created_at'
+  'created_at',
+  'purged_at'
 ];
 
 function revisionKey(row) {
@@ -710,6 +715,30 @@ function evaluateRevisionIntegrity(pageRows, revisionRows) {
 
     byKey.set(key, row);
 
+    // A purged Revision (T10) is a tombstone: its payload fields and
+    // its payload-derived hash are all NULL, and there is nothing left
+    // to recompute. Verification must prove the tombstone is exactly
+    // that — payload reappearing under a purged_at marker, or a
+    // payload vanishing without one, is a failure, so a purge can
+    // neither silently resurrect nor pass as an unrecorded deletion.
+    const purgedAt = row.purged_at ?? null;
+
+    if (purgedAt !== null || row.html_content === null) {
+      if (purgedAt === null) {
+        failures.push(`share_revisions ${key}: snapshot has no content but no purge marker`);
+      } else if (
+        row.html_content !== null
+        || row.title !== null
+        || row.description !== null
+        || row.markdown_theme !== null
+        || row.snapshot_hash !== null
+      ) {
+        failures.push(`share_revisions ${key}: purged snapshot still carries payload fields`);
+      }
+
+      continue;
+    }
+
     const recomputed = computeSnapshotHash(row.share_id, canonicalValue(row.revision), {
       htmlContent: row.html_content,
       codeType: row.code_type,
@@ -743,6 +772,11 @@ function evaluateRevisionIntegrity(pageRows, revisionRows) {
 
     if (!snapshot) {
       failures.push(`pages ${page.id}: current_revision ${current} has no matching snapshot`);
+      continue;
+    }
+
+    if ((snapshot.purged_at ?? null) !== null || snapshot.html_content === null) {
+      failures.push(`pages ${page.id}: current_revision ${current} points at a purged snapshot`);
       continue;
     }
 

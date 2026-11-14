@@ -300,7 +300,10 @@ async function insertOperationRow(client, operation) {
 // The replay-time availability/policy view of a committed operation's
 // result (parent spec §8): whether the Share still exists, its CURRENT
 // access revision and protection flag, and whether the result Revision's
-// snapshot still exists. The receipt is only honored as far as this
+// snapshot payload still exists. A purged snapshot (T10) leaves a
+// tombstone row behind, but its payload is gone, so for replay purposes
+// the version counts as cleared: only a row that still carries its body
+// satisfies this check. The receipt is only honored as far as this
 // current state allows — a changed access policy never gets the old
 // password back.
 async function loadResultShareState(client, operation) {
@@ -310,6 +313,7 @@ async function loadResultShareState(client, operation) {
         EXISTS (
           SELECT 1 FROM public.share_revisions r
           WHERE r.share_id = p.id AND r.revision = $2::bigint
+            AND r.html_content IS NOT NULL
         ) AS revision_exists
       FROM public.pages p
       WHERE p.id = $1
@@ -862,6 +866,116 @@ class PostgresPageRepository {
       await insertOperationRow(client, record);
 
       return { outcome: 'executed', result: fullResult, operation: record };
+    });
+  }
+
+  // Permanent purge of one non-current Revision (T10, issue #34).
+  // Owner-only and dashboard-only by route design — there is no
+  // API-Key or CLI entry point. Inside one gated transaction the Share
+  // row is locked first, so the current-version judgment and the
+  // tombstone write are serialized against concurrent saves and
+  // restores on the same Share lock order: a restore cannot slip a
+  // purged source past its own in-lock read, and a version that becomes
+  // current after this purge judged it non-current cannot exist (a
+  // restore writes a NEW revision; it never promotes the target).
+  // The same transaction clears the snapshot payload (body, title,
+  // description, theme and the payload-derived hash), stamps purged_at,
+  // scrubs the encrypted receipts of every committed operation whose
+  // result is exactly this version (any credential namespace — those
+  // receipts are the recoverable ciphertext that could re-emit the
+  // purged version's title, description or generated password), and
+  // writes the purge audit. The tombstone row itself, the version
+  // number and all other Revisions are untouched; version numbers are
+  // never reused. Repeating the purge of an already-purged Revision is
+  // a no-op success that writes nothing.
+  async purgeRevision({ id, revision, ip = null }) {
+    const revisionString = toContentRevisionString(revision);
+
+    if (revisionString === null) {
+      return { status: 'revision_not_found', revision: null };
+    }
+
+    return withPublishingWrite(this.pool, async (client) => {
+      const pageResult = await client.query(
+        'SELECT id, current_revision FROM pages WHERE id = $1 FOR UPDATE',
+        [id]
+      );
+      const page = pageResult.rows[0];
+
+      if (!page) {
+        return { status: 'not_found', revision: revisionString };
+      }
+
+      const snapshotResult = await client.query(
+        `
+          SELECT revision::text AS revision, html_content, purged_at
+          FROM public.share_revisions
+          WHERE share_id = $1 AND revision = $2::bigint
+          FOR UPDATE
+        `,
+        [id, revisionString]
+      );
+      const snapshot = snapshotResult.rows[0];
+
+      if (!snapshot) {
+        return { status: 'revision_not_found', revision: revisionString };
+      }
+
+      if (snapshot.purged_at !== null || snapshot.html_content === null) {
+        return {
+          status: 'already_purged',
+          revision: revisionString,
+          purgedAt: snapshot.purged_at === null ? null : Number(snapshot.purged_at)
+        };
+      }
+
+      if (contentRevisionMatches(page.current_revision, revisionString)) {
+        return {
+          status: 'current_revision',
+          revision: revisionString,
+          currentRevision: toContentRevisionString(page.current_revision)
+        };
+      }
+
+      const purgedAt = Date.now();
+
+      await client.query(
+        `
+          UPDATE public.share_revisions
+          SET html_content = NULL, title = NULL, description = NULL,
+              markdown_theme = NULL, snapshot_hash = NULL, purged_at = $3
+          WHERE share_id = $1 AND revision = $2::bigint
+        `,
+        [id, revisionString, purgedAt]
+      );
+
+      const scrubResult = await client.query(
+        `
+          UPDATE public.publish_operations
+          SET receipt_encrypted = NULL
+          WHERE result_share_id = $1 AND result_revision = $2::bigint
+            AND result_state = 'committed' AND receipt_encrypted IS NOT NULL
+        `,
+        [id, revisionString]
+      );
+
+      await client.query(
+        'INSERT INTO audit_logs (action, page_id, details, ip, created_at) VALUES ($1, $2, $3, $4, $5)',
+        [
+          'page.revision.purge',
+          id,
+          JSON.stringify({ revision: revisionString, purgedAt }),
+          ip,
+          purgedAt
+        ]
+      );
+
+      return {
+        status: 'purged',
+        revision: revisionString,
+        purgedAt,
+        scrubbedReceipts: scrubResult.rowCount
+      };
     });
   }
 
@@ -1497,7 +1611,7 @@ class PostgresPageRepository {
         SELECT share_id, revision::text AS revision, html_content, code_type,
                title, description, markdown_theme, snapshot_hash, source,
                actor_type, actor_id, restored_from_revision::text AS restored_from_revision,
-               created_at
+               created_at, purged_at
         FROM share_revisions
         WHERE share_id = $1 AND revision = $2::bigint
         LIMIT 1
@@ -1514,7 +1628,7 @@ class PostgresPageRepository {
         SELECT share_id, revision::text AS revision, html_content, code_type,
                title, description, markdown_theme, snapshot_hash, source,
                actor_type, actor_id, restored_from_revision::text AS restored_from_revision,
-               created_at
+               created_at, purged_at
         FROM share_revisions
         WHERE share_id = $1
         ORDER BY share_revisions.revision ASC
@@ -1538,7 +1652,8 @@ class PostgresPageRepository {
     const result = await this.pool.query(
       `
         SELECT revision::text AS revision, created_at, source, actor_type,
-               restored_from_revision::text AS restored_from_revision
+               restored_from_revision::text AS restored_from_revision,
+               purged_at
         FROM share_revisions
         WHERE share_id = $1
         ORDER BY share_revisions.revision DESC

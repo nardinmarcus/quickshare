@@ -175,10 +175,16 @@ async function seedFixtures(pool, { hasAccessRevision }) {
         source: 'admin-edit', createdAt: BASE_TIME + 2000
       },
       {
+        // A purged tombstone (T10): drill-revoked's first Revision was
+        // permanently cleared by the owner. The row keeps only its
+        // metadata — no body, title, description, theme or hash — so
+        // the drill proves a purge survives backup/restore still
+        // purged, and that verification detects any resurrection.
         shareId: 'drill-revoked', revision: '1',
-        htmlContent: '<p>Drill revoked body v1</p>', codeType: 'html',
-        title: 'Drill revoked', description: null, markdownTheme: null,
-        source: 'baseline', createdAt: BASE_TIME + 3000
+        htmlContent: null, codeType: 'html',
+        title: null, description: null, markdownTheme: null,
+        source: 'baseline', createdAt: BASE_TIME + 3000,
+        purgedAt: BASE_TIME + 3500
       },
       {
         shareId: 'drill-revoked', revision: '2',
@@ -195,18 +201,20 @@ async function seedFixtures(pool, { hasAccessRevision }) {
     ];
 
     for (const snapshot of snapshots) {
-      const snapshotHash = computeSnapshotHash(snapshot.shareId, snapshot.revision, snapshot);
+      const snapshotHash = snapshot.purgedAt
+        ? null
+        : computeSnapshotHash(snapshot.shareId, snapshot.revision, snapshot);
 
       await pool.query(
         `INSERT INTO public.share_revisions (
            share_id, revision, html_content, code_type, title, description,
            markdown_theme, snapshot_hash, source, actor_type, actor_id,
-           restored_from_revision, created_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'owner', NULL, NULL, $10)`,
+           restored_from_revision, created_at, purged_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'owner', NULL, NULL, $10, $11)`,
         [
           snapshot.shareId, snapshot.revision, snapshot.htmlContent, snapshot.codeType,
           snapshot.title, snapshot.description, snapshot.markdownTheme, snapshotHash,
-          snapshot.source, snapshot.createdAt
+          snapshot.source, snapshot.createdAt, snapshot.purgedAt ?? null
         ]
       );
     }
@@ -272,6 +280,7 @@ async function seedFixtures(pool, { hasAccessRevision }) {
   await audit('page.update', 'drill-protected', { fields: ['passwordHash', 'isProtected'] }, 12);
   await audit('page.access.revoke', 'drill-revoked', { accessRevision: '7' }, 13);
   await audit('page.favorite.update', 'drill-public', { isFavorite: true }, 14);
+  await audit('page.revision.purge', 'drill-revoked', { revision: '1', purgedAt: BASE_TIME + 3500 }, 15);
 
   await pool.query(
     'UPDATE public.site_settings SET homepage_password_required = false, updated_at = $1 WHERE id = 1',
@@ -524,12 +533,30 @@ async function main() {
         report.contentRevisions !== undefined
         && report.contentRevisions.tracked === true
         && report.contentRevisions.snapshots === 5
+        && report.contentRevisions.purgedSnapshots === 1
         && report.contentRevisions.sharesWithBaseline === 4);
 
       const snapshotCount = await restorePool.query(
         'SELECT COUNT(*)::int AS count FROM public.share_revisions'
       );
       check('restored share_revisions carries all 5 seeded snapshots', snapshotCount.rows[0].count === 5);
+
+      const tombstoneResult = await restorePool.query(
+        `SELECT html_content, title, description, markdown_theme, snapshot_hash,
+                purged_at::text AS purged_at
+         FROM public.share_revisions
+         WHERE share_id = 'drill-revoked' AND revision = 1`
+      );
+      check('purged Revision stays purged across backup and restore (tombstone only)', (() => {
+        const row = tombstoneResult.rows[0];
+        return Boolean(row)
+          && row.html_content === null
+          && row.title === null
+          && row.description === null
+          && row.markdown_theme === null
+          && row.snapshot_hash === null
+          && row.purged_at === String(BASE_TIME + 3500);
+      })());
 
       await restorePool.query(
         "UPDATE public.share_revisions SET title = 'tampered snapshot title' WHERE share_id = 'drill-public' AND revision = 1"
@@ -566,6 +593,24 @@ async function main() {
         && pointerTamperReport !== null
         && pointerTamperReport.ok === false
         && pointerTamperReport.failures.some(failure => failure.includes('current_revision')));
+
+      await restorePool.query(
+        "UPDATE public.share_revisions SET html_content = '<p>resurrected</p>' WHERE share_id = 'drill-revoked' AND revision = 1"
+      );
+
+      const resurrectResult = await runScript('verify-backup.js', verifyArgs, childEnv);
+      let resurrectReport = null;
+
+      try {
+        resurrectReport = parseStdoutJson(resurrectResult, 'verify-backup.js (tombstone resurrected)');
+      } catch (error) {
+        // handled by the check below
+      }
+
+      check('verify rejects a restored-only tombstone resurrection', resurrectResult.code !== 0
+        && resurrectReport !== null
+        && resurrectReport.ok === false
+        && resurrectReport.failures.some(failure => failure.includes('share_revisions')));
 
       const operationCount = await restorePool.query(
         'SELECT COUNT(*)::int AS count FROM public.publish_operations'

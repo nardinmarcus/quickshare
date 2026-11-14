@@ -88,7 +88,7 @@ const skipReason = pgBinDir
   ? null
   : 'pg_dump/pg_restore not found on PATH or QS_PG_BIN_DIR; backup/restore drill not run';
 
-test('full backup restores into an isolated database and verifies (schema 001-008)', { skip: skipReason || false, timeout: 300000 }, async () => {
+test('full backup restores into an isolated database and verifies (schema 001-009)', { skip: skipReason || false, timeout: 300000 }, async () => {
   const { summary, stderr } = await runDrill('full');
 
   assert.equal(summary.ok, true, `drill failures: ${summary.failures.join('; ')}\n${stderr}`);
