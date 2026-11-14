@@ -22,6 +22,7 @@ jobs:
     timeout-minutes: 15
     env:
       DATABASE_MIGRATION_URL: ${{ secrets.DATABASE_MIGRATION_URL }}
+      DATABASE_URL: ${{ secrets.DATABASE_MIGRATION_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
