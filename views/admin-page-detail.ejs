@@ -29,6 +29,12 @@
       <i class="fas fa-pen" aria-hidden="true"></i>
       <span>编辑</span>
     </button>
+    <% if (sharedPage.isProtected) { %>
+    <button type="button" class="cyber-btn cyber-btn-secondary" id="revoke-access-btn">
+      <i class="fas fa-ban" aria-hidden="true"></i>
+      <span>撤销已解锁访问</span>
+    </button>
+    <% } %>
     <form method="post" action="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>/clone" class="admin-inline-form">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <button type="submit" class="cyber-btn cyber-btn-secondary">

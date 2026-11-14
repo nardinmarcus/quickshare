@@ -546,7 +546,7 @@ test('view events update eligible rows without selecting page content', async ()
   assert.equal(queries.length, 7);
   assert.doesNotMatch(queries.map(query => query.sql).join('\n'), /SELECT\s+\*|html_content|password_hash/i);
   assert.match(queries[0].sql, /expires_at IS NULL OR expires_at > \$2/);
-  assert.match(queries[0].sql, /is_protected, 0\) <> 1 OR \$3/);
-  assert.deepEqual(queries[0].params, ['active', 4999, false]);
+  assert.match(queries[0].sql, /is_protected, 0\) <> 1 OR \(\$3 AND access_revision = \$4::bigint\)/);
+  assert.deepEqual(queries[0].params, ['active', 4999, false, null]);
   assert.match(queries[2].sql, /SELECT is_protected, expires_at/);
 });

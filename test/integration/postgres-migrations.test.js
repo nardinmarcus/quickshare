@@ -38,7 +38,7 @@ test('baseline migration handles empty and legacy databases idempotently', async
   try {
     await resetPublicSchema(pool);
     const emptyResult = await runMigrations(pool, { logger: { info() {} } });
-    assert.deepEqual(emptyResult, { applied: ['001', '002', '003'], skipped: [] });
+    assert.deepEqual(emptyResult, { applied: ['001', '002', '003', '004'], skipped: [] });
 
     const emptyTables = await pool.query(`
       SELECT table_name
@@ -106,8 +106,8 @@ test('baseline migration handles empty and legacy databases idempotently', async
     );
     const migrationCount = await pool.query('SELECT COUNT(*)::int AS count FROM quickshare_schema_migrations');
 
-    assert.deepEqual(legacyResult, { applied: ['001', '002', '003'], skipped: [] });
-    assert.deepEqual(repeatedResult, { applied: [], skipped: ['001', '002', '003'] });
+    assert.deepEqual(legacyResult, { applied: ['001', '002', '003', '004'], skipped: [] });
+    assert.deepEqual(repeatedResult, { applied: [], skipped: ['001', '002', '003', '004'] });
     assert.deepEqual(migratedSentinel.rows, [{
       id: 'sentinel',
       html_content: '<h1>Keep me</h1>',
@@ -117,7 +117,7 @@ test('baseline migration handles empty and legacy databases idempotently', async
       is_favorite: false
     }]);
     assert.deepEqual(repeatedSentinel.rows, [{ is_favorite: true }]);
-    assert.equal(migrationCount.rows[0].count, 3);
+    assert.equal(migrationCount.rows[0].count, 4);
   } finally {
     await pool.end();
   }
@@ -277,7 +277,9 @@ test('view events atomically enforce page availability without loading content',
 
     assert.equal(await repository.recordViewEvent('active', 5000, false), 'counted');
     assert.equal(await repository.recordViewEvent('protected', 5000, false), 'protected');
-    assert.equal(await repository.recordViewEvent('protected', 5000, true), 'counted');
+    assert.equal(await repository.recordViewEvent('protected', 5000, true), 'protected');
+    assert.equal(await repository.recordViewEvent('protected', 5000, true, '1'), 'counted');
+    assert.equal(await repository.recordViewEvent('protected', 5000, true, '2'), 'protected');
     assert.equal(await repository.recordViewEvent('expired', 5000, false), 'expired');
     assert.equal(await repository.recordViewEvent('missing', 5000, false), 'not_found');
 
@@ -492,7 +494,7 @@ test('site settings persist real transitions and audit them exactly once', async
     assert.equal(await repository.getHomepagePasswordRequired(), false);
 
     const repeatedMigration = await runMigrations(pool, { logger: { info() {} } });
-    assert.deepEqual(repeatedMigration, { applied: [], skipped: ['001', '002', '003'] });
+    assert.deepEqual(repeatedMigration, { applied: [], skipped: ['001', '002', '003', '004'] });
     assert.equal(await repository.getHomepagePasswordRequired(), false);
 
     const logs = await repository.listAuditLogs();
@@ -533,6 +535,125 @@ test('site setting changes roll back when the audit record cannot be written', a
     await pool.query(
       'ALTER TABLE IF EXISTS audit_logs DROP CONSTRAINT IF EXISTS reject_homepage_setting_audit'
     ).catch(() => {});
+    await pool.end();
+  }
+});
+
+test('access revision migration backfills existing shares with revision 1', async () => {
+  const pool = createPostgresPool(connectionString, { env, max: 1 });
+
+  try {
+    await resetPublicSchema(pool);
+    await pool.query(`
+      CREATE TABLE pages (
+        id TEXT PRIMARY KEY,
+        html_content TEXT NOT NULL,
+        created_at BIGINT NOT NULL,
+        password_hash TEXT,
+        is_protected INTEGER DEFAULT 0,
+        code_type TEXT DEFAULT 'html',
+        title TEXT,
+        description TEXT,
+        expires_at BIGINT
+      )
+    `);
+    await pool.query(
+      'INSERT INTO pages (id, html_content, created_at, title) VALUES ($1, $2, $3, $4)',
+      ['legacy-share', '<h1>Legacy</h1>', 42, 'Legacy']
+    );
+
+    const first = await runMigrations(pool, { logger: { info() {} } });
+    const column = await pool.query(`
+      SELECT data_type, is_nullable, column_default
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'pages' AND column_name = 'access_revision'
+    `);
+    const row = await pool.query('SELECT access_revision::text AS access_revision FROM pages WHERE id = $1', ['legacy-share']);
+    const second = await runMigrations(pool, { logger: { info() {} } });
+
+    assert.deepEqual(first, { applied: ['001', '002', '003', '004'], skipped: [] });
+    assert.deepEqual(column.rows, [{
+      data_type: 'bigint',
+      is_nullable: 'NO',
+      column_default: '1'
+    }]);
+    assert.deepEqual(row.rows, [{ access_revision: '1' }]);
+    assert.deepEqual(second, { applied: [], skipped: ['001', '002', '003', '004'] });
+  } finally {
+    await pool.end();
+  }
+});
+
+test('access policy writes compare-and-swap the revision under a two-connection race', async () => {
+  const raceEnv = { ...env, POSTGRES_POOL_MAX: '2' };
+  const pool = createPostgresPool(connectionString, { env: raceEnv, max: 2 });
+  const repositoryA = Object.create(PostgresPageRepository.prototype);
+  repositoryA.pool = pool;
+  const repositoryB = Object.create(PostgresPageRepository.prototype);
+  repositoryB.pool = pool;
+
+  try {
+    await resetPublicSchema(pool);
+    await runMigrations(pool, { logger: { info() {} } });
+    await repositoryA.create({
+      id: 'race-share',
+      htmlContent: '<h1>Race</h1>',
+      createdAt: 1000,
+      passwordHash: 'hash-one',
+      encryptedPassword: 'enc-one',
+      isProtected: true
+    });
+    await repositoryA.create({
+      id: 'bystander-share',
+      htmlContent: '<h1>Bystander</h1>',
+      createdAt: 1001,
+      passwordHash: 'hash-bystander',
+      encryptedPassword: 'enc-bystander',
+      isProtected: true
+    });
+
+    assert.equal((await repositoryA.getById('race-share')).access_revision, '1');
+
+    // Two independent connections race on the same expected revision: the
+    // conditional UPDATE lets exactly one of them through.
+    const outcomes = await Promise.all([
+      repositoryA.updateProtectionWithAccessRevision('race-share', {
+        isProtected: true,
+        passwordHash: 'hash-two',
+        encryptedPassword: 'enc-two'
+      }, { expectedAccessRevision: '1', advanceAccessRevision: true }),
+      repositoryB.updateProtectionWithAccessRevision('race-share', {
+        isProtected: true,
+        passwordHash: 'hash-three',
+        encryptedPassword: 'enc-three'
+      }, { expectedAccessRevision: '1', advanceAccessRevision: true })
+    ]);
+    const updated = outcomes.filter(outcome => outcome.status === 'updated');
+    const conflicts = outcomes.filter(outcome => outcome.status === 'conflict');
+
+    assert.equal(updated.length, 1);
+    assert.equal(updated[0].accessRevision, '2');
+    assert.equal(conflicts.length, 1);
+    assert.equal(conflicts[0].accessRevision, '2');
+    assert.equal((await repositoryA.getById('race-share')).access_revision, '2');
+    assert.equal((await repositoryA.getById('bystander-share')).access_revision, '1');
+
+    // A view event carrying the revoked revision no longer counts; the
+    // current revision does.
+    assert.equal(await repositoryA.recordViewEvent('race-share', Date.now(), true, '1'), 'protected');
+    assert.equal(await repositoryA.recordViewEvent('race-share', Date.now(), true, '2'), 'counted');
+
+    // Explicit revocation is the same compare-and-swap advance.
+    assert.deepEqual(await repositoryA.revokeAccess('race-share', '1'), {
+      status: 'conflict',
+      accessRevision: '2'
+    });
+    assert.deepEqual(await repositoryA.revokeAccess('race-share', '2'), {
+      status: 'updated',
+      accessRevision: '3'
+    });
+    assert.equal((await repositoryA.getById('bystander-share')).access_revision, '1');
+  } finally {
     await pool.end();
   }
 });

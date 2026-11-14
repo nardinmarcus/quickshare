@@ -151,6 +151,38 @@
   editBtn.addEventListener('click', enterEditMode);
   cancelBtn.addEventListener('click', exitEditMode);
 
+  const revokeAccessBtn = document.getElementById('revoke-access-btn');
+
+  if (revokeAccessBtn) {
+    revokeAccessBtn.addEventListener('click', async function () {
+      revokeAccessBtn.disabled = true;
+
+      try {
+        const response = await fetch('/admin/pages/' + encodeURIComponent(originalData.id) + '/revoke-access', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            'X-CSRF-Token': csrfToken()
+          },
+          body: JSON.stringify({ expectedAccessRevision: originalData.accessRevision })
+        });
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || '撤销访问失败');
+        }
+
+        originalData = { ...originalData, accessRevision: data.accessRevision };
+        Toast.success('已撤销所有已解锁访问，访客需要重新输入密码');
+      } catch (error) {
+        Toast.error(error.message || '撤销访问失败');
+      } finally {
+        revokeAccessBtn.disabled = false;
+      }
+    });
+  }
+
   clearExpiresBtn.addEventListener('click', function () {
     expiresInput.value = '';
     expiresHint.textContent = '';
@@ -245,7 +277,8 @@
       description: description || null,
       htmlContent: contentTextarea.value,
       isProtected: protectedCheckbox.checked,
-      expiresAt
+      expiresAt,
+      expectedAccessRevision: originalData.accessRevision
     };
     if (themeSelect) payload.markdownTheme = themeSelect.value;
     if (protectedCheckbox.checked && customPassword) payload.password = customPassword;

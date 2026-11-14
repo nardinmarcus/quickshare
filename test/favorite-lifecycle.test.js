@@ -244,7 +244,8 @@ test('editing and expiring a Favorite Share preserves state and keeps admin favo
       htmlContent: '<h1>Edited lifecycle content</h1>',
       expiresAt,
       isProtected: true,
-      password: 'Safe9!'
+      password: 'Safe9!',
+      expectedAccessRevision: '1'
     })
   });
   const storedAfterUpdate = await app.locals.pageRepository.getById(sharedPage.urlId);
