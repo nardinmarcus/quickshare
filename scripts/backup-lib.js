@@ -533,6 +533,16 @@ async function collectSnapshot(query) {
     for (const row of pageRows) {
       pages.currentRevisions[row.id] = canonicalValue(row.current_revision);
     }
+
+    // Publish state is recorded verbatim too (T11): a restore that
+    // flips a Share back to published — or takes a live Share down —
+    // must fail verification by name (published drift), not merely as
+    // an anonymous row-digest mismatch.
+    pages.publishedStates = {};
+
+    for (const row of pageRows) {
+      pages.publishedStates[row.id] = canonicalValue(row.published);
+    }
   }
 
   // Content Revision snapshots (migration 007). Present only when the
@@ -881,6 +891,21 @@ function compareSnapshots(expected, actual) {
           );
         }
       }
+
+      // Publish state (T11): only judged when the backup itself carries
+      // the verbatim map, so pre-T11 manifests verify exactly as before.
+      if (expected.pages.publishedStates) {
+        const expectedPublished = expected.pages.publishedStates;
+        const actualPublished = actual.pages.publishedStates || {};
+
+        for (const id of Object.keys(expectedPublished)) {
+          if (actualPublished[id] !== expectedPublished[id]) {
+            failures.push(
+              `pages ${id} published drift (backup ${String(expectedPublished[id])}, restored ${String(actualPublished[id])})`
+            );
+          }
+        }
+      }
     }
   }
 
@@ -942,6 +967,28 @@ function detectAccessRevocations(auditRows) {
 
     if (row.action === 'page.access.revoke') {
       events.push({ ...base, type: 'access-revoke' });
+      continue;
+    }
+
+    if (row.action === 'page.publish.update') {
+      // An unpublish/republish advances the access revision, so it is
+      // an access-revoking event for restore-point safety (T11): a
+      // restore point taken before one must not silently resurrect the
+      // credentials it killed.
+      let details = {};
+
+      try {
+        details = JSON.parse(row.details || '{}');
+      } catch (error) {
+        details = {};
+      }
+
+      events.push({
+        ...base,
+        type: 'publish-state-change',
+        from: details.from ?? null,
+        to: details.to ?? null
+      });
       continue;
     }
 

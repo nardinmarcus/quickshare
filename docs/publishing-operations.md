@@ -179,6 +179,19 @@ Share 已删除 410 `operation_result_unavailable`。未命中才在同一事
 态永不自动重试、永不自动换基线；409 时清除意图并提示，成功后清
 除。
 
+## 下架与重新发布（T11）
+
+后台下架/重新发布（`POST /admin/pages/:id/publish-state`，仅后台会
+话 + CSRF）与保存/恢复同属后台命名空间的操作：动作名为
+`share.unpublish` / `share.republish`，摘要绑定目标状态与
+`expectedAccessRevision`，回执为 `{kind, shareId, published, changed,
+accessRevision}`（无任何秘密材料）。真实翻转推进 `access_revision`
+并与 `page.publish.update` 审计、操作记录同事务提交；把状态设为当
+前值是不推进任何版本的 unchanged 成功，同样留记录与回执。响应丢
+失时经 `GET /admin/operations/:requestId` 按原标识确认，或以同一标
+识、同一前置条件重试直接重放回执——重放先于前置条件判定，因此重
+试时版本已推进也不会误报 412。
+
 ## 历史清除与回执（T10）
 
 所有者在后台永久清除某个非当前 Revision（见

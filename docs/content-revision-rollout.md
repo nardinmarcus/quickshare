@@ -2,7 +2,7 @@
 
 ## 机制
 
-- 每个 Share 新增内容版本 `current_revision`（数据库 `BIGINT`，JSON 中为十进制字符串），由迁移 `007_share_revisions.sql` 引入；`published`（`BOOLEAN NOT NULL DEFAULT TRUE`）记录发布状态，本票不提供取消发布操作。存量 Share 的 `current_revision` 在迁移后为 `NULL`（尚无基线），由基线回填补齐为 `1`（见下方上线顺序），应用代码不会为 `NULL` 静默代入任何版本。
+- 每个 Share 新增内容版本 `current_revision`（数据库 `BIGINT`，JSON 中为十进制字符串），由迁移 `007_share_revisions.sql` 引入；`published`（`BOOLEAN NOT NULL DEFAULT TRUE`）记录发布状态，本票不提供取消发布操作（下架/重新发布操作由 T11 / Issue #35 引入，语义见 [Access Revision 上线说明](access-revision-rollout.md) 的「发布状态与访问版本」一节）。存量 Share 的 `current_revision` 在迁移后为 `NULL`（尚无基线），由基线回填补齐为 `1`（见下方上线顺序），应用代码不会为 `NULL` 静默代入任何版本。
 - 每次内容变更同步写入三样东西，且在同一事务内完成：物化投影（`pages` 行本身）、不可变快照（`share_revisions` 表中 `(share_id, revision)` 一行）、审计（`page.content.update`）。没有第二条绕过 Revision 的内容写路径：网页创建、Share API 创建、后台克隆都写 Revision 1 基线快照；离线写标题脚本 `backfill-page-titles.js --write` 在 007 结构下同样走版本化写入。
 - 快照只包含内容本身：正文字节（精确保存，含 CRLF）、定型 `code_type`、标题、描述、Markdown Theme Preset；另有完整性哈希 `snapshot_hash`（对 Share ID + 版本 + 内容载荷计算）、操作来源/身份（`source`、`actor_type`、`actor_id`）、可空的恢复来源 `restored_from_revision`（本票无恢复操作，恒为 `NULL`）与捕获时间。保护、有效期、收藏、浏览量是访问/运行状态，永不进入内容历史。
 - 版本单调递增；保存内容与当前快照逐字节相同时不推进版本（响应 `contentChanged: false`，不写新快照）。

@@ -869,6 +869,131 @@ class PostgresPageRepository {
     });
   }
 
+  // Publish-state transition (T11, issue #35): unpublish or republish a
+  // Share without touching its content, password, expiry or history.
+  // The transition and the "already in the target state" judgment run
+  // under the Share row lock inside the publishing gate, so a state race
+  // has exactly one winner per access-version precondition. A real
+  // transition flips `published` and advances `access_revision` in the
+  // same statement — every previously issued unlock cookie dies on BOTH
+  // transitions and can never revive when the Share is republished —
+  // and writes the `page.publish.update` audit in the same transaction.
+  // Setting the state the Share already has is a successful no-op: no
+  // access-version advance (parent spec §4: a completely unchanged
+  // policy does not advance the version) and no audit, but a keyed
+  // request still records its operation (parent spec §8), so a lost
+  // response stays confirmable and a retry replays the recorded result.
+  // Precondition failures (missing 428 / stale 412 family, judged here
+  // against the locked row) record nothing. Replay resolution precedes
+  // every judgment, exactly like restore.
+  async setPublishedState({ id, published, precondition = {}, operation = null, ip = null }) {
+    const targetPublished = published === true;
+    const expected = precondition.expectedAccessRevision == null
+      ? null
+      : toAccessRevisionString(precondition.expectedAccessRevision);
+
+    return withPublishingWrite(this.pool, async (client) => {
+      if (operation) {
+        await acquireOperationLock(client, operation);
+
+        const resolved = await resolveExistingOperation(client, operation);
+
+        if (resolved) {
+          return resolved;
+        }
+      }
+
+      const selectResult = await client.query(
+        'SELECT * FROM pages WHERE id = $1 FOR UPDATE',
+        [id]
+      );
+      const row = selectResult.rows[0];
+
+      if (!row) {
+        return { outcome: 'executed', result: { status: 'not_found' } };
+      }
+
+      const currentAccessRevision = toAccessRevisionString(row.access_revision);
+      const currentPublished = row.published !== false;
+
+      if (precondition.accessPreconditionMissing) {
+        return {
+          outcome: 'executed',
+          result: { status: 'access_precondition_required', accessRevision: currentAccessRevision }
+        };
+      }
+
+      if (expected === null || !accessRevisionMatches(currentAccessRevision, expected)) {
+        return {
+          outcome: 'executed',
+          result: { status: 'conflict', accessRevision: currentAccessRevision }
+        };
+      }
+
+      const changed = currentPublished !== targetPublished;
+      let resultingAccessRevision = currentAccessRevision;
+
+      if (changed) {
+        const updateResult = await client.query(
+          `
+            UPDATE pages
+            SET published = $2, access_revision = access_revision + 1
+            WHERE id = $1
+            RETURNING access_revision::text AS access_revision
+          `,
+          [id, targetPublished]
+        );
+        resultingAccessRevision = updateResult.rows[0].access_revision;
+
+        await client.query(
+          'INSERT INTO audit_logs (action, page_id, details, ip, created_at) VALUES ($1, $2, $3, $4, $5)',
+          [
+            'page.publish.update',
+            id,
+            JSON.stringify({
+              from: currentPublished,
+              to: targetPublished,
+              accessRevision: resultingAccessRevision
+            }),
+            ip,
+            Date.now()
+          ]
+        );
+      }
+
+      const result = {
+        status: changed ? 'updated' : 'unchanged',
+        published: targetPublished,
+        changed,
+        accessRevision: resultingAccessRevision,
+        contentRevision: toContentRevisionString(row.current_revision)
+      };
+
+      if (!operation) {
+        return { outcome: 'executed', result };
+      }
+
+      const record = {
+        ...operation,
+        resultShareId: id,
+        resultRevision: null,
+        resultAccessRevision: resultingAccessRevision,
+        receipt: {
+          kind: operation.action,
+          shareId: id,
+          published: targetPublished,
+          changed,
+          accessRevision: resultingAccessRevision
+        },
+        resultState: 'committed',
+        createdAt: Date.now()
+      };
+      await insertOperationRow(client, record);
+
+      return { outcome: 'executed', result, operation: record };
+    });
+  }
+
   // Permanent purge of one non-current Revision (T10, issue #34).
   // Owner-only and dashboard-only by route design — there is no
   // API-Key or CLI entry point. Inside one gated transaction the Share
@@ -1080,7 +1205,7 @@ class PostgresPageRepository {
 
     const result = await this.pool.query(
       `
-        SELECT id, created_at, code_type, title, description, is_protected, is_favorite, encrypted_password, expires_at, COALESCE(view_count, 0) AS view_count
+        SELECT id, created_at, code_type, title, description, is_protected, is_favorite, encrypted_password, expires_at, COALESCE(view_count, 0) AS view_count, published, access_revision::text AS access_revision
         FROM pages
         ${whereClause}
         ORDER BY ${orderColumn} ${orderDirection}
@@ -1118,6 +1243,7 @@ class PostgresPageRepository {
             UPDATE pages
             SET view_count = COALESCE(view_count, 0) + 1
             WHERE id = $1
+              AND published = TRUE
               AND (expires_at IS NULL OR expires_at > $2)
               AND (COALESCE(is_protected, 0) <> 1 OR ($3 AND access_revision = $4::bigint))
             RETURNING id
@@ -1130,12 +1256,19 @@ class PostgresPageRepository {
         }
 
         const stateResult = await client.query(
-          'SELECT is_protected, expires_at FROM pages WHERE id = $1 LIMIT 1',
+          'SELECT is_protected, expires_at, published FROM pages WHERE id = $1 LIMIT 1',
           [id]
         );
         const page = stateResult.rows[0];
 
         if (!page) {
+          return 'not_found';
+        }
+
+        // An unpublished Share is indistinguishable from a missing one
+        // on every public surface (T11), and that judgment outranks
+        // expiry: unpublished + expired still reports 'not_found'.
+        if (page.published === false) {
           return 'not_found';
         }
 

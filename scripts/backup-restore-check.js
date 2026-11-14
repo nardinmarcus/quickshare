@@ -31,6 +31,11 @@
 //     encrypted receipt) restores exactly, and a restored-only tamper
 //     that flips it to a tombstone is rejected by verify (explicitly
 //     skipped on a legacy 001-003 schema, where the table does not exist)
+//   - publish state (T11) round-trips: an unpublished fixture Share
+//     stays unpublished across backup and restore, and a restored-only
+//     flip of its published flag is rejected by verify as a named
+//     "published drift" failure (explicitly skipped on a legacy 001-003
+//     schema, where the column does not exist)
 //
 // No production data is involved; both fixture databases are dropped at the
 // end unless --keep is passed.
@@ -107,7 +112,7 @@ async function seedFixtures(pool, { hasAccessRevision }) {
     if (hasAccessRevision) {
       params.push(revision);
       params.push(currentRevision || null);
-      params.push(true);
+      params.push(row.published !== false);
     }
 
     return params;
@@ -155,6 +160,15 @@ async function seedFixtures(pool, { hasAccessRevision }) {
     expiresAt: BASE_TIME - 1000
   }, '1', '1'));
 
+  await pool.query(insertPage, pageParams({
+    id: 'drill-unpublished',
+    htmlContent: '<p>Drill unpublished body</p>',
+    createdAt: BASE_TIME + 6,
+    title: 'Drill unpublished',
+    description: 'Unpublished drill fixture',
+    published: false
+  }, '3', '1'));
+
   if (hasAccessRevision) {
     // Full schema includes migration 007: every fixture Share gets its
     // immutable snapshots — drill-revoked carries a two-Revision history
@@ -197,6 +211,12 @@ async function seedFixtures(pool, { hasAccessRevision }) {
         htmlContent: '<p>Drill expired body</p>', codeType: 'html',
         title: 'Drill expired', description: null, markdownTheme: null,
         source: 'baseline', createdAt: BASE_TIME + 5000
+      },
+      {
+        shareId: 'drill-unpublished', revision: '1',
+        htmlContent: '<p>Drill unpublished body</p>', codeType: 'html',
+        title: 'Drill unpublished', description: 'Unpublished drill fixture', markdownTheme: null,
+        source: 'baseline', createdAt: BASE_TIME + 6000
       }
     ];
 
@@ -281,6 +301,7 @@ async function seedFixtures(pool, { hasAccessRevision }) {
   await audit('page.access.revoke', 'drill-revoked', { accessRevision: '7' }, 13);
   await audit('page.favorite.update', 'drill-public', { isFavorite: true }, 14);
   await audit('page.revision.purge', 'drill-revoked', { revision: '1', purgedAt: BASE_TIME + 3500 }, 15);
+  await audit('page.publish.update', 'drill-unpublished', { from: true, to: false, accessRevision: '3' }, 16);
 
   await pool.query(
     'UPDATE public.site_settings SET homepage_password_required = false, updated_at = $1 WHERE id = 1',
@@ -325,6 +346,8 @@ async function main() {
     log('SKIP credential_version assertions: schema 006 absent (legacy 001-003 fixture)');
     skipped.push('content Revision assertions skipped: schema 007 absent (legacy 001-003 fixture)');
     log('SKIP content Revision assertions: schema 007 absent (legacy 001-003 fixture)');
+    skipped.push('publish-state assertions skipped: schema 007 absent (legacy 001-003 fixture)');
+    log('SKIP publish-state assertions: schema 007 absent (legacy 001-003 fixture)');
   }
 
   if (!process.env.SESSION_SECRET) {
@@ -448,6 +471,7 @@ async function main() {
     const detectedTypes = (report.revocations.detected || []).map(event => `${event.pageId}:${event.type}`);
     check('revocation detector sees the policy change for drill-protected', detectedTypes.includes('drill-protected:access-policy-change'));
     check('revocation detector sees the access revoke for drill-revoked', detectedTypes.includes('drill-revoked:access-revoke'));
+    check('revocation detector sees the publish-state change for drill-unpublished', detectedTypes.includes('drill-unpublished:publish-state-change'));
 
     restorePool = createPostgresPool(restoreUrl, { max: 1 });
 
@@ -529,17 +553,23 @@ async function main() {
         `non-default current_revision ${BIG_CONTENT_REVISION} restored exactly`,
         currentResult.rows[0].revision === BIG_CONTENT_REVISION
       );
-      check('verify report accounts for the 5 Revision snapshots on 4 Shares',
+      check('verify report accounts for the 6 Revision snapshots on 5 Shares',
         report.contentRevisions !== undefined
         && report.contentRevisions.tracked === true
-        && report.contentRevisions.snapshots === 5
+        && report.contentRevisions.snapshots === 6
         && report.contentRevisions.purgedSnapshots === 1
-        && report.contentRevisions.sharesWithBaseline === 4);
+        && report.contentRevisions.sharesWithBaseline === 5);
 
       const snapshotCount = await restorePool.query(
         'SELECT COUNT(*)::int AS count FROM public.share_revisions'
       );
-      check('restored share_revisions carries all 5 seeded snapshots', snapshotCount.rows[0].count === 5);
+      check('restored share_revisions carries all 6 seeded snapshots', snapshotCount.rows[0].count === 6);
+
+      const unpublishedResult = await restorePool.query(
+        "SELECT published FROM public.pages WHERE id = 'drill-unpublished'"
+      );
+      check('unpublished Share stays unpublished across backup and restore',
+        unpublishedResult.rows[0].published === false);
 
       const tombstoneResult = await restorePool.query(
         `SELECT html_content, title, description, markdown_theme, snapshot_hash,
@@ -635,11 +665,30 @@ async function main() {
         && operationTamperReport !== null
         && operationTamperReport.ok === false
         && operationTamperReport.failures.some(failure => failure.includes('publish_operations')));
+
+      await restorePool.query(
+        "UPDATE public.pages SET published = TRUE WHERE id = 'drill-unpublished'"
+      );
+
+      const publishedTamperResult = await runScript('verify-backup.js', verifyArgs, childEnv);
+      let publishedTamperReport = null;
+
+      try {
+        publishedTamperReport = parseStdoutJson(publishedTamperResult, 'verify-backup.js (published tampered)');
+      } catch (error) {
+        // handled by the check below
+      }
+
+      check('verify rejects a restored-only published drift', publishedTamperResult.code !== 0
+        && publishedTamperReport !== null
+        && publishedTamperReport.ok === false
+        && publishedTamperReport.failures.some(failure => failure.includes('published drift')));
     }
 
     const summary = {
       ok: failures.length === 0,
       schema: options.schema,
+      publicationState: hasAccessRevision ? 'unpublished-exercised' : 'skipped-legacy-schema',
       steps,
       skipped,
       failures
