@@ -67,41 +67,57 @@ async function main() {
         WHERE table_schema='public' AND table_name = ANY($1)`,
       [['pages', 'audit_logs', 'api_keys', 'site_settings', 'share_revisions', 'publish_operations', 'share_grants']]
     );
-    check('all 7 application tables exist', tables.rows.length === 7, `found ${tables.rows.length}`);
+    const existing = new Set(tables.rows.map((r) => r.table_name));
+    check('all 7 application tables exist', existing.size === 7, `found ${existing.size}`);
 
-    const grantsPk = await pool.query(
-      `SELECT a.attname FROM pg_index i
-         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-        WHERE i.indrelid = 'public.share_grants'::regclass AND i.indisprimary
-        ORDER BY a.attname`
-    );
-    check(
-      'share_grants PK is (api_key_id, share_id)',
-      JSON.stringify(grantsPk.rows.map((r) => r.attname)) === JSON.stringify(['api_key_id', 'share_id']),
-      grantsPk.rows.map((r) => r.attname).join(',')
-    );
-    const opsPk = await pool.query(
-      `SELECT a.attname FROM pg_index i
-         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-        WHERE i.indrelid = 'public.publish_operations'::regclass AND i.indisprimary
-        ORDER BY a.attname`
-    );
-    check(
-      'publish_operations PK is (actor_namespace, request_id)',
-      JSON.stringify(opsPk.rows.map((r) => r.attname)) === JSON.stringify(['actor_namespace', 'request_id']),
-      opsPk.rows.map((r) => r.attname).join(',')
-    );
+    const pkOf = async (table) => {
+      const r = await pool.query(
+        `SELECT a.attname FROM pg_index i
+           JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+          WHERE i.indrelid = $1::regclass AND i.indisprimary
+          ORDER BY a.attname`,
+        [`public.${table}`]
+      );
+      return r.rows.map((row) => row.attname);
+    };
+    if (existing.has('share_grants')) {
+      const pk = await pkOf('share_grants');
+      check('share_grants PK is (api_key_id, share_id)',
+        JSON.stringify(pk) === JSON.stringify(['api_key_id', 'share_id']), pk.join(','));
+    } else {
+      check('share_grants PK is (api_key_id, share_id)', false, 'table missing');
+    }
+    if (existing.has('publish_operations')) {
+      const pk = await pkOf('publish_operations');
+      check('publish_operations PK is (actor_namespace, request_id)',
+        JSON.stringify(pk) === JSON.stringify(['actor_namespace', 'request_id']), pk.join(','));
+    } else {
+      check('publish_operations PK is (actor_namespace, request_id)', false, 'table missing');
+    }
 
-    const settings = await pool.query('SELECT id, publishing_writes_paused FROM public.site_settings WHERE id = 1');
-    check('site_settings id=1 exists', settings.rows.length === 1,
-      settings.rows.length ? `paused=${settings.rows[0].publishing_writes_paused}` : 'missing');
+    const pausedCol = await col('site_settings', 'publishing_writes_paused');
+    if (pausedCol) {
+      const settings = await pool.query('SELECT id, publishing_writes_paused FROM public.site_settings WHERE id = 1');
+      check('site_settings id=1 exists', settings.rows.length === 1,
+        settings.rows.length ? `paused=${settings.rows[0].publishing_writes_paused}` : 'missing');
+    } else {
+      check('site_settings id=1 exists', false, 'publishing_writes_paused column missing');
+    }
 
     for (const t of ['pages', 'share_revisions', 'api_keys', 'share_grants', 'publish_operations', 'audit_logs']) {
+      if (!existing.has(t)) {
+        console.log(`count ${t}: (table missing)`);
+        continue;
+      }
       const c = await pool.query(`SELECT COUNT(*)::int AS n FROM public.${t}`);
       console.log(`count ${t}: ${c.rows[0].n}`);
     }
-    const nullRev = await pool.query('SELECT COUNT(*)::int AS n FROM public.pages WHERE current_revision IS NULL');
-    console.log(`pages with current_revision NULL (awaiting baseline): ${nullRev.rows[0].n}`);
+    if (await col('pages', 'current_revision')) {
+      const nullRev = await pool.query('SELECT COUNT(*)::int AS n FROM public.pages WHERE current_revision IS NULL');
+      console.log(`pages with current_revision NULL (awaiting baseline): ${nullRev.rows[0].n}`);
+    } else {
+      console.log('pages with current_revision NULL: (column missing)');
+    }
 
     if (failures.length) {
       console.error(`[release-check] ${failures.length} check(s) failed`);
