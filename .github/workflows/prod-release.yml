@@ -1,0 +1,85 @@
+name: Prod Release (one-off)
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Release stage"
+        required: true
+        type: choice
+        options:
+          - status
+          - migrate
+          - backfill
+          - resume
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_MIGRATION_URL: ${{ secrets.DATABASE_MIGRATION_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Status — maintenance flag (may not exist before migration 005)
+        if: inputs.stage == 'status'
+        run: npm run db:maintenance -- status || echo "maintenance status unavailable (pre-005 schema)"
+
+      - name: Status — schema and counts (read-only)
+        if: inputs.stage == 'status'
+        run: node scripts/release-check.js || echo "release-check reported failures (expected before migration)"
+
+      - name: Migrate — first run
+        if: inputs.stage == 'migrate'
+        run: npm run db:migrate
+
+      - name: Migrate — second run (must be all skipped)
+        if: inputs.stage == 'migrate'
+        run: npm run db:migrate
+
+      - name: Verify schema after migrate
+        if: inputs.stage == 'migrate'
+        run: node scripts/release-check.js
+
+      - name: Pause writes and drain
+        if: inputs.stage == 'backfill'
+        run: npm run db:maintenance -- pause
+
+      - name: Backfill revision baselines — first run
+        if: inputs.stage == 'backfill'
+        run: npm run db:backfill-revisions
+
+      - name: Backfill revision baselines — second run (must be all skipped)
+        if: inputs.stage == 'backfill'
+        run: npm run db:backfill-revisions
+
+      - name: Resume writes
+        if: inputs.stage == 'backfill'
+        run: npm run db:maintenance -- resume
+
+      - name: Verify final state
+        if: inputs.stage == 'backfill'
+        run: |
+          npm run db:maintenance -- status
+          node scripts/release-check.js
+
+      - name: Resume writes only (recovery)
+        if: inputs.stage == 'resume'
+        run: npm run db:maintenance -- resume
