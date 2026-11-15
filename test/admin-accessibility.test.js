@@ -290,3 +290,27 @@ test('password entry and mutation flows expose labels, live updates, and busy st
   assert.match(detail, /id="protection-hint"[^>]+aria-live="polite"/);
   assert.match(detailScript, /editForm\.setAttribute\('aria-busy'/);
 });
+
+test('custom password inputs never silently truncate with maxlength', () => {
+  const inputTagFor = (template, id) => {
+    const idIndex = template.indexOf(`id="${id}"`);
+    assert.ok(idIndex >= 0, `${id} input exists`);
+    const start = template.lastIndexOf('<input', idIndex);
+    const end = template.indexOf('>', idIndex);
+    assert.ok(start >= 0 && end > start, `${id} input tag is well-formed`);
+    return template.slice(start, end + 1);
+  };
+
+  const homepage = fs.readFileSync(path.join(__dirname, '../views/index.ejs'), 'utf8');
+  const detail = fs.readFileSync(path.join(__dirname, '../views/admin-page-detail.ejs'), 'utf8');
+
+  // A maxlength attribute makes the browser clip an over-long password
+  // before the 4-12 validation can ever see it, so the stored password
+  // silently differs from what the user typed. The rule must be enforced
+  // by validation with a visible error, never by silent truncation.
+  assert.doesNotMatch(inputTagFor(homepage, 'custom-password-input'), /maxlength/);
+  assert.doesNotMatch(inputTagFor(detail, 'edit-password'), /maxlength/);
+
+  // The homepage hint states the length rule up front, not only in errors.
+  assert.match(homepage, /id="custom-password-hint"[^>]*>4–12 位，仅可包含英文字母、数字及/);
+});
