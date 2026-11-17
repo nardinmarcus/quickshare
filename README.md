@@ -65,8 +65,6 @@ vercel-app.js     Vercel 构建时使用的 app 包装
 models/           数据层（Repository 选择器 + Postgres / 内存实现）
 db/migrations/    按编号执行的 Postgres schema 迁移
 views/            EJS 模板（含 admin-* 管理后台页面）
-middleware/       中间件（auth.js）
-routes/           路由模块（pages.js 已废弃）
 public/           静态资源（css/ js/ icon/）
 utils/            security.js, contentRenderer.js, codeDetector.js, pageTitle.js
 scripts/          迁移、密码 hash 与维护脚本
