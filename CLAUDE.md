@@ -8,7 +8,7 @@ Express 4 + EJS + PostgreSQL (生产) / 内存 (开发)。部署在 Vercel。
 
 - 仓库选择在 `models/pageRepository.js`；本地无 `DATABASE_URL` 时可用内存，生产缺失持久数据库时必须启动失败。
 - 数据库 schema 只通过 `db/migrations/` 与 `npm run db:migrate` 更新，业务请求和服务启动不得执行 DDL。
-- 认证分两层：
+- 认证分两层（全部鉴权中间件均定义于 `app.js` 内，无独立 middleware 文件）：
   - **前端登录**（`/login`）：签名 cookie `admin_session`，用于首页创建分享。中间件 `requireAdmin`。
   - **管理后台**（`/admin/login`）：签名 cookie `dashboard_admin_session`，用于 pages/stats/audit 管理。中间件 `requireDashboardAdmin`。
 - 两层密码独立配置（`AUTH_PASSWORD` / `ADMIN_PASSWORD_HASH` vs `ADMIN_DASHBOARD_PASSWORD` / `ADMIN_DASHBOARD_PASSWORD_HASH`）；明文形式只允许本地开发，生产只接受 scrypt hash。
@@ -63,9 +63,6 @@ vercel-app.js    Vercel 构建时使用的 app 包装
 models/          数据层（pageRepository 选择器 + Postgres / 内存仓储 + 迁移与连接配置）
 db/migrations/  编号 SQL 迁移；应用部署前显式执行
 views/           EJS 模板（index / login / password / admin-* / error / partials/）
-middleware/      中间件（auth.js: isAuthenticated）
-routes/          路由模块（pages.js 已废弃，返回 410）
-session/         会话存储（vercel-kv-store.js 未使用的死代码）
 public/          静态资源（css/ js/ icon/）
   css/           styles.css + login.css + markdown-*.css（bytedance / github / apple / notion / claude）
   js/            main.js + login.js + password.js + view-event.js + admin*.js + paste-fix.js + theme.js
