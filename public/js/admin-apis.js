@@ -85,13 +85,12 @@
       option.append(checkbox, document.createTextNode(' ' + label));
       scopesCell.appendChild(option);
     }
-    const scopesButton = document.createElement('button');
-    scopesButton.type = 'button';
-    scopesButton.className = 'cyber-btn cyber-btn-secondary api-key-scopes-btn';
-    scopesButton.dataset.apiKeyId = apiKey.id;
-    scopesButton.dataset.apiKeyName = apiKey.name;
-    scopesButton.textContent = '保存范围';
-    scopesCell.appendChild(scopesButton);
+    const scopesStatus = document.createElement('span');
+    scopesStatus.className = 'api-scope-status';
+    scopesStatus.setAttribute('role', 'status');
+    scopesStatus.setAttribute('aria-live', 'polite');
+    scopesStatus.textContent = '改动会自动保存';
+    scopesCell.appendChild(scopesStatus);
 
     const created = document.createElement('td');
     const createdTime = document.createElement('time');
@@ -254,6 +253,16 @@
     try {
       await navigator.clipboard.writeText(secret);
       notify('success', 'API 密钥已复制');
+      if (copyButton && !copyButton.dataset.flashTimer) {
+        const original = copyButton.textContent;
+        copyButton.textContent = '已复制';
+        copyButton.classList.add('is-copied');
+        copyButton.dataset.flashTimer = String(setTimeout(() => {
+          copyButton.textContent = original;
+          copyButton.classList.remove('is-copied');
+          delete copyButton.dataset.flashTimer;
+        }, 1600));
+      }
     } catch (error) {
       const selection = window.getSelection();
       const range = document.createRange();
@@ -264,17 +273,22 @@
     }
   });
 
-  async function saveScopes(button) {
-    const id = button.dataset.apiKeyId;
-    const row = button.closest('tr');
+  // Scope checkboxes save themselves: toggling one is the decision, so
+  // the row reports 保存中 / 已保存 / 保存失败 in place instead of
+  // asking for a separate save press that is easy to forget.
+  const scopeSaveTimers = new Map();
+
+  async function saveScopes(row) {
+    const id = row?.dataset.apiKeyId;
 
     if (!id || !row) return;
 
+    const status = row.querySelector('.api-scope-status');
     const scopes = Array.from(row.querySelectorAll('.api-scope-checkbox'))
       .filter(checkbox => checkbox.checked)
       .map(checkbox => checkbox.dataset.scope);
 
-    button.disabled = true;
+    if (status) status.textContent = '保存中…';
 
     try {
       const response = await fetch('/admin/apis/keys/' + encodeURIComponent(id) + '/scopes', {
@@ -292,12 +306,23 @@
         throw new Error(data.error || '保存授权范围失败');
       }
 
-      notify('success', '授权范围已保存');
+      if (status) status.textContent = '已保存';
     } catch (error) {
+      if (status) status.textContent = '保存失败，请改动任意一项重试';
       notify('error', error.message);
-    } finally {
-      button.disabled = false;
     }
+  }
+
+  function queueScopeSave(row) {
+    const id = row?.dataset.apiKeyId;
+    if (!id) return;
+
+    // Coalesce rapid toggles into one save with the final state.
+    if (scopeSaveTimers.has(id)) clearTimeout(scopeSaveTimers.get(id));
+    scopeSaveTimers.set(id, setTimeout(() => {
+      scopeSaveTimers.delete(id);
+      saveScopes(row);
+    }, 350));
   }
 
   // --- Per-Share grants (T12; edit grant + auto-edit opt-in, T13;
@@ -596,14 +621,15 @@
 
   document.querySelectorAll('.api-grant-panel').forEach(wireGrantPanel);
 
-  keyRows.addEventListener('click', function (event) {
-    const scopesButton = event.target.closest('.api-key-scopes-btn');
+  keyRows.addEventListener('change', function (event) {
+    const checkbox = event.target.closest('.api-scope-checkbox');
 
-    if (scopesButton) {
-      saveScopes(scopesButton);
-      return;
+    if (checkbox) {
+      queueScopeSave(checkbox.closest('tr'));
     }
+  });
 
+  keyRows.addEventListener('click', function (event) {
     const rotateButton = event.target.closest('.api-key-rotate-btn');
 
     if (rotateButton) {

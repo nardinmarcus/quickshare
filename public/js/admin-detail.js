@@ -51,6 +51,51 @@
     return meta ? meta.getAttribute('content') : '';
   }
 
+  // Copy the public link the same way the home publish result does: one
+  // action, and with a password it copies link + password together,
+  // confirming in place on the button.
+  const copyPublicLinkBtn = document.getElementById('copy-public-link-btn');
+  if (copyPublicLinkBtn) {
+    copyPublicLinkBtn.addEventListener('click', async () => {
+      const url = document.getElementById('public-url-link')?.href || '';
+      const password = document.querySelector('#password-display .admin-password-value')?.textContent || '';
+      const text = password && url ? `链接: ${url}\n密码: ${password}` : url;
+      if (!text) return;
+
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(text);
+        copied = true;
+      } catch (error) {
+        const scratch = document.createElement('textarea');
+        scratch.value = text;
+        scratch.setAttribute('readonly', '');
+        scratch.style.position = 'fixed';
+        scratch.style.left = '-9999px';
+        document.body.appendChild(scratch);
+        scratch.select();
+        try { copied = document.execCommand('copy'); } catch (fallbackError) { copied = false; }
+        scratch.remove();
+      }
+
+      if (copied) {
+        if (!copyPublicLinkBtn.dataset.flashTimer) {
+          const original = copyPublicLinkBtn.innerHTML;
+          copyPublicLinkBtn.innerHTML = '<i class="fas fa-check" aria-hidden="true"></i> 已复制';
+          copyPublicLinkBtn.classList.add('is-copied');
+          copyPublicLinkBtn.dataset.flashTimer = String(setTimeout(() => {
+            copyPublicLinkBtn.innerHTML = original;
+            copyPublicLinkBtn.classList.remove('is-copied');
+            delete copyPublicLinkBtn.dataset.flashTimer;
+          }, 1600));
+        }
+        if (window.Toast) window.Toast.success(password ? '链接和密码已复制' : '链接已复制');
+      } else if (window.Toast) {
+        window.Toast.error('自动复制失败，请长按或右键复制链接');
+      }
+    });
+  }
+
   try {
     originalData = JSON.parse(pageDataElement.textContent || '{}');
   } catch (error) {

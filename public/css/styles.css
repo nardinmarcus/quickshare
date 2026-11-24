@@ -5068,6 +5068,80 @@ body:hover::-webkit-scrollbar,
   border-color: var(--success-color);
 }
 
+/* --- Admin: same motion language as the publish flow ---------------------
+   Admin state changes reuse publishReveal and the --motion-* tokens:
+   modals and toolbars arrive instead of popping in, panels that open
+   under a heading reveal from it, and stats bars grow from their axis
+   so the eye can follow the value. The global prefers-reduced-motion
+   rule flattens all of these too. */
+.admin-modal:not([hidden]) .admin-modal-content,
+.batch-toolbar:not([hidden]),
+.admin-edit-form:not([hidden]),
+#content-conflict:not([hidden]),
+#history-compare-result:not([hidden]),
+#history-source:not([hidden]),
+#history-preview:not([hidden]),
+#history-restore:not([hidden]),
+#history-purge:not([hidden]),
+#new-api-key-panel:not([hidden]) {
+  animation: publishReveal var(--motion-normal) var(--motion-easing);
+}
+
+@keyframes adminBarGrowX {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes adminBarGrowY {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+
+.admin-bar-fill,
+.admin-top-viewed-bar-fill,
+.admin-stack-public,
+.admin-stack-protected {
+  transform-origin: left center;
+  animation: adminBarGrowX var(--motion-normal) var(--motion-easing);
+}
+
+.admin-day-fill {
+  transform-origin: center bottom;
+  animation: adminBarGrowY var(--motion-normal) var(--motion-easing);
+}
+
+.api-scope-status {
+  display: inline-block;
+  margin-left: 8px;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.api-grant-details,
+.admin-history-details {
+  margin-top: 6px;
+}
+
+.api-grant-details summary,
+.admin-history-details summary {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.admin-copy-link-btn {
+  min-height: 32px;
+  margin-left: 8px;
+  padding: 0 10px;
+  font-size: 0.8rem;
+  vertical-align: middle;
+}
+
+#copy-api-key-btn.is-copied {
+  color: var(--success-color);
+  border-color: var(--success-color);
+}
+
 .manual-copy-output {
   width: 100%;
   min-height: 84px;
