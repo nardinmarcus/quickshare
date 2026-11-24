@@ -134,6 +134,10 @@ test('homepage layout uses desktop width to keep the idle publishing flow compac
   assert.match(css, /@media \(max-width:\s*720px\)[\s\S]*?\[data-page="home-page"\] \.card\s*\{[^}]*padding-inline:\s*1rem/s);
   assert.match(css, /\.main-container\s*\{[^}]*max-width:\s*720px/s);
   assert.match(css, /\[data-page="home-page"\] \.upload-file-trigger\s*\{[^}]*min-height:\s*44px[^}]*background:\s*rgba\(var\(--primary-rgb\),\s*0\.07\)[^}]*color:\s*var\(--text-primary\)/s);
+  // 垂直平衡：页眉与页脚的自动边距平分多余高度，短内容居中、长内容自然顶起
+  assert.match(css, /\[data-page="home-page"\] \.app-header\s*\{[^}]*margin-top:\s*auto/s);
+  assert.match(css, /\[data-page="home-page"\] \.app-footer\s*\{[^}]*margin-top:\s*auto/s);
+  assert.match(css, /\[data-page="home-page"\] \.main-container\s*\{[^}]*min-height:\s*100dvh/s);
   assert.doesNotMatch(css, /\[data-page="home-page"\] \.upload-file-trigger\s*\{[^}]*background:\s*var\(--primary\)/s);
   assert.match(css, /\[data-page="home-page"\] \.button-row\s*\{[^}]*justify-content:\s*flex-end/s);
 });
