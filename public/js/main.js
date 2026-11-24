@@ -90,12 +90,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const generatedPassword = document.getElementById('generated-password');
   const resultPasswordRow = document.getElementById('result-password-row');
   const copyPasswordButton = document.getElementById('copy-password-button');
-  const copyPasswordLink = document.getElementById('copy-password-link');
   const passwordDefaultMode = document.getElementById('password-default-mode');
   const passwordCustomMode = document.getElementById('password-custom-mode');
   const useCustomPasswordBtn = document.getElementById('use-custom-password-btn');
-  const confirmCustomPasswordBtn = document.getElementById('confirm-custom-password');
   const cancelCustomPasswordBtn = document.getElementById('cancel-custom-password');
+  const publishSettingsToggle = document.getElementById('publish-settings-toggle');
+  const publishSettingsBody = document.getElementById('publish-settings-body');
+  const publishSettingsSummary = document.getElementById('publish-settings-summary');
   const customPasswordInput = document.getElementById('custom-password-input');
   const toggleCustomPasswordBtn = document.getElementById('toggle-custom-password');
   const shareTitleInput = document.getElementById('share-title');
@@ -340,6 +341,12 @@ document.addEventListener('DOMContentLoaded', () => {
   function reportPublishError(message, focusTarget) {
     setPublishState('error', message);
 
+    // A field inside the collapsed publish settings cannot be focused or
+    // seen until the settings are expanded again.
+    if (focusTarget && publishSettingsBody && publishSettingsBody.contains(focusTarget)) {
+      setPublishSettingsExpanded(true);
+    }
+
     if (focusTarget && typeof focusTarget.focus === 'function') {
       focusTarget.focus();
     } else if (publishError) {
@@ -533,6 +540,7 @@ document.addEventListener('DOMContentLoaded', () => {
     updatePasswordHint('');
     showPasswordDefaultMode();
     syncPasswordSettings();
+    setPublishSettingsExpanded(false);
     resetPublishedState();
     closePublishPreview(false);
     syncToTextarea();
@@ -583,22 +591,75 @@ document.addEventListener('DOMContentLoaded', () => {
     if (passwordToggle && passwordToggle.checked) {
       if (passwordSettings) passwordSettings.classList.remove('hidden');
       showPasswordDefaultMode();
-      return;
+    } else {
+      if (passwordSettings) passwordSettings.classList.add('hidden');
+      if (passwordDefaultMode) passwordDefaultMode.classList.add('hidden');
+      if (passwordCustomMode) passwordCustomMode.classList.add('hidden');
     }
-
-    if (passwordSettings) passwordSettings.classList.add('hidden');
-    if (passwordDefaultMode) passwordDefaultMode.classList.add('hidden');
-    if (passwordCustomMode) passwordCustomMode.classList.add('hidden');
+    updatePublishSettingsSummary();
   }
+
+  // --- Publish settings: collapsed by default ------------------------------
+  // The defaults (link access, no expiry, auto title) cover most shares,
+  // so the settings stay folded into a one-line summary until the user
+  // actually wants to change something. The summary always reflects the
+  // current choices, so a collapsed panel never hides a surprise.
+  function setPublishSettingsExpanded(expanded) {
+    if (!publishSettingsBody || !publishSettingsToggle) return;
+    publishSettingsBody.hidden = !expanded;
+    publishSettingsToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    if (expanded) {
+      publishSettingsBody.classList.remove('settings-reveal');
+      // Restart the reveal animation on each open.
+      void publishSettingsBody.offsetWidth;
+      publishSettingsBody.classList.add('settings-reveal');
+    }
+  }
+
+  function updatePublishSettingsSummary() {
+    if (!publishSettingsSummary) return;
+    const access = passwordToggle && passwordToggle.checked ? '密码保护' : '持有链接可访问';
+    const expiry = shareExpiresInput && shareExpiresInput.value
+      ? `${shareExpiresInput.value} 到期`
+      : '长期有效';
+    const title = shareTitleInput && shareTitleInput.value.trim() ? '已设标题' : '自动提取标题';
+    publishSettingsSummary.textContent = `${access} · ${expiry} · ${title}`;
+  }
+
+  if (publishSettingsToggle) {
+    publishSettingsToggle.addEventListener('click', () => {
+      setPublishSettingsExpanded(publishSettingsBody ? publishSettingsBody.hidden : true);
+    });
+  }
+
+  const copyButtonDefaultMarkup = '<i class="fas fa-copy mr-1" aria-hidden="true"></i>复制链接';
+  const copyButtonPasswordMarkup = '<i class="fas fa-key mr-1" aria-hidden="true"></i>复制链接和密码';
 
   function showResultPassword(password) {
     if (generatedPassword) generatedPassword.textContent = password || '';
     if (resultPasswordRow) {
       resultPasswordRow.classList.toggle('hidden', !password);
     }
-    if (copyPasswordLink) {
-      copyPasswordLink.classList.toggle('hidden', !password);
+    // One copy action in the result: with a password, the useful thing to
+    // hand over is link + password together, so the main copy button
+    // becomes that instead of offering two overlapping copy buttons.
+    if (copyButton) {
+      copyButton.innerHTML = password ? copyButtonPasswordMarkup : copyButtonDefaultMarkup;
     }
+  }
+
+  // Brief in-place confirmation on the button itself, so the user sees
+  // the result of the press where they pressed, not only in a toast.
+  function flashCopied(button) {
+    if (!button || button.dataset.flashTimer) return;
+    const original = button.innerHTML;
+    button.innerHTML = '<i class="fas fa-check mr-1" aria-hidden="true"></i>已复制';
+    button.classList.add('is-copied');
+    button.dataset.flashTimer = String(setTimeout(() => {
+      button.innerHTML = original;
+      button.classList.remove('is-copied');
+      delete button.dataset.flashTimer;
+    }, 1600));
   }
 
   if (passwordToggle) {
@@ -622,30 +683,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // "确认"按钮 → 保存自定义密码
-  if (confirmCustomPasswordBtn) {
-    confirmCustomPasswordBtn.addEventListener('click', () => {
-      const password = customPasswordInput ? customPasswordInput.value : '';
-      if (!password) {
-        showErrorToast('请输入密码');
-        return;
-      }
+  // No separate "confirm" step for a custom password: typing it is the
+  // choice. The publish builder validates and adopts whatever is in the
+  // input when the custom mode is open, so the input handler below keeps
+  // userCustomPassword in step live.
 
-      const error = passwordValidationError(password);
-      if (error) {
-        updatePasswordHint(password);
-        showErrorToast(error);
-        return;
-      }
-
-      userCustomPassword = password;
-      showPasswordDefaultMode();
-      markDraftDirty();
-      showSuccessToast('自定义密码已设置');
-    });
-  }
-
-  // "默认密码"按钮 → 切换回默认模式，使用默认密码
+  // "改用自动密码"按钮 → 切换回默认模式，使用默认密码
   if (cancelCustomPasswordBtn) {
     cancelCustomPasswordBtn.addEventListener('click', () => {
       userCustomPassword = '';
@@ -671,6 +714,11 @@ document.addEventListener('DOMContentLoaded', () => {
   if (customPasswordInput) {
     customPasswordInput.addEventListener('input', () => {
       updatePasswordHint(customPasswordInput.value);
+      // Live-adopt a valid custom password; an invalid or cleared value
+      // falls back to "no custom password" until it validates again.
+      userCustomPassword = passwordValidationError(customPasswordInput.value)
+        ? ''
+        : customPasswordInput.value;
       markDraftDirty();
     });
   }
@@ -691,7 +739,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   [shareTitleInput, shareDescriptionInput, shareExpiresInput].forEach((field) => {
-    if (field) field.addEventListener('input', markDraftDirty);
+    if (field) {
+      field.addEventListener('input', markDraftDirty);
+      field.addEventListener('input', updatePublishSettingsSummary);
+      field.addEventListener('change', updatePublishSettingsSummary);
+    }
   });
 
   const markdownThemeSelect = document.getElementById('markdown-theme');
@@ -1241,7 +1293,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // A pending intent from another publish session: never claim its
         // identifier here. Show the explicit choice and send nothing.
         showOrphanChoice();
-        setPublishState('idle', '有一条属于其他发布会话的未确认记录，请先选择如何处理');
+        setPublishState('idle', '上次发布没确认成功，请先选重新发布或取消');
         return;
       }
 
@@ -1344,7 +1396,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (orphanCancelButton) {
     orphanCancelButton.addEventListener('click', () => {
       hideOrphanChoice();
-      setPublishState('idle', '已取消本次发布；那条未确认的记录仍保留，未做任何提交');
+      setPublishState('idle', '已取消，没有提交任何内容');
     });
   }
 
@@ -1357,24 +1409,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (copyButton) {
     copyButton.addEventListener('click', async () => {
-      const copied = await copyText(resultUrl?.dataset.originalUrl);
-      if (copied) showSuccessToast('链接已复制到剪贴板');
+      const url = resultUrl?.dataset.originalUrl;
+      const password = generatedPassword?.textContent;
+      // With a password, link alone is not enough to hand over: copy both.
+      const copied = await copyText(password && url ? `链接: ${url}\n密码: ${password}` : url);
+      if (copied) {
+        flashCopied(copyButton);
+        showSuccessToast(password ? '链接和密码已复制到剪贴板' : '链接已复制到剪贴板');
+      }
     });
   }
 
   if (copyPasswordButton) {
     copyPasswordButton.addEventListener('click', async () => {
       const copied = await copyText(generatedPassword?.textContent);
-      if (copied) showSuccessToast('密码已复制到剪贴板');
-    });
-  }
-
-  if (copyPasswordLink) {
-    copyPasswordLink.addEventListener('click', async () => {
-      const url = resultUrl?.dataset.originalUrl;
-      const password = generatedPassword?.textContent;
-      const copied = await copyText(url && password ? `链接: ${url}\n密码: ${password}` : '');
-      if (copied) showSuccessToast('密码和链接已复制到剪贴板');
+      if (copied) {
+        flashCopied(copyPasswordButton);
+        showSuccessToast('密码已复制到剪贴板');
+      }
     });
   }
 

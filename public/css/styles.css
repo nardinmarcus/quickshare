@@ -63,6 +63,12 @@
   --transition-normal: 0.25s ease;
   --transition-slow: 0.4s ease;
   --easing-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* 发布流动效语言：一套时长与曲线，只解释状态变化，不做装饰。
+     其余页面仍可用上面的旧变量，发布流一律走这组 token。 */
+  --motion-fast: 120ms;
+  --motion-normal: 200ms;
+  --motion-easing: cubic-bezier(0.2, 0, 0, 1);
 }
 
 /* ===== 浅色主题（跟随系统） ===== */
@@ -4981,6 +4987,85 @@ body:hover::-webkit-scrollbar,
 
 .result-card[data-status="previous"] .result-eyebrow {
   color: var(--text-secondary);
+}
+
+/* --- Home publish flow: collapsed settings + unified motion --------------
+   Every state change in the publish flow (settings opening, password
+   options appearing, preview/result arriving, copy confirming) uses the
+   same reveal: a short fade with a small rise, driven by the --motion-*
+   tokens. The global prefers-reduced-motion rule above already flattens
+   these animations for users who ask for that. */
+@keyframes publishReveal {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+[data-page="home-page"] .publish-settings-title {
+  margin-bottom: 0;
+}
+
+.publish-settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.publish-settings-summary {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 400;
+}
+
+.publish-settings-chevron {
+  margin-left: auto;
+  color: var(--text-secondary);
+  transition: transform var(--motion-normal) var(--motion-easing);
+}
+
+.publish-settings-toggle[aria-expanded="true"] .publish-settings-chevron {
+  transform: rotate(180deg);
+}
+
+.publish-settings-body {
+  padding-top: 0.625rem;
+}
+
+.publish-settings-body.settings-reveal,
+[data-page="home-page"] .password-settings:not(.hidden),
+[data-page="home-page"] .password-custom-mode:not(.hidden),
+[data-page="home-page"] .password-default-mode:not(.hidden),
+[data-page="home-page"] .publish-orphan-choice:not(.hidden),
+[data-page="home-page"] .publish-preview:not([hidden]) {
+  animation: publishReveal var(--motion-normal) var(--motion-easing);
+}
+
+[data-page="home-page"] .result-card.fade-in {
+  animation: publishReveal var(--motion-normal) var(--motion-easing) forwards;
+}
+
+.result-actions .cyber-btn,
+.result-text-button {
+  transition: color var(--motion-fast) var(--motion-easing), border-color var(--motion-fast) var(--motion-easing), background-color var(--motion-fast) var(--motion-easing);
+}
+
+.result-actions .cyber-btn.is-copied,
+.result-text-button.is-copied {
+  color: var(--success-color);
+  border-color: var(--success-color);
 }
 
 .manual-copy-output {
