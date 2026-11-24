@@ -29,11 +29,37 @@
             </tr>
           </thead>
           <tbody>
+            <%
+              const auditActionLabels = {
+                'admin.login': '后台登录',
+                'key.create': '创建密钥',
+                'key.delete': '删除密钥',
+                'key.rotate': '轮换密钥',
+                'key.scopes': '修改密钥范围',
+                'key.grant': '授予 Share 权限',
+                'key.grant_revoke': '撤销 Share 权限',
+                'key.auto_grant': '修改自动授权',
+                'page.create': '创建分享',
+                'page.update': '更新分享',
+                'page.content.update': '更新内容',
+                'page.delete': '删除分享',
+                'page.delete.batch': '批量删除分享',
+                'page.clone': '克隆分享',
+                'page.publish.update': '上下架状态更新',
+                'page.access.revoke': '撤销已解锁访问',
+                'page.revision.purge': '清除历史版本',
+                'settings.homepage_password_required.update': '修改首页访问控制',
+                'share.create': 'API 创建分享',
+                'share.content.update': 'API 更新内容',
+                'share.clone': 'API 克隆分享',
+                'share.restore': 'API 恢复版本'
+              };
+            %>
             <% logs.forEach((log) => { %>
               <% const isFavoriteUpdate = log.action === 'page.favorite.update'; %>
               <tr>
                 <td><time datetime="<%= new Date(log.createdAt).toISOString() %>"><%= formatManagementDateTime(log.createdAt) %></time></td>
-                <td><span class="admin-audit-badge <%= isFavoriteUpdate ? 'favorite-share-update' : log.action %>"><%= isFavoriteUpdate ? 'Favorite Share 状态更新' : log.action %></span></td>
+                <td><span class="admin-audit-badge <%= isFavoriteUpdate ? 'favorite-share-update' : log.action %>" title="<%= log.action %>"><%= isFavoriteUpdate ? 'Favorite Share 状态更新' : (auditActionLabels[log.action] || log.action) %></span></td>
                 <td>
                   <% if (log.pageId) { %>
                     <a href="/admin/pages/<%= encodeURIComponent(log.pageId) %>"><%= log.pageId %></a>

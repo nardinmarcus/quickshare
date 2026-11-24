@@ -56,7 +56,12 @@
     <dl class="admin-detail-grid">
       <div>
         <dt>公开链接</dt>
-        <dd><a href="<%= publicUrl %>" target="_blank" rel="noopener noreferrer"><%= publicUrl %></a></dd>
+        <dd>
+          <a id="public-url-link" href="<%= publicUrl %>" target="_blank" rel="noopener noreferrer"><%= publicUrl %></a>
+          <button type="button" class="result-text-button admin-copy-link-btn" id="copy-public-link-btn">
+            <i class="fas fa-copy" aria-hidden="true"></i> 复制链接<% if (sharedPage.password) { %>和密码<% } %>
+          </button>
+        </dd>
       </div>
       <div>
         <dt>类型</dt>
@@ -237,7 +242,11 @@
 
   <section class="card admin-card" id="history-section">
     <h2 class="admin-section-title">历史版本</h2>
-    <p class="admin-history-note">浏览此分享的内容历史：可查看单个版本的源码与预览、比较任意两个版本，并将某个版本恢复为新的当前版本。恢复只改内容，不改变密码、有效期等访问策略。所有者还可以永久清除某个非当前版本：清除后该版本只保留不含内容的墓碑记录，且不可恢复。</p>
+    <p class="admin-history-note">查看、比较或恢复某个旧版本；恢复只改内容，不动密码与有效期。</p>
+    <details class="admin-history-details">
+      <summary>历史版本能做什么</summary>
+      <p class="admin-history-note">可查看单个版本的源码与预览、比较任意两个版本，并将某个版本恢复为新的当前版本。恢复只改内容，不改变密码、有效期等访问策略。所有者还可以永久清除某个非当前版本：清除后该版本只保留不含内容的墓碑记录，且不可恢复。</p>
+    </details>
     <p id="history-status" aria-live="polite">正在加载历史…</p>
     <button type="button" class="cyber-btn cyber-btn-secondary" id="history-retry" hidden>重试</button>
     <div id="history-list"></div>

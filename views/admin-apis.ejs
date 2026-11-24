@@ -98,7 +98,7 @@
                   <input type="checkbox" class="api-scope-checkbox" data-scope="share:publish" <%= apiKey.scopeList.includes('share:publish') ? 'checked' : '' %>>
                   上下架已授权 Share
                 </label>
-                <button type="button" class="cyber-btn cyber-btn-secondary api-key-scopes-btn" data-api-key-id="<%= apiKey.id %>" data-api-key-name="<%= apiKey.name %>">保存范围</button>
+                <span class="api-scope-status" role="status" aria-live="polite">改动会自动保存</span>
               </td>
               <td><time datetime="<%= new Date(Number(apiKey.created_at)).toISOString() %>"><%= formatManagementDateTime(apiKey.created_at) %></time></td>
               <td>
@@ -129,7 +129,11 @@
     <div class="admin-content-header">
       <div>
         <h2>Share 授权</h2>
-        <p class="admin-muted">给具名密钥授权指定 Share 的读取、编辑或上下架权限：密钥还需具备对应的「读取」/「编辑」/「上下架」范围，且只能接触被授权的 Share。编辑授权自动包含读取，但不包含上下架；上下架授权不包含读取。授权不改变 Share 的归属，轮换密钥后授权保留，删除密钥或 Share 时授权一并失效。</p>
+        <p class="admin-muted">给密钥指定它能碰哪些 Share：范围决定能做什么，授权决定能碰哪个，两者都有才放行。</p>
+        <details class="api-grant-details">
+          <summary>授权规则详情</summary>
+          <p class="admin-muted">密钥还需具备对应的「读取」/「编辑」/「上下架」范围，且只能接触被授权的 Share。编辑授权自动包含读取，但不包含上下架；上下架授权不包含读取。授权不改变 Share 的归属，轮换密钥后授权保留，删除密钥或 Share 时授权一并失效。</p>
+        </details>
       </div>
     </div>
 

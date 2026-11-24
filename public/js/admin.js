@@ -102,17 +102,32 @@ window.Toast = {
     window.location.href = query ? '/admin/pages?' + query : '/admin/pages';
   }
 
+  function applySearch() {
+    var params = adminPageParams();
+
+    if (searchInput.value) params.set('search', searchInput.value);
+    else params.delete('search');
+
+    params.delete('page');
+    navigateAdminPages(params);
+  }
+
   if (searchForm && searchInput) {
     searchForm.addEventListener('submit', function (event) {
       event.preventDefault();
-      var params = adminPageParams();
-
-      if (searchInput.value) params.set('search', searchInput.value);
-      else params.delete('search');
-
-      params.delete('page');
-      navigateAdminPages(params);
+      applySearch();
     });
+
+    // Typing is the intent: apply the search automatically (debounced)
+    // so it behaves like the one-click filter links next to it, instead
+    // of needing a separate "搜索" press. The button stays as a fallback.
+    if (typeof searchInput.addEventListener === 'function') {
+      var searchDebounce = null;
+      searchInput.addEventListener('input', function () {
+        if (searchDebounce) clearTimeout(searchDebounce);
+        searchDebounce = setTimeout(applySearch, 600);
+      });
+    }
   }
 
   if (jumpInput && jumpBtn) {
@@ -132,18 +147,30 @@ window.Toast = {
     });
   }
 
+  function applyDateFilter() {
+    var params = adminPageParams();
+
+    if (dateFromInput.value) params.set('dateFrom', dateFromInput.value);
+    else params.delete('dateFrom');
+
+    if (dateToInput.value) params.set('dateTo', dateToInput.value);
+    else params.delete('dateTo');
+
+    params.delete('page');
+    navigateAdminPages(params);
+  }
+
   if (dateFilterBtn && dateFromInput && dateToInput) {
-    dateFilterBtn.addEventListener('click', function () {
-      var params = adminPageParams();
+    dateFilterBtn.addEventListener('click', applyDateFilter);
 
-      if (dateFromInput.value) params.set('dateFrom', dateFromInput.value);
-      else params.delete('dateFrom');
-
-      if (dateToInput.value) params.set('dateTo', dateToInput.value);
-      else params.delete('dateTo');
-
-      params.delete('page');
-      navigateAdminPages(params);
+    // Picking a complete range applies it right away, like every other
+    // filter on this page; the 筛选 button remains as a fallback.
+    [dateFromInput, dateToInput].forEach(function (input) {
+      if (input && typeof input.addEventListener === 'function') {
+        input.addEventListener('change', function () {
+          if (dateFromInput.value && dateToInput.value) applyDateFilter();
+        });
+      }
     });
   }
 
