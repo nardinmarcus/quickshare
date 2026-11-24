@@ -139,8 +139,8 @@ test('GET /api/v1/capabilities returns the real create-only surface for both cre
     assert.deepEqual(capabilities.scopes, ['share:create']);
     assert.deepEqual(capabilities.contentTypes, ['html', 'markdown', 'svg', 'mermaid']);
     assert.deepEqual(capabilities.markdownThemePresets, expectedPresetIds);
-    assert.equal(capabilities.limits.shareRequestBody, '2mb');
-    assert.equal(capabilities.limits.shareRequestBodyBytes, 2 * 1024 * 1024);
+    assert.equal(capabilities.limits.shareRequestBody, '4mb');
+    assert.equal(capabilities.limits.shareRequestBodyBytes, 4 * 1024 * 1024);
     // Create-only stage: exactly one write operation plus the connection
     // reads and operation confirmation (T08 — part of the create
     // capability, not a management grant). No management operation may

@@ -120,15 +120,20 @@ test('small form and JSON routes reject bodies above 16 KB', async () => {
   assert.equal(oversizedPassword.body.error, '请求内容过大');
 });
 
-test('share routes accept ordinary content and reject bodies above 2 MB', async () => {
+test('share routes accept ordinary content and reject bodies above 4 MB', async () => {
   const ordinary = await jsonRequest('/api/v1/share', {
     htmlContent: `<h1>Ordinary</h1><p>${'a'.repeat(32 * 1024)}</p>`
   }, { 'X-API-Key': 'boundary-api-key' });
+  // Content that exceeded the previous 2 MB limit must now be accepted.
+  const abovePreviousLimit = await jsonRequest('/api/v1/share', {
+    htmlContent: 'a'.repeat(3 * 1024 * 1024)
+  }, { 'X-API-Key': 'boundary-api-key' });
   const oversized = await jsonRequest('/api/v1/share', {
-    htmlContent: 'a'.repeat((2 * 1024 * 1024) + 1)
+    htmlContent: 'a'.repeat((4 * 1024 * 1024) + 1)
   }, { 'X-API-Key': 'boundary-api-key' });
 
   assert.equal(ordinary.status, 200);
+  assert.equal(abovePreviousLimit.status, 200);
   assert.equal(oversized.status, 413);
   assert.equal(oversized.body.error, '请求内容过大');
 });

@@ -48,7 +48,7 @@ ID、体积限制与条件写规则。T05 阶段两类凭据均为 **create-only
   的集合逐字一致。
 - `markdownThemePresets`：实例真实存在的 12 个 Preset ID。
 - `limits.shareRequestBodyBytes`：由实例配置 `SHARE_BODY_LIMIT` 换算的
-  真实字节上限（默认 `2mb` = 2097152）。
+  真实字节上限（默认 `4mb` = 4194304）。
 - `conditionalWrites`：创建目前不要求 `If-Match` 或幂等键；但写操作经过
   写维护闸（暂停时 503 `maintenance`），且托管 Key 写会在事务内复核凭据
   版本（见下）。
