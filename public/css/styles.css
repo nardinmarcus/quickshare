@@ -201,9 +201,14 @@ body {
   padding: var(--home-top-space) 1.25rem 0.75rem;
   justify-content: flex-start;
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
+/* 垂直平衡：页脚已有 margin-top:auto，再给页眉一个自动上边距，
+   两处自动边距平分多余高度——内容短时整块工作台在视口里居中，
+   内容变长（展开设置/预览/结果）时自动边距归零、自然顶起滚动。 */
 [data-page="home-page"] .app-header {
+  margin-top: auto;
   margin-bottom: var(--home-section-gap);
 }
 
