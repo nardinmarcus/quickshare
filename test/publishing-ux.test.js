@@ -93,6 +93,37 @@ test('homepage exposes preview, explicit publish states, and a complete handoff 
   assert.match(homepage.text, /id="manual-copy-output"[^>]+readonly[^>]+hidden/);
 });
 
+test('homepage folds publish settings into a summary and keeps one result copy action', async () => {
+  const homepage = await request('/');
+  const script = await request('/js/main.js');
+  const css = fs.readFileSync(path.join(__dirname, '../public/css/styles.css'), 'utf8');
+
+  // Settings start collapsed behind a toggle whose summary states the
+  // effective defaults, so the idle flow is paste + publish only.
+  assert.match(homepage.text, /id="publish-settings-toggle"[^>]+aria-expanded="false"[^>]+aria-controls="publish-settings-body"/);
+  assert.match(homepage.text, /id="publish-settings-summary"[^>]*>持有链接可访问 · 长期有效 · 自动提取标题</);
+  assert.match(homepage.text, /id="publish-settings-body"[^>]+hidden/);
+  assert.match(script.text, /function updatePublishSettingsSummary\(\)/);
+  assert.match(script.text, /function setPublishSettingsExpanded\(expanded\)/);
+
+  // A custom password needs no separate confirm step, and the result
+  // offers a single copy action instead of overlapping copy buttons.
+  assert.doesNotMatch(homepage.text, /id="confirm-custom-password"/);
+  assert.match(homepage.text, /填好直接点「发布并生成链接」即可/);
+  assert.doesNotMatch(homepage.text, /id="copy-password-link"/);
+  assert.match(script.text, /copyButtonPasswordMarkup/);
+  assert.match(script.text, /function flashCopied\(button\)/);
+
+  // The unconfirmed-publish choice is written in user language.
+  assert.match(homepage.text, /上次发布没确认成功/);
+  assert.doesNotMatch(homepage.text, /另一个发布会话/);
+
+  // Publish-flow motion runs on one token set with one reveal keyframe.
+  assert.match(css, /--motion-normal:\s*200ms/);
+  assert.match(css, /--motion-easing:\s*cubic-bezier\(0\.2, 0, 0, 1\)/);
+  assert.match(css, /@keyframes publishReveal/);
+});
+
 test('homepage layout uses desktop width to keep the idle publishing flow compact', () => {
   const css = fs.readFileSync(path.join(__dirname, '../public/css/styles.css'), 'utf8');
 
