@@ -6,7 +6,6 @@ const fs = require('node:fs');
 const path = require('path');
 const bodyParser = require('body-parser');
 const morgan = require('morgan');
-const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const { performance } = require('node:perf_hooks');
 
@@ -149,7 +148,6 @@ app.use(morgan(config.logLevel, {
     }
   }
 }));
-app.use(cors({ origin: false }));
 app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
