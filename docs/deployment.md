@@ -28,6 +28,8 @@ npm run hash-password -- "your-admin-password"
 - `SESSION_SECRET` 用于签名所有认证 cookie 和 CSRF token，必须是至少 32 bytes 的随机值，且不能使用示例占位符。
 - 未设置 `DATABASE_URL` 时，本地开发会使用内存仓库；生产环境会立即启动失败，绝不把内存仓库当持久数据源。
 - 应用运行时不执行 `CREATE` / `ALTER`；schema 只能通过 `npm run db:migrate` 变更。
+- 运行时数据库账号是 `quickshare_app`：所有业务表只有 `SELECT/INSERT/UPDATE/DELETE`，`quickshare_schema_migrations` 只读，没有 `TRUNCATE`、建表或改表权限，也不拥有任何表。Vercel Production 里的数据库变量（含 `DATABASE_URL_UNPOOLED`、`POSTGRES_URL_NON_POOLING`、`PGUSER`/`PGPASSWORD` 等）都只装这个账号，不再保存 owner 凭证；所以迁移必须显式传 `DATABASE_MIGRATION_URL=<direct owner URL>`，误用运行时凭证会在建账本表时以 `permission denied for schema public` 安全失败。
+- 新库或恢复后的库用 owner 连接创建/复核运行时账号：`DATABASE_MIGRATION_URL='<direct-owner-url>' RUNTIME_ROLE_PASSWORD='<至少 32 位随机值>' npm run db:provision-runtime-role`（可重复执行，已存在时只轮换密码），只复核用 `npm run db:provision-runtime-role -- --verify`。脚本同时设置默认权限，owner 之后迁移新建的表和序列会自动授权给 `quickshare_app`。Neon 直连冷启动可能超过默认 2.5 秒连接超时，一次性运维命令可设 `POSTGRES_CONNECTION_TIMEOUT_MS=9000`（上限）。
 - Vercel Git 集成会在 `main` 更新后自动部署。凡应用代码会读取新字段，必须在合并或推送该代码前，先让旧应用保持在线并完成兼容性迁移与回读；部署显示 `READY` 不能替代 schema 验证。
 - Preview 环境与生产隔离：Vercel 运行时对 Preview 同样设置 `NODE_ENV=production`，所以 Preview 也会做生产启动校验，必须有自己的 `SESSION_SECRET`、`ADMIN_PASSWORD_HASH`、`ADMIN_DASHBOARD_PASSWORD_HASH`（仅限 Preview 的测试值，不复用生产值），缺任何一个函数都会以 `FUNCTION_INVOCATION_FAILED` 起不来。数据库相关变量（`DATABASE_URL`、`POSTGRES_*`、`PG*`、`NEON_PROJECT_ID` 等）只配给 Production，不要勾选 Preview 或 Development：Preview 没有数据库 URL 时使用内存仓库，未合并的代码就碰不到生产数据；`vercel env pull` / `vercel dev` 也拿不到生产库凭证，本地开发默认用内存仓库。Preview 还受 Vercel 部署保护，需在已登录 Vercel 的浏览器中访问。
 
@@ -184,6 +186,7 @@ docker compose --env-file .env.production up -d --build   # 更新并重启
 | `SESSION_SECRET` | 生产环境 | 至少 32 bytes 的随机值，用于签名 cookie 和 CSRF token；示例占位符会被拒绝 |
 | `DATABASE_URL` | 生产环境 | 运行时 pooled Postgres URL；生产缺失时启动失败 |
 | `DATABASE_MIGRATION_URL` | 迁移时 | direct owner URL；只在可信迁移主机/CI 临时注入，禁止存入应用运行时环境 |
+| `RUNTIME_ROLE_PASSWORD` | 创建/轮换运行时账号时 | `npm run db:provision-runtime-role` 为 `quickshare_app` 设置的密码；只在执行时临时注入 |
 | `DATABASE_URL_UNPOOLED` / `POSTGRES_URL_NON_POOLING` | 迁移时 | direct URL 别名；仅可信迁移 runner 使用，不由应用请求路径读取 |
 | `POSTGRES_URL` | 否 | `DATABASE_URL` 的别名，两者设置其一即可 |
 | `POSTGRES_SSL` | 否 | 默认使用 `sslmode=verify-full`；仅本地测试设为 `false` |

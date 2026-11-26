@@ -8,6 +8,7 @@ Express 4 + EJS + PostgreSQL (生产) / 内存 (开发)。部署在 Vercel。
 
 - 仓库选择在 `models/pageRepository.js`；本地无 `DATABASE_URL` 时可用内存，生产缺失持久数据库时必须启动失败。
 - 数据库 schema 只通过 `db/migrations/` 与 `npm run db:migrate` 更新，业务请求和服务启动不得执行 DDL。
+- 生产运行时以只有 DML 权限的 `quickshare_app` 连库（`npm run db:provision-runtime-role` 创建/复核）；迁移必须显式传 owner 的 `DATABASE_MIGRATION_URL`。
 - 认证分两层（鉴权中间件、会话与 cookie 逻辑在 `middleware/auth.js` 的 `createAuth({ config, pageRepository })`，由 `app.js` 注入使用）：
   - **前端登录**（`/login`）：签名 cookie `admin_session`，用于首页创建分享。首页走 `requireHomepageAccess`，浏览器发布走 `requireBrowserPublishAccess` + `requireBrowserPublishCsrf`；后台站点设置可把首页切为公开模式，此时浏览器发布改为要求同源。
   - **管理后台**（`/admin/login`）：签名 cookie `dashboard_admin_session`。页面与较早的写接口用 `requireDashboardAdmin`（未登录重定向），较新的 JSON 接口用 `requireDashboardApiAdmin`（未登录 401 JSON），写操作再加 `requireDashboardCsrf`。
