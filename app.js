@@ -1,19 +1,29 @@
 require('dotenv').config();
 
 const express = require('express');
-const { createHash, randomBytes } = require('node:crypto');
+const { randomBytes } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('path');
 const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
-const { performance } = require('node:perf_hooks');
 
 const config = require('./config');
 const { PUBLISH_SESSION_TTL_MS, createAuth } = require('./middleware/auth');
+const {
+  isTrustedUiPath,
+  privateNoStore,
+  setPrivateNoStore,
+  setTrustedUiCsp
+} = require('./middleware/responsePolicy');
+const { createViewRouter } = require('./routes/view');
 const { createPageRepository } = require('./models/pageRepository');
-const { detectCodeType, extractCodeBlocks } = require('./utils/codeDetector');
-const { renderContent, escapeHtml } = require('./utils/contentRenderer');
 const { FAVICON_VERSION } = require('./utils/faviconVersion');
+const { createPublicUrls } = require('./utils/publicUrls');
+const {
+  normalizeCodeType,
+  prepareSandboxContent,
+  renderSandboxedDocument
+} = require('./utils/sandboxDocument');
 const {
   getMarkdownThemeOptions,
   resolveMarkdownThemeId
@@ -26,7 +36,7 @@ const {
   parseExpectedAccessRevision,
   toAccessRevisionString
 } = require('./utils/shareAccess');
-const { projectPublicMetadata } = require('./utils/publicProjection');
+
 const {
   formatContentEtag,
   isSnapshotPurged,
@@ -35,7 +45,6 @@ const {
 } = require('./utils/contentRevision');
 const { isPublishingGateError } = require('./utils/publishing');
 const {
-  API_CONTENT_TYPES,
   buildCapabilities
 } = require('./utils/apiCapabilities');
 const {
@@ -74,41 +83,17 @@ const {
   generateId,
   generateNumericPassword,
   hashSecret,
-  parseCustomPassword,
-  verifySecret
+  parseCustomPassword
 } = require('./utils/security');
 
-// The accepted Share content types come from the shared capabilities
-// definition (T05), so /api/v1/capabilities can never advertise a type the
-// creation route would reject.
-const VALID_CODE_TYPES = new Set(API_CONTENT_TYPES);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const FAVICON_PATH = path.join(PUBLIC_DIR, 'icon/web/favicon.ico');
 const STATIC_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 const STATIC_CACHE_CONTROL = 'public, max-age=300, must-revalidate';
-const SOCIAL_IMAGE_PATH = '/icon/web/icon-512.png';
-const SOCIAL_IMAGE_VERSION = createHash('sha256')
-  .update(fs.readFileSync(path.join(PUBLIC_DIR, SOCIAL_IMAGE_PATH)))
-  .digest('hex')
-  .slice(0, 12);
-const EMBEDDABLE_UI_CSP = [
-  "default-src 'self'",
-  "base-uri 'none'",
-  "object-src 'none'",
-  "script-src 'self' https://umami.namooca.com",
-  "script-src-attr 'none'",
-  "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com",
-  "font-src 'self' data: https://cdnjs.cloudflare.com https://fonts.gstatic.com",
-  "img-src 'self' data:",
-  "connect-src 'self' https://umami.namooca.com",
-  "form-action 'self'",
-  "frame-src 'self'"
-].join('; ');
-const TRUSTED_UI_CSP = `${EMBEDDABLE_UI_CSP}; frame-ancestors 'none'`;
-let nextViewRequestIsColdStart = true;
 
 const app = express();
 const pageRepository = createPageRepository();
+const auth = createAuth({ config, pageRepository });
 const {
   adminSessionToken,
   browserCreateContext,
@@ -117,9 +102,6 @@ const {
   dashboardSessionToken,
   getAdminSession,
   getDashboardAdminSession,
-  getPageAccess,
-  hasPageAccess,
-  isSameOriginRequest,
   requireApiAdmin,
   requireApiKey,
   requireApiScope,
@@ -133,10 +115,11 @@ const {
   requireHomepageAccess,
   setAdminCookie,
   setDashboardAdminCookie,
-  setPageAccessCookie,
   verifyAdminPassword,
   verifyDashboardAdminPassword
-} = createAuth({ config, pageRepository });
+} = auth;
+const publicUrls = createPublicUrls(config);
+const { publicPageUrl, socialImageUrl } = publicUrls;
 const parseSmallJson = express.json({ limit: config.smallBodyLimit });
 const parseSmallForm = express.urlencoded({ extended: true, limit: config.smallBodyLimit });
 const parseShareJson = express.json({ limit: config.shareBodyLimit });
@@ -194,15 +177,6 @@ app.use((req, res, next) => {
   return next();
 });
 
-function setPrivateNoStore(res) {
-  res.set('Cache-Control', 'private, no-store');
-}
-
-function privateNoStore(req, res, next) {
-  setPrivateNoStore(res);
-  return next();
-}
-
 function sendPublishingMaintenance(res) {
   return res.status(503).json({
     success: false,
@@ -235,14 +209,6 @@ function parseSmallJsonBody(req, res, next) {
 
     return next(error);
   });
-}
-
-function isTrustedUiPath(pathname) {
-  return /^\/login\/?$/i.test(pathname) || /^\/admin(?:\/|$)/i.test(pathname);
-}
-
-function setTrustedUiCsp(res, { allowFraming = false } = {}) {
-  res.set('Content-Security-Policy', allowFraming ? EMBEDDABLE_UI_CSP : TRUSTED_UI_CSP);
 }
 
 function setStaticCacheHeaders(res) {
@@ -293,80 +259,6 @@ function safeRequestLogReferrer(req) {
 
 function shouldSkipGenericRequestLog(req) {
   return ['GET', 'HEAD'].includes(req.method) && exactViewRoute(req.path) === '/view/:id';
-}
-
-function roundDuration(value) {
-  return Math.max(0, Number(value.toFixed(3)));
-}
-
-function responseByteLength(res) {
-  const header = res.getHeader('content-length');
-  const value = Array.isArray(header) ? header[0] : header;
-  const parsed = Number.parseInt(String(value || '0'), 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
-}
-
-function beginViewPerformance(req, res) {
-  const metrics = {
-    startedAt: performance.now(),
-    dbMs: 0,
-    renderMs: 0,
-    contentType: null,
-    protected: null,
-    outcome: 'unknown',
-    phase: 'routing',
-    coldStart: nextViewRequestIsColdStart
-  };
-  let finalized = false;
-
-  nextViewRequestIsColdStart = false;
-
-  function finalize(closedEarly = false) {
-    if (finalized) {
-      return;
-    }
-
-    finalized = true;
-
-    if (closedEarly) {
-      metrics.outcome = 'client_closed';
-    }
-
-    const event = {
-      event: 'quickshare.view',
-      route: '/view/:id',
-      method: req.method,
-      outcome: metrics.outcome,
-      status: res.statusCode,
-      total_ms: roundDuration(performance.now() - metrics.startedAt),
-      db_ms: roundDuration(metrics.dbMs),
-      render_ms: roundDuration(metrics.renderMs),
-      response_bytes: responseByteLength(res),
-      content_type: metrics.contentType,
-      protected: metrics.protected,
-      cold_start: metrics.coldStart
-    };
-
-    try {
-      (app.locals.viewPerformanceLogger || console).info(JSON.stringify(event));
-    } catch (error) {
-      // Observability must never change the response path.
-    }
-  }
-
-  res.once('finish', () => finalize(false));
-  res.once('close', () => finalize(!res.writableFinished));
-  return metrics;
-}
-
-function safeContentType(value) {
-  return VALID_CODE_TYPES.has(value) ? value : 'unknown';
-}
-
-function safeErrorCode(error) {
-  return typeof error?.code === 'string' && /^[A-Z0-9_]{1,32}$/.test(error.code)
-    ? error.code
-    : 'UNKNOWN';
 }
 
 // If-None-Match evaluation for the conditional resource reads (T12).
@@ -434,15 +326,6 @@ function checkAccessPrecondition(req, res, page) {
   }
 
   return expected.value;
-}
-
-function normalizeCodeType(content, requestedCodeType) {
-  if (VALID_CODE_TYPES.has(requestedCodeType)) {
-    return requestedCodeType;
-  }
-
-  const detectedType = detectCodeType(content);
-  return VALID_CODE_TYPES.has(detectedType) ? detectedType : 'html';
 }
 
 async function createPageWithRetry(data, { apiCredential, revisionMeta } = {}) {
@@ -901,101 +784,6 @@ async function createPageFromInput(input, { apiCredential } = {}) {
   };
 }
 
-function injectCodeTypeMeta(renderedContent, contentType) {
-  if (!renderedContent.includes('</head>')) {
-    return renderedContent;
-  }
-
-  return renderedContent.replace(
-    '</head>',
-    `<meta name="code-type" content="${escapeHtml(contentType)}">\n</head>`
-  );
-}
-
-function renderSandboxedDocument(renderedContent, contentType, {
-  title,
-  description,
-  pageUrl,
-  socialImageUrl,
-  viewEventUrl
-} = {}) {
-  const escapedContent = escapeHtml(renderedContent);
-  const pageTitle = title ? `${escapeHtml(title)} - QuickShare` : 'QuickShare';
-  const ogDescription = description ? escapeHtml(description) : '通过 QuickShare 分享的内容';
-  const ogUrl = pageUrl ? escapeHtml(pageUrl) : '';
-
-  return `
-    <!DOCTYPE html>
-    <html lang="zh-CN">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <meta name="code-type" content="${escapeHtml(contentType)}">
-      <title>${pageTitle}</title>
-      <link rel="icon" href="/icon/web/favicon.ico?v=${FAVICON_VERSION}" sizes="any">
-      <link rel="apple-touch-icon" href="/icon/web/apple-touch-icon.png?v=${FAVICON_VERSION}">
-      <link rel="icon" type="image/png" sizes="192x192" href="/icon/web/icon-192.png?v=${FAVICON_VERSION}">
-      <link rel="icon" type="image/png" sizes="512x512" href="/icon/web/icon-512.png?v=${FAVICON_VERSION}">
-      <meta property="og:title" content="${pageTitle}">
-      <meta property="og:description" content="${ogDescription}">
-      <meta property="og:type" content="article">
-      ${ogUrl ? `<meta property="og:url" content="${ogUrl}">` : ''}
-      <meta property="og:image" content="${escapeHtml(socialImageUrl)}">
-      <meta property="og:image:type" content="image/png">
-      <meta property="og:image:width" content="512">
-      <meta property="og:image:height" content="512">
-      <meta property="og:image:alt" content="QuickShare Site Identity Icon">
-      <meta name="twitter:card" content="summary">
-      <meta name="twitter:title" content="${pageTitle}">
-      <meta name="twitter:description" content="${ogDescription}">
-      ${pageUrl ? '<script defer src="https://umami.namooca.com/script.js" data-website-id="c5b79d49-f1e7-46c1-87c7-b2965383c820"></script>' : ''}
-      <style>
-        html, body {
-          width: 100%;
-          height: 100%;
-          margin: 0;
-          background: #ffffff;
-        }
-        iframe {
-          width: 100%;
-          height: 100vh;
-          border: 0;
-          display: block;
-        }
-      </style>
-    </head>
-    <body>
-      <iframe
-        title="Shared content"
-        sandbox="allow-downloads allow-forms allow-modals allow-popups allow-scripts"
-        referrerpolicy="no-referrer"
-        srcdoc="${escapedContent}">
-      </iframe>
-      ${viewEventUrl ? `<script src="/js/view-event.js" data-view-event-url="${escapeHtml(viewEventUrl)}"></script>` : ''}
-    </body>
-    </html>
-  `;
-}
-
-async function prepareSandboxContent(rawContent, requestedCodeType, markdownTheme) {
-  let processedContent = rawContent;
-  let contentType = normalizeCodeType(rawContent, requestedCodeType);
-  const codeBlocks = extractCodeBlocks(rawContent);
-
-  if (codeBlocks.length === 1
-    && codeBlocks[0].type === contentType
-    && codeBlocks[0].content.length > rawContent.length * 0.7) {
-    processedContent = codeBlocks[0].content;
-  }
-
-  const renderedContent = await renderContent(processedContent, contentType, markdownTheme);
-
-  return {
-    contentType,
-    renderedContent: injectCodeTypeMeta(renderedContent, contentType)
-  };
-}
-
 function parsePagination(query) {
   const page = Number.parseInt(query.page || '1', 10);
   const safePage = Number.isFinite(page) && page > 0 ? page : 1;
@@ -1024,19 +812,6 @@ function buildAdminPagesUrl(filters, overrides = {}) {
 
   const query = params.toString();
   return query ? `/admin/pages?${query}` : '/admin/pages';
-}
-
-function publicPageUrl(req, id) {
-  return `${publicOrigin(req)}/view/${encodeURIComponent(id)}`;
-}
-
-function publicOrigin(req) {
-  const base = config.shareBaseUrl || config.baseUrl || `${req.protocol}://${req.get('host')}`;
-  return base.replace(/\/+$/, '');
-}
-
-function socialImageUrl(req) {
-  return `${publicOrigin(req)}${SOCIAL_IMAGE_PATH}?v=${SOCIAL_IMAGE_VERSION}`;
 }
 
 function enrichAdminStats(stats) {
@@ -5110,85 +4885,7 @@ app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (
   }
 });
 
-app.get('/api/pages/:id', async (req, res) => {
-  try {
-    const publicPage = await pageRepository.getPublicById(req.params.id, Date.now());
-
-    if (!publicPage) {
-      return res.status(404).json({
-        success: false,
-        error: '页面不存在'
-      });
-    }
-
-    // Unpublished is indistinguishable from nonexistent on every public
-    // surface (T11, parent spec §5), and the judgment outranks expiry:
-    // an unpublished Share answers 404 even with a valid access cookie,
-    // and even when it is also expired.
-    if (publicPage.page.published === false) {
-      return res.status(404).json({
-        success: false,
-        error: '页面不存在'
-      });
-    }
-
-    if (publicPage.expired) {
-      return res.status(410).json({
-        success: false,
-        error: '此分享已失效'
-      });
-    }
-
-    const { page } = publicPage;
-
-    if (page.is_protected === 1) {
-      setPrivateNoStore(res);
-    }
-
-    // Unified public projection (T02): a locked protected Share exposes
-    // only neutral metadata until the requester presents a valid access
-    // credential. The unlock judgment reuses T01's revision-bound cookie
-    // check, so a credential revoked by a policy change no longer unlocks
-    // the real title/description either.
-    const hasValidAccess = page.is_protected !== 1
-      || hasPageAccess(req, page.id, page.access_revision);
-    const projected = projectPublicMetadata(page, hasValidAccess);
-
-    // The content GET carries the strong content ETag (T06, parent spec
-    // §4), but only for a requester who may see the real metadata: a
-    // locked Share's neutral projection must not leak even the revision
-    // counter, so neither the header nor the field is emitted for it.
-    const contentRevision = hasValidAccess
-      ? toContentRevisionString(page.current_revision)
-      : null;
-
-    if (contentRevision !== null) {
-      res.set('ETag', formatContentEtag(page.id, contentRevision));
-    }
-
-    return res.json({
-      success: true,
-      page: {
-        id: page.id,
-        createdAt: page.created_at,
-        codeType: page.code_type,
-        title: projected.title,
-        description: projected.description,
-        isProtected: page.is_protected === 1,
-        expiresAt: page.expires_at,
-        accessRevision: toAccessRevisionString(page.access_revision),
-        ...(contentRevision !== null ? { contentRevision } : {}),
-        markdownTheme: page.markdown_theme
-      }
-    });
-  } catch (error) {
-    console.error('Get page failed:', error);
-    return res.status(500).json({
-      success: false,
-      error: '服务器错误'
-    });
-  }
-});
+app.use(createViewRouter({ config, pageRepository, auth, publicUrls, parseSmallJson }));
 
 app.post('/api/pages/:id/protect', privateNoStore, requireApiAdmin, parseSmallJson, requireCsrf, async (req, res) => {
   try {
@@ -5270,222 +4967,6 @@ app.post('/api/pages/:id/protect', privateNoStore, requireApiAdmin, parseSmallJs
     return res.status(500).json({
       success: false,
       error: '更新保护状态失败'
-    });
-  }
-});
-
-app.post('/view/:id/password', privateNoStore, parseSmallJson, async (req, res) => {
-  try {
-    const publicPage = await pageRepository.getPublicById(req.params.id, Date.now());
-
-    if (!publicPage) {
-      return res.status(404).json({
-        valid: false
-      });
-    }
-
-    // Unpublished answers exactly like nonexistent here too (T11), so
-    // no new unlock credential can be minted while a Share is down —
-    // and the unpublished judgment outranks expiry.
-    if (publicPage.page.published === false) {
-      return res.status(404).json({
-        valid: false
-      });
-    }
-
-    if (publicPage.expired) {
-      return res.status(410).json({
-        valid: false,
-        error: '此分享已失效'
-      });
-    }
-
-    const { page } = publicPage;
-
-    if (page.is_protected !== 1) {
-      return res.status(404).json({
-        valid: false
-      });
-    }
-
-    const isValid = await verifySecret(req.body.password, page.password_hash || page.password);
-
-    if (!isValid) {
-      return res.status(401).json({
-        valid: false
-      });
-    }
-
-    // Issue the credential bound to the access revision read together with
-    // the password hash above (T01). If the policy rotates afterwards, this
-    // cookie carries the old revision and is rejected; a credential for the
-    // newest revision is never minted from an old-policy verification.
-    setPageAccessCookie(res, req.params.id, page.access_revision);
-    return res.json({
-      valid: true,
-      redirectUrl: `/view/${req.params.id}`
-    });
-  } catch (error) {
-    console.error('Validate page password failed:', error);
-    return res.status(500).json({
-      valid: false
-    });
-  }
-});
-
-app.post('/view/:id/view-event', privateNoStore, async (req, res) => {
-  if (!isSameOriginRequest(req)) {
-    return res.sendStatus(403);
-  }
-
-  try {
-    const access = getPageAccess(req, req.params.id);
-    const outcome = await pageRepository.recordViewEvent(
-      req.params.id,
-      Date.now(),
-      Boolean(access),
-      access?.accessRevision ?? null
-    );
-
-    if (outcome === 'not_found') {
-      return res.sendStatus(404);
-    }
-
-    if (outcome === 'expired') {
-      return res.sendStatus(410);
-    }
-
-    if (outcome === 'protected') {
-      return res.sendStatus(403);
-    }
-
-    // During write maintenance the event is not counted at all (T04).
-    if (outcome === 'maintenance') {
-      return res.sendStatus(503);
-    }
-
-    return outcome === 'counted' ? res.sendStatus(204) : res.sendStatus(500);
-  } catch (error) {
-    console.error('Track page view failed:', {
-      name: error?.name || 'Error',
-      code: safeErrorCode(error)
-    });
-    return res.sendStatus(isPublishingGateError(error) ? 503 : 500);
-  }
-});
-
-app.get('/view/:id', async (req, res) => {
-  setPrivateNoStore(res);
-  const metrics = beginViewPerformance(req, res);
-
-  try {
-    metrics.phase = 'database';
-    const databaseStartedAt = performance.now();
-    let publicPage;
-
-    try {
-      publicPage = await pageRepository.getPublicById(req.params.id, Date.now());
-    } finally {
-      metrics.dbMs = performance.now() - databaseStartedAt;
-    }
-
-    metrics.phase = 'routing';
-
-    if (!publicPage) {
-      metrics.outcome = 'not_found';
-      setTrustedUiCsp(res, { allowFraming: true });
-      return res.status(404).render('error', {
-        title: '页面未找到',
-        page: 'error-page',
-        message: '您请求的页面不存在或已被删除'
-      });
-    }
-
-    const { page } = publicPage;
-    metrics.contentType = safeContentType(page.code_type);
-    metrics.protected = page.is_protected === 1;
-
-    // Unpublished renders the same 404 page as a missing Share (T11),
-    // ahead of the expiry judgment — for every requester, including one
-    // holding a still-current access cookie or a dashboard preview.
-    if (page.published === false) {
-      metrics.outcome = 'not_found';
-      setTrustedUiCsp(res, { allowFraming: true });
-      return res.status(404).render('error', {
-        title: '页面未找到',
-        page: 'error-page',
-        message: '您请求的页面不存在或已被删除'
-      });
-    }
-
-    if (publicPage.expired) {
-      metrics.outcome = 'expired';
-      setTrustedUiCsp(res, { allowFraming: true });
-      return res.status(410).render('error', {
-        title: '分享已失效',
-        page: 'error-page',
-        message: '此分享已失效，无法继续访问'
-      });
-    }
-
-    if (page.is_protected === 1 && !hasPageAccess(req, req.params.id, page.access_revision)) {
-      metrics.outcome = 'password_required';
-      setTrustedUiCsp(res, { allowFraming: true });
-      return res.render('password', {
-        title: 'QuickShare | 密码保护',
-        page: 'password-page',
-        id: req.params.id,
-        error: null
-      });
-    }
-
-    metrics.phase = 'render';
-    const renderStartedAt = performance.now();
-    let prepared;
-
-    try {
-      prepared = await prepareSandboxContent(
-        page.html_content,
-        page.code_type,
-        page.markdown_theme
-      );
-    } finally {
-      metrics.renderMs = performance.now() - renderStartedAt;
-    }
-
-    metrics.phase = 'response';
-    metrics.contentType = safeContentType(prepared.contentType);
-    metrics.outcome = 'served';
-
-    const pageUrl = `${req.protocol}://${req.get('host')}/view/${req.params.id}`;
-    const isDashboardPreview = req.query.adminPreview !== undefined && (
-      !config.authEnabled || Boolean(getDashboardAdminSession(req))
-    );
-    const viewEventUrl = isDashboardPreview
-      ? null
-      : `/view/${encodeURIComponent(req.params.id)}/view-event`;
-    return res.send(renderSandboxedDocument(prepared.renderedContent, prepared.contentType, {
-      title: page.title,
-      description: page.description,
-      pageUrl,
-      socialImageUrl: socialImageUrl(req),
-      viewEventUrl
-    }));
-  } catch (error) {
-    metrics.outcome = metrics.phase === 'database'
-      ? 'database_error'
-      : metrics.phase === 'render'
-        ? 'render_error'
-        : 'server_error';
-    console.error('View page failed:', {
-      name: error?.name || 'Error',
-      code: safeErrorCode(error)
-    });
-    setTrustedUiCsp(res, { allowFraming: true });
-    return res.status(500).render('error', {
-      title: '服务器错误',
-      page: 'error-page',
-      message: '查看页面时发生错误，请稍后再试'
     });
   }
 });
