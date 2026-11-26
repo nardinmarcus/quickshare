@@ -1471,9 +1471,10 @@ async function prepareSandboxContent(rawContent, requestedCodeType, markdownThem
   let contentType = normalizeCodeType(rawContent, requestedCodeType);
   const codeBlocks = extractCodeBlocks(rawContent);
 
-  if (codeBlocks.length === 1 && codeBlocks[0].content.length > rawContent.length * 0.7) {
+  if (codeBlocks.length === 1
+    && codeBlocks[0].type === contentType
+    && codeBlocks[0].content.length > rawContent.length * 0.7) {
     processedContent = codeBlocks[0].content;
-    contentType = VALID_CODE_TYPES.has(codeBlocks[0].type) ? codeBlocks[0].type : 'html';
   }
 
   const renderedContent = await renderContent(processedContent, contentType, markdownTheme);
