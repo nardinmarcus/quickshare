@@ -13,10 +13,6 @@ RUN npm install
 # 复制应用程序代码
 COPY . .
 
-# 创建应用运行目录
-RUN mkdir -p /usr/src/app/tmp && \
-    chmod -R 777 /usr/src/app/tmp
-
 # 暴露端口
 EXPOSE 8888
 
