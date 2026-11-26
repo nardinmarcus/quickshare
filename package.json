@@ -9,6 +9,7 @@
     "test": "NODE_ENV=test VERCEL_ENV= DATABASE_URL= POSTGRES_URL= node --test test/*.test.js",
     "test:postgres": "NODE_ENV=test node --test test/integration/postgres-migrations.test.js test/integration/postgres-backup.test.js test/integration/postgres-maintenance.test.js test/integration/postgres-api-keys.test.js test/integration/postgres-revisions.test.js test/integration/postgres-history.test.js test/integration/postgres-idempotency.test.js test/integration/postgres-restore.test.js test/integration/postgres-purge.test.js test/integration/postgres-publication.test.js test/integration/postgres-grants.test.js test/integration/postgres-update-grants.test.js test/integration/postgres-history-restore.test.js test/integration/postgres-publish-grants.test.js",
     "db:migrate": "node scripts/migrate.js",
+    "db:provision-runtime-role": "node scripts/provision-runtime-role.js",
     "db:maintenance": "node scripts/maintenance.js",
     "db:backfill-revisions": "node scripts/backfill-revision-baseline.js",
     "db:backup": "node scripts/backup-db.js",
