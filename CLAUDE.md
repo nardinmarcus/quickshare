@@ -54,7 +54,7 @@ public/          静态资源（css/ js/ icon/）
   css/           styles.css + login.css + markdown-<preset>.css（目录见 utils/markdownThemeCatalog.js）
   js/            首页 main.js / publish-intent.js，后台 admin*.js / source-diff.js / diff-worker.js，公开页 password.js / view-event.js，vendor/
 utils/           security、contentRenderer、codeDetector、publicProjection、shareAccess、shareGrants、idempotency、contentRevision 等
-scripts/         运维 CLI（db:migrate / maintenance / backup / restore / verify-backup 等，见 package.json scripts）与一次性回填、发布核验脚本
+scripts/         运维 CLI（db:migrate / maintenance / backup / restore / verify-backup 等，见 package.json scripts）与回填脚本
 test/            Node test runner（HTTP/Repository/UI 行为测试 + integration/ PostgreSQL 套件）
 docs/            部署、备份恢复、维护、API 能力、spec #24 摘录、ADR，以及已完成发布的 rollout/handover 记录
 DESIGN.md        后台 UI 设计稿（Toast / Tab / Markdown 主题选择器 + 4 套主题规范）
