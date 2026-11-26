@@ -4,7 +4,6 @@ const express = require('express');
 const { createHash, randomBytes, timingSafeEqual } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('path');
-const bodyParser = require('body-parser');
 const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
 const { performance } = require('node:perf_hooks');
@@ -121,9 +120,9 @@ let nextViewRequestIsColdStart = true;
 
 const app = express();
 const pageRepository = createPageRepository();
-const parseSmallJson = bodyParser.json({ limit: config.smallBodyLimit });
-const parseSmallForm = bodyParser.urlencoded({ extended: true, limit: config.smallBodyLimit });
-const parseShareJson = bodyParser.json({ limit: config.shareBodyLimit });
+const parseSmallJson = express.json({ limit: config.smallBodyLimit });
+const parseSmallForm = express.urlencoded({ extended: true, limit: config.smallBodyLimit });
+const parseShareJson = express.json({ limit: config.shareBodyLimit });
 
 app.locals.config = config;
 app.locals.pageRepository = pageRepository;
