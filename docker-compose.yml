@@ -12,7 +12,14 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=8888
-      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_URL=${DATABASE_URL:?set DATABASE_URL to the pooled runtime Postgres URL}
+      - SESSION_SECRET=${SESSION_SECRET:?set SESSION_SECRET to at least 32 random bytes}
+      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH:?set ADMIN_PASSWORD_HASH from npm run hash-password}
+      - ADMIN_DASHBOARD_PASSWORD_HASH=${ADMIN_DASHBOARD_PASSWORD_HASH:?set ADMIN_DASHBOARD_PASSWORD_HASH from npm run hash-password}
+      - SHARE_API_KEY=${SHARE_API_KEY:-}
+      - BASE_URL=${BASE_URL:-}
+      - SHARE_BASE_URL=${SHARE_BASE_URL:-}
+      - SECURE_COOKIES=${SECURE_COOKIES:-}
     networks:
       - quickshare-network
 

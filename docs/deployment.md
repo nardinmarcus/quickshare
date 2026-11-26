@@ -129,11 +129,24 @@ vercel dev
 
 ### 快速启动
 
+生产模式启动前必须提供 `DATABASE_URL`、`SESSION_SECRET`、`ADMIN_PASSWORD_HASH`、`ADMIN_DASHBOARD_PASSWORD_HASH`，缺任何一个 `docker compose` 都会直接报错并指出缺哪个变量。把它们写进一个不入库、也不进镜像的 env 文件（`.gitignore` 与 `.dockerignore` 已覆盖 `.env*`）：
+
 ```bash
-docker-compose up -d
+# .env.production
+DATABASE_URL=postgresql://user:password@pool-host:5432/database?sslmode=verify-full
+SESSION_SECRET=<至少 32 字节随机值>
+ADMIN_PASSWORD_HASH='scrypt$...'
+ADMIN_DASHBOARD_PASSWORD_HASH='scrypt$...'
+# 可选：SHARE_API_KEY、BASE_URL、SHARE_BASE_URL、SECURE_COOKIES
 ```
 
-访问 `http://localhost:8888`。
+scrypt hash 含 `$`，必须用单引号包起来，否则 Compose 会把 `$...` 当变量展开，hash 被截断后登录永远失败。
+
+```bash
+docker compose --env-file .env.production up -d
+```
+
+访问 `http://localhost:8888`。生产模式默认签发 `Secure` cookie：经 HTTPS 反向代理访问时无需改动；若只在内网用纯 HTTP 访问，设 `SECURE_COOKIES=false`。
 
 ### 自定义端口
 
@@ -147,23 +160,14 @@ ports:
 ### 管理命令
 
 ```bash
-docker-compose logs -f      # 查看日志
-docker-compose down          # 停止
-docker-compose up -d --build # 更新并重启
+docker compose --env-file .env.production logs -f
+docker compose --env-file .env.production down
+docker compose --env-file .env.production up -d --build   # 更新并重启
 ```
 
-### 环境变量
+### 迁移
 
-在 `docker-compose.yml` 的 `environment` 中添加：
-
-```yaml
-- ADMIN_PASSWORD_HASH=<hash>
-- ADMIN_DASHBOARD_PASSWORD_HASH=<hash>
-- SESSION_SECRET=<secret>
-- DATABASE_URL=<pooled-postgres-url>
-```
-
-direct owner URL 不进入以上容器运行时环境；在启动或升级容器前，从可信主机临时注入迁移命令并在完成后清除。
+容器启动不会执行 DDL。首次部署和每次升级前，先从可信主机用 direct owner URL 临时执行 `npm run db:migrate`（例如 `DATABASE_MIGRATION_URL=... npm run db:migrate`），完成后清除该变量；direct owner URL 不写进上面的 env 文件。
 
 ## 全部可用环境变量
 
