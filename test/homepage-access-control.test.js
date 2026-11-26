@@ -277,7 +277,7 @@ test('public homepage mode does not open management routes or the Share API', as
     htmlContent: '<h1>API key remains independent</h1>'
   }, { 'X-API-Key': 'homepage-access-api-key' });
 
-  assert.equal(recent.status, 401);
+  assert.equal(recent.status, 404);
   assert.equal(protect.status, 401);
   assert.equal(dashboard.status, 302);
   assert.equal(dashboard.headers.location, '/admin/login');

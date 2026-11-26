@@ -32,7 +32,7 @@ Express 4 + EJS + PostgreSQL (生产) / 内存 (开发)。部署在 Vercel。
 | `/login` `/logout` `/admin/login` `/admin/logout` | — | 两层登录/登出 |
 | `/` | requireHomepageAccess | 首页（创建分享），可由站点设置切为公开 |
 | `/api/pages/create`、`/api/pages/preview` | requireBrowserPublishAccess + requireBrowserPublishCsrf | 首页发布与预览 |
-| `/api/pages/list/recent`、`/api/pages/:id/protect` | requireApiAdmin（protect 另加 requireCsrf） | 前端会话的兼容接口，仓库内无调用方但作为公开边界保留 |
+| `/api/pages/:id/protect` | requireApiAdmin + requireCsrf | 原有保护入口，仓库内无调用方但受 T01 访问撤销覆盖，按规格保留 |
 | `/admin/*` 页面与较早的写接口 | requireDashboardAdmin | 列表、详情、统计、审计、导出、修订预览；页面更新/删除/批量删除/克隆、API Key 管理 |
 | `/admin/*` 较新的 JSON 接口 | requireDashboardApiAdmin | 收藏、修订历史/恢复/清除、上下架、撤销访问、站点设置、grant 列表、操作回执 |
 | `/api/v1/*` | requireApiKey + scope/grant | Share API（创建、读取、更新、历史、恢复、上下架、me、capabilities、operations） |
