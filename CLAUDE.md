@@ -26,7 +26,7 @@ Express 4 + EJS + PostgreSQL (生产) / 内存 (开发)。部署在 Vercel。
 
 ## 路由清单
 
-路由与中间件链全部在 `app.js`，以代码为准：`rg -n '^app\.(get|post|put|delete)\(' app.js`。按前缀的鉴权分族：
+路由与中间件链在 `app.js` 和 `routes/*.js`，以代码为准：`rg -n '^\s*(app|router)\.(get|post|put|delete)\(' app.js routes`。按前缀的鉴权分族：
 
 | 前缀 | 鉴权 | 说明 |
 |------|------|------|
@@ -44,8 +44,9 @@ Express 4 + EJS + PostgreSQL (生产) / 内存 (开发)。部署在 Vercel。
 
 ```text
 api/             Vercel function 入口（api/index.js）
-app.js           Express app，所有路由定义在此
-middleware/      auth.js：两层登录会话、CSRF、页面访问 cookie、API Key/scope 鉴权中间件
+app.js           Express app 装配与尚未拆出的路由（拆分计划见 #79）
+routes/          view.js：公开查看、解锁、浏览事件、公开元信息（Router 工厂，由 app.js 挂载）
+middleware/      auth.js：两层登录会话、CSRF、页面访问 cookie、API Key/scope 鉴权；responsePolicy.js：no-store 与 CSP 响应头
 config.js        环境变量聚合与生产启动校验
 server.js        本地服务器入口
 models/          数据层（pageRepository 选择器 + Postgres / 内存仓储 + 迁移、连接配置、publishing）
@@ -54,7 +55,7 @@ views/           EJS 模板（index / login / password / admin-* / error / parti
 public/          静态资源（css/ js/ icon/）
   css/           styles.css + login.css + markdown-<preset>.css（目录见 utils/markdownThemeCatalog.js）
   js/            首页 main.js / publish-intent.js，后台 admin*.js / source-diff.js / diff-worker.js，公开页 password.js / view-event.js，vendor/
-utils/           security、contentRenderer、codeDetector、publicProjection、shareAccess、shareGrants、idempotency、contentRevision 等
+utils/           security、contentRenderer、codeDetector、sandboxDocument（沙箱文档与内容类型）、publicUrls（公开地址与社交图）、publicProjection、shareAccess、shareGrants、idempotency、contentRevision 等
 scripts/         运维 CLI（db:migrate / maintenance / backup / restore / verify-backup 等，见 package.json scripts）与回填脚本
 test/            Node test runner（HTTP/Repository/UI 行为测试 + integration/ PostgreSQL 套件）
 docs/            部署、备份恢复、维护、API 能力、spec #24 摘录、ADR，以及已完成发布的 rollout/handover 记录
