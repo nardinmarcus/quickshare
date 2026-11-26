@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QuickShare UI 重设计 · 第二轮</title>
+<style>
+*{box-sizing:border-box;margin:0}
+body{--s:1;font:14px/1.6 -apple-system,"SF Pro Text","PingFang SC","Noto Sans SC",sans-serif;background:#dededc;color:#161616;padding:32px;-webkit-font-smoothing:antialiased}
+body[data-mode=dark]{background:#1c1c1c;color:#ededed}
+.top{display:flex;gap:24px;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;margin-bottom:28px}
+.top h1{font-size:20px;font-weight:600;letter-spacing:-.01em}
+.top p{max-width:80ch;opacity:.7;font-size:13px;margin-top:4px}
+.ctl{display:flex;gap:10px}
+.sw{display:flex;border:1px solid currentColor;border-radius:8px;overflow:hidden}
+.sw button{font:inherit;font-size:13px;padding:6px 14px;background:none;border:0;color:inherit;cursor:pointer}
+.sw button[aria-pressed=true]{background:#161616;color:#fff}
+body[data-mode=dark] .sw button[aria-pressed=true]{background:#ededed;color:#161616}
+.cell{margin-bottom:44px}
+.cell-head{display:flex;align-items:baseline;gap:12px;margin-bottom:10px}
+.cell-head b{font-size:17px;font-weight:600}
+.cell-head span{opacity:.65;font-size:13.5px}
+.fit{overflow-x:auto;overflow-y:hidden}
+.stage{width:2584px;display:flex;gap:24px;transform-origin:0 0;transform:scale(var(--s))}
+body[data-view=full] .stage{width:1280px;flex-direction:column}
+.screen{width:1280px;height:760px;flex:none;position:relative;overflow:hidden;border-radius:10px;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.5}
+.notes{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:12px;font-size:13px;line-height:1.7;max-width:1280px}
+.notes h3{font-size:11.5px;font-weight:600;opacity:.55;margin-bottom:2px}
+.notes p{opacity:.85}
+@media(max-width:700px){.notes{grid-template-columns:1fr}body{padding:14px}}
+button{font:inherit;color:inherit;border:0;background:none}
+.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px}
+.mono{font-family:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace}
+.num{font-variant-numeric:tabular-nums}
+.sp{flex:1}
+pre{font:inherit;white-space:pre-wrap}
+
+/* ===== A 现有结构，黑白净化 ===== */
+[data-design-option=A]{--bg:#f4f4f5;--sf:#fff;--sub:#f4f4f5;--ink:#0a0a0a;--mut:#71717a;--ln:#e8e8ea;--pri:#0a0a0a;--pfg:#fff;--sh:0 1px 2px rgba(0,0,0,.04),0 12px 32px rgba(0,0,0,.06)}
+body[data-mode=dark] [data-design-option=A]{--bg:#09090b;--sf:#151517;--sub:#1e1e21;--ink:#ededef;--mut:#8b8b93;--ln:#27272a;--pri:#ededef;--pfg:#09090b;--sh:0 1px 0 rgba(255,255,255,.04) inset}
+.a{font-family:Inter,-apple-system,"PingFang SC",sans-serif}
+.a-hd{text-align:center;padding-top:108px;margin-bottom:22px}
+.a-hd h2{font-size:26px;font-weight:700;letter-spacing:-.02em}.a-hd p{color:var(--mut);margin-top:2px}
+.a-card{background:var(--sf);border-radius:16px;box-shadow:var(--sh)}
+.a-home{width:860px;margin:0 auto;padding:18px 20px 16px}
+.a-row{display:flex;align-items:center;gap:8px}
+.a-lab{font-size:13px;font-weight:600}
+.a-chip{font-size:12px;font-weight:500;padding:3px 9px;border-radius:99px;background:var(--sub);color:var(--ink);display:inline-flex;gap:5px;align-items:center}
+.a-chip.o{color:var(--mut)}
+.a-btn{height:36px;padding:0 14px;border-radius:9px;background:var(--sub);font-weight:500;font-size:13.5px;display:inline-flex;align-items:center;gap:7px;color:var(--ink)}
+.a-btn.p{background:var(--pri);color:var(--pfg);font-weight:600}.a-btn.s{height:30px;padding:0 10px;font-size:12.5px}
+.a-ta{height:264px;margin:12px 0;background:var(--sub);border-radius:10px;padding:14px 16px;font-size:13px;line-height:1.85}
+.a-set{padding:10px 2px;border-top:1px solid var(--ln);border-bottom:1px solid var(--ln);font-size:13px}
+.a-set span{color:var(--mut)}
+.a-ft{position:absolute;bottom:22px;left:0;right:0;text-align:center;font-size:12.5px;color:var(--mut)}
+.a-adm{width:1060px;margin:0 auto;padding-top:44px}
+.a-h{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:20px}
+.a-h h2{font-size:26px;font-weight:700;letter-spacing:-.02em}.a-h p{color:var(--mut);font-size:13px}
+.a-seg{display:flex;background:#e9e9eb;border-radius:11px;padding:3px;font-size:13.5px;color:var(--mut)}
+body[data-mode=dark] .a-seg{background:var(--sub)}
+.a-seg span{padding:6px 16px;border-radius:8px;font-weight:500}.a-seg .on{background:var(--sf);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.a-fl{display:flex;gap:8px;padding:14px 16px;border-bottom:1px solid var(--ln)}
+.a-in{flex:1;height:36px;border-radius:9px;background:var(--sub);display:flex;align-items:center;gap:8px;padding:0 12px;color:var(--mut);font-size:13.5px}
+.a-t{width:100%;border-collapse:collapse;font-size:13.5px}
+.a-t th{text-align:left;font-weight:500;font-size:12px;color:var(--mut);padding:10px 16px}
+.a-t td{padding:0 16px;height:50px;border-top:1px solid var(--ln)}
+.a-t td:first-child{font-weight:500}.a-t .r{text-align:right}.a-t .m{color:var(--mut)}
+
+/* ===== B 细线 ===== */
+[data-design-option=B]{--bg:#fff;--ink:#000;--mut:#6e6e6e;--ln:#e6e6e6;--hov:#fafafa;--pri:#000;--pfg:#fff}
+body[data-mode=dark] [data-design-option=B]{--bg:#000;--ink:#fff;--mut:#8c8c8c;--ln:#242424;--hov:#0d0d0d;--pri:#fff;--pfg:#000}
+.b{font-family:"Helvetica Neue",Helvetica,"PingFang SC",Arial,sans-serif}
+.b-bar{height:56px;display:flex;align-items:center;gap:32px;padding:0 48px;border-bottom:1px solid var(--ln);font-size:14px}
+.b-bar b{font-weight:600;letter-spacing:-.01em;font-size:15px}
+.b-bar nav{display:flex;gap:28px;height:100%;color:var(--mut)}
+.b-bar nav span{display:flex;align-items:center;border-bottom:1.5px solid transparent;margin-bottom:-1px}.b-bar nav .on{color:var(--ink);border-color:var(--ink)}
+.b-home{width:760px;margin:0 auto;padding-top:76px}
+.b-home h2{font-size:34px;font-weight:500;letter-spacing:-.03em;line-height:1.2;margin-bottom:28px}
+.b-box{border:1px solid var(--ink);border-radius:2px}
+.b-bx-h{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--ln);font-size:13px}
+.b-k{font:500 11px/1 ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.06em;color:var(--mut)}
+.b-u{border-bottom:1px solid currentColor;padding-bottom:1px;display:inline-flex;gap:6px;align-items:center}
+.b-ta{height:250px;padding:16px;font-size:13px;line-height:1.85}
+.b-set{display:flex;gap:14px;padding:12px 16px;border-top:1px solid var(--ln);font-size:13.5px;align-items:center}.b-set span{color:var(--mut)}
+.b-act{display:flex;align-items:center;gap:26px;margin-top:20px;font-size:14px}.b-act .st{color:var(--mut)}
+.b-go{height:44px;padding:0 22px;background:var(--pri);color:var(--pfg);border-radius:2px;font-weight:500;display:inline-flex;align-items:center;gap:8px}
+.b-adm{padding:40px 48px 0}
+.b-th{display:flex;align-items:flex-end;margin-bottom:26px}
+.b-th h2{font-size:44px;font-weight:500;letter-spacing:-.035em;line-height:1}.b-th sup{font-size:15px;color:var(--mut);font-weight:400;margin-left:6px;letter-spacing:0}
+.b-tabs{display:flex;gap:26px;font-size:14px;color:var(--mut);border-bottom:1px solid var(--ink);padding-bottom:12px;align-items:center}
+.b-tabs .on{color:var(--ink);font-weight:500}.b-tabs i{font-style:normal;font-size:12px;margin-left:4px;opacity:.7}
+.b-tabs .t{display:inline-flex;gap:6px;align-items:center}
+.b-r{display:grid;grid-template-columns:1fr 120px 150px 80px 140px 160px;align-items:center;height:56px;border-bottom:1px solid var(--ln);font-size:14px;padding:0 8px;margin:0 -8px}
+.b-r.h{height:40px;font-size:12px;color:var(--mut)}
+.b-r b{font-weight:500;font-size:15px}.b-r .m{color:var(--mut);font-size:13px}.b-r .r{text-align:right}
+.b-r.hov{background:var(--hov)}
+.b-sq{display:inline-block;width:7px;height:7px;background:var(--ink);margin-right:8px}.b-sq.l{background:none;border:1.5px solid var(--ink)}.b-sq.o{background:var(--ln)}
+.b-ic{display:flex;gap:14px;justify-content:flex-end}
+.b-pg{display:flex;justify-content:space-between;padding-top:16px;font-size:13px;color:var(--mut)}
+
+/* ===== C 侧栏与抽屉 ===== */
+[data-design-option=C]{--bg:#fff;--pn:#fafafa;--ink:#171717;--mut:#737373;--ln:#ececec;--sel:#f4f4f4;--pri:#171717;--pfg:#fff;--red:#b42318}
+body[data-mode=dark] [data-design-option=C]{--bg:#111;--pn:#0c0c0c;--ink:#ededed;--mut:#8c8c8c;--ln:#232323;--sel:#1b1b1b;--pri:#ededed;--pfg:#111;--red:#f97066}
+.c{font-size:13.5px}
+.c-home{background:var(--pn);height:100%}
+.c-logo{display:flex;align-items:center;gap:9px;font-weight:600;font-size:14px}
+.c-logo i{width:18px;height:18px;border-radius:5px;background:var(--ink)}
+.c-hh{text-align:center;padding-top:118px;margin-bottom:26px}
+.c-hh h2{font-size:24px;font-weight:600;letter-spacing:-.02em}.c-hh p{color:var(--mut);margin-top:3px;font-size:14px}
+.c-comp{width:820px;margin:0 auto;background:var(--bg);border:1px solid var(--ln);border-radius:14px;box-shadow:0 1px 2px rgba(0,0,0,.03),0 8px 24px rgba(0,0,0,.04)}
+.c-ta{height:272px;padding:18px 20px;font-size:13px;line-height:1.85}
+.c-cb{display:flex;align-items:center;gap:6px;padding:10px 12px;border-top:1px solid var(--ln)}
+.c-ch{height:30px;padding:0 10px;border:1px solid var(--ln);border-radius:8px;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink)}
+.c-ch.g{border-color:transparent;color:var(--mut)}
+.c-go{height:32px;padding:0 12px 0 14px;border-radius:8px;background:var(--pri);color:var(--pfg);font-weight:600;display:inline-flex;align-items:center;gap:8px}
+.c-kbd{font:11px/1 ui-monospace,Menlo,monospace;padding:3px 5px;border-radius:4px;border:1px solid var(--ln);color:var(--mut)}
+.c-go .c-kbd{border-color:rgba(128,128,128,.5);color:inherit;opacity:.75}
+.c-hint{text-align:center;margin-top:16px;font-size:12.5px;color:var(--mut)}
+.c-adm{display:grid;grid-template-columns:216px 1fr 388px;height:100%}
+.c-side{background:var(--pn);border-right:1px solid var(--ln);padding:16px 12px;display:flex;flex-direction:column;gap:2px}
+.c-side .c-logo{padding:2px 8px 18px}
+.c-new{height:34px;border:1px solid var(--ln);background:var(--bg);border-radius:8px;display:flex;align-items:center;gap:8px;padding:0 10px;margin-bottom:14px;font-weight:500}
+.c-nv{height:34px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;color:var(--mut)}
+.c-nv.on{background:var(--sel);color:var(--ink);font-weight:500}.c-nv em{margin-left:auto;font-style:normal;font-size:12px}
+.c-side .ft{margin-top:auto;padding:8px 10px;font-size:12px;color:var(--mut)}
+.c-main{display:flex;flex-direction:column;min-width:0}
+.c-tb{height:56px;display:flex;align-items:center;gap:8px;padding:0 20px;border-bottom:1px solid var(--ln)}
+.c-tb h3{font-size:15px;font-weight:600}.c-tb h3 span{color:var(--mut);font-weight:400;margin-left:6px}
+.c-s{height:32px;width:220px;border:1px solid var(--ln);border-radius:8px;display:flex;align-items:center;gap:8px;padding:0 8px 0 10px;color:var(--mut);font-size:13px}
+.c-r{display:grid;grid-template-columns:36px 1fr 84px 96px 56px 92px;align-items:center;height:44px;padding:0 20px;border-bottom:1px solid var(--ln)}
+.c-r.h{height:36px;font-size:12px;color:var(--mut)}
+.c-r.on{background:var(--sel)}.c-r b{font-weight:500}.c-r .m{color:var(--mut);font-size:12.5px}.c-r .r{text-align:right}
+.c-ck{width:14px;height:14px;border:1.5px solid #c4c4c4;border-radius:4px}
+.c-d{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ink);margin-right:7px;vertical-align:1px}.c-d.l{background:none;box-shadow:0 0 0 1.5px var(--ink) inset}.c-d.o{background:#c4c4c4}
+.c-dr{border-left:1px solid var(--ln);display:flex;flex-direction:column}
+.c-dh{height:56px;display:flex;align-items:center;padding:0 18px;border-bottom:1px solid var(--ln);gap:10px}
+.c-dh h3{font-size:15px;font-weight:600;flex:1}
+.c-db{padding:18px;display:flex;flex-direction:column;gap:14px;flex:1}
+.c-f small{display:block;color:var(--mut);font-size:12px;margin-bottom:5px}
+.c-fv{height:34px;border:1px solid var(--ln);border-radius:8px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;font-size:12.5px}
+.c-dl{display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;padding:14px 0;border-top:1px solid var(--ln);border-bottom:1px solid var(--ln)}
+.c-dl small{display:block;color:var(--mut);font-size:12px}
+.c-rv{display:flex;align-items:center;gap:8px;font-size:13px}.c-rv span{color:var(--mut);font-size:12.5px}
+.c-df{display:flex;gap:6px;padding:12px 18px;border-top:1px solid var(--ln)}
+.c-df .c-ch.d{color:var(--red);margin-left:auto}
+
+/* ===== D 单栏留白 ===== */
+[data-design-option=D]{--bg:#fff;--fl:#f5f5f5;--fl2:#ebebeb;--ink:#111;--mut:#737373;--pri:#111;--pfg:#fff}
+body[data-mode=dark] [data-design-option=D]{--bg:#0b0b0b;--fl:#181818;--fl2:#262626;--ink:#f3f3f3;--mut:#8f8f8f;--pri:#f3f3f3;--pfg:#0b0b0b}
+.d{font-family:-apple-system,"SF Pro Display","PingFang SC",sans-serif;font-size:15px}
+.d-col{width:700px;margin:0 auto}
+.d-hh{text-align:center;padding-top:96px;margin-bottom:30px}
+.d-hh h2{font-size:38px;font-weight:650;letter-spacing:-.035em;line-height:1.1}.d-hh p{color:var(--mut);margin-top:8px;font-size:16px}
+.d-in{background:var(--fl);border-radius:24px;padding:22px 24px 14px}
+.d-ta{height:226px;font-size:13.5px;line-height:1.9}
+.d-pl{height:32px;padding:0 13px;border-radius:99px;background:var(--bg);display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:500}
+.d-pl.g{background:none;color:var(--mut)}
+.d-set{display:flex;justify-content:center;margin-top:16px}
+.d-set span{display:inline-flex;gap:8px;align-items:center;font-size:13.5px;color:var(--mut);padding:7px 14px;border-radius:99px}
+.d-set b{color:var(--ink);font-weight:500}
+.d-act{display:flex;justify-content:center;align-items:center;gap:10px;margin-top:14px}
+.d-b{height:46px;padding:0 22px;border-radius:99px;display:inline-flex;align-items:center;gap:8px;font-weight:500;font-size:15px}
+.d-b.f{background:var(--fl)}.d-b.p{background:var(--pri);color:var(--pfg);font-weight:600;padding:0 26px}
+.d-ft{position:absolute;bottom:22px;left:0;right:0;text-align:center;font-size:12.5px;color:var(--mut)}
+.d-nav{display:flex;align-items:center;justify-content:space-between;padding:20px 32px 0}
+.d-nav b{font-size:16px;font-weight:650;letter-spacing:-.02em;width:140px}
+.d-tabs{display:flex;background:var(--fl);border-radius:99px;padding:4px;font-size:14px;color:var(--mut)}
+.d-tabs span{padding:6px 18px;border-radius:99px;font-weight:500}.d-tabs .on{background:var(--ink);color:var(--bg)}
+.d-plus{width:140px;display:flex;justify-content:flex-end}
+.d-plus span{height:36px;padding:0 16px 0 12px;border-radius:99px;background:var(--fl);display:inline-flex;align-items:center;gap:6px;font-weight:500;font-size:14px}
+.d-t{display:flex;align-items:baseline;gap:10px;margin:34px 0 18px}
+.d-t h2{font-size:32px;font-weight:650;letter-spacing:-.03em}.d-t span{color:var(--mut)}
+.d-s{height:46px;background:var(--fl);border-radius:99px;display:flex;align-items:center;gap:10px;padding:0 8px 0 18px;color:var(--mut)}
+.d-g{font-size:13px;color:var(--mut);margin:20px 0 4px;padding-left:12px}
+.d-it{display:flex;align-items:center;gap:14px;height:60px;padding:0 12px;border-radius:16px}
+.d-it.hov{background:var(--fl)}
+.d-ty{width:38px;height:38px;border-radius:11px;background:var(--fl);display:grid;place-items:center;font:600 10.5px ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.02em}
+.d-it.hov .d-ty{background:var(--fl2)}
+.d-it b{font-weight:600;display:block;line-height:1.3}.d-it small{color:var(--mut);font-size:13px}
+.d-it .tm{color:var(--mut);font-size:13px}.d-it .ac{display:flex;gap:16px;color:var(--ink)}
+.d-it.off b{color:var(--mut);font-weight:500}
+</style>
+</head>
+<body data-namoo-design-preview data-variance="5" data-motion="2" data-density="5">
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></symbol>
+  <symbol id="i-up" viewBox="0 0 16 16"><path d="M8 10.5V2.5M4.8 5.5 8 2.3l3.2 3.2M2.5 10.5v2a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-2"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 16 16"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="2"/></symbol>
+  <symbol id="i-eyeoff" viewBox="0 0 16 16"><path d="M2 2l12 12M6.5 4A6 6 0 0 1 8 3.5c4 0 6.500 4.500 6.500 4.500a11 11 0 0 1-2 2.500M9.900 12.200A6 6 0 0 1 8 12.500C4 12.500 1.500 8 1.500 8a11 11 0 0 1 2.600-3"/></symbol>
+  <symbol id="i-link" viewBox="0 0 16 16"><path d="M6.800 9.200a3 3 0 0 0 4.200 0l2-2a3 3 0 0 0-4.200-4.200l-.8.8M9.200 6.800a3 3 0 0 0-4.200 0l-2 2a3 3 0 0 0 4.200 4.200l.8-.8"/></symbol>
+  <symbol id="i-down" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></symbol>
+  <symbol id="i-star" viewBox="0 0 16 16"><path d="m8 2 1.800 3.800 4.200.500-3.100 2.900.800 4.100L8 11.300l-3.700 2 .800-4.100L2 6.300l4.200-.500Z"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.500" y="5.500" width="8" height="8" rx="1.500"/><path d="M10.500 5.500v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 16 16"><path d="M6.500 3.500h-3v9h9v-3M9.500 2.500h4v4M13.500 2.500 7.500 8.500"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 16 16"><path d="M2.500 4.500h11M6 4.500v-2h4v2M4 4.500l.600 8.100a1 1 0 0 0 1 .900h4.800a1 1 0 0 0 1-.900l.600-8.100"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="6.500" rx="1.500"/><path d="M5.500 7V5a2.500 2.500 0 0 1 5 0v2"/></symbol>
+  <symbol id="i-list" viewBox="0 0 16 16"><path d="M2.500 4h11M2.500 8h11M2.500 12h11"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 16 16"><path d="M2.500 13.500h11M4.500 11V7.500M8 11V3.500M11.500 11V6"/></symbol>
+  <symbol id="i-key" viewBox="0 0 16 16"><circle cx="5.500" cy="10.500" r="3"/><path d="m7.700 8.300 5.800-5.800M11 5l2 2"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.500"/><path d="M8 5v3l2 1.500"/></symbol>
+  <symbol id="i-dl" viewBox="0 0 16 16"><path d="M8 2.500v8M4.800 7.500 8 10.700l3.200-3.200M2.500 13.500h11"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 16 16"><rect x="2.500" y="3.500" width="11" height="10" rx="1.500"/><path d="M2.500 6.500h11M5.500 2v3M10.500 2v3"/></symbol>
+</svg>
+
+<header class="top">
+  <div>
+    <h1>QuickShare UI 重设计 · 第二轮</h1>
+    <p>按你的反馈重做：四个方向都是极简黑白，首页都保持「居中输入区加收起的发布设置」。它们的差别在于用什么建立层级（阴影、线、面板、色块），以及后台用哪种骨架。左边是首页，右边是后台分享列表；列表里的分享是示例数据。</p>
+  </div>
+  <div class="ctl">
+    <div class="sw" role="group" aria-label="查看方式"><button type="button" data-set-view="fit">并排</button><button type="button" data-set-view="full">逐屏放大</button></div>
+    <div class="sw" role="group" aria-label="明暗模式"><button type="button" data-set-mode="light">亮色</button><button type="button" data-set-mode="dark">暗色</button></div>
+  </div>
+</header>
+
+<main>
+
+<!-- ============ A ============ -->
+<div class="cell">
+  <div class="cell-head"><b>A · 现有结构，黑白净化</b><span>什么都不挪，只去掉青色、理清层级</span></div>
+  <div class="fit"><article class="stage" data-design-option="A" data-design-name="现有结构，黑白净化" data-baseline="true" data-structure-archetype="incumbent-shell">
+    <div class="screen a">
+      <div class="a-hd"><h2>QuickShare</h2><p>粘贴代码，一键分享</p></div>
+      <div class="a-card a-home">
+        <div class="a-row"><span class="a-lab">分享内容</span><span class="sp"></span><span class="a-chip">Markdown</span><span class="a-btn s"><svg class="i"><use href="#i-up"/></svg>上传文件</span></div>
+        <pre class="a-ta mono"># 季度复盘报告
+
+本季度完成了发布流重构。
+
+- 幂等创建
+- 修订历史</pre>
+        <div class="a-row a-set"><b>发布设置</b><span>持有链接可访问 · 长期有效 · 自动提取标题</span><span class="sp"></span><svg class="i" style="color:var(--mut)"><use href="#i-down"/></svg></div>
+        <div class="a-row" style="margin-top:14px"><span style="color:var(--mut);font-size:13px">准备发布</span><span class="sp"></span><span class="a-btn">清除</span><span class="a-btn"><svg class="i"><use href="#i-eye"/></svg>安全预览</span><span class="a-btn p"><svg class="i"><use href="#i-link"/></svg>发布并生成链接</span></div>
+      </div>
+      <p class="a-ft">©2026 Namoo</p>
+    </div>
+    <div class="screen a">
+      <div class="a-adm">
+        <div class="a-h"><div><h2>分享管理</h2><p>共 6 个分享 · 所有时间均为北京时间</p></div>
+          <div class="a-seg"><span>统计</span><span class="on">分享</span><span>API</span><span>审计</span><span>新建</span></div></div>
+        <div class="a-card">
+          <div class="a-fl"><div class="a-in"><svg class="i"><use href="#i-search"/></svg>按标题、ID 或描述搜索</div><span class="a-btn">类型<svg class="i"><use href="#i-down"/></svg></span><span class="a-btn">状态<svg class="i"><use href="#i-down"/></svg></span><span class="a-btn">日期<svg class="i"><use href="#i-down"/></svg></span><span class="a-btn"><svg class="i"><use href="#i-star"/></svg>收藏</span><span class="a-btn"><svg class="i"><use href="#i-dl"/></svg>导出清单</span></div>
+          <table class="a-t"><tr><th>标题</th><th>类型</th><th>状态</th><th>密码</th><th class="r">访问量</th><th class="r">创建时间</th><th class="r">操作</th></tr>
+            <tr><td>季度复盘报告</td><td><span class="a-chip">markdown</span></td><td>公开</td><td class="m">—</td><td class="r num">128</td><td class="r m num">2026/11/27 01:11</td><td class="r m">···</td></tr>
+            <tr><td>产品落地页原型</td><td><span class="a-chip">html</span></td><td><svg class="i"><use href="#i-lock"/></svg> 密码保护</td><td class="mono">878620</td><td class="r num">46</td><td class="r m num">2026/11/27 01:11</td><td class="r m">···</td></tr>
+            <tr><td>访问流程图</td><td><span class="a-chip">mermaid</span></td><td>公开</td><td class="m">—</td><td class="r num">9</td><td class="r m num">2026/11/27 01:11</td><td class="r m">···</td></tr>
+            <tr><td class="m">图标草稿</td><td><span class="a-chip o">svg</span></td><td class="m">已下架</td><td class="m">—</td><td class="r num m">0</td><td class="r m num">2026/11/27 01:11</td><td class="r m">···</td></tr>
+            <tr><td>API 接入说明</td><td><span class="a-chip">markdown</span></td><td>公开</td><td class="m">—</td><td class="r num">312</td><td class="r m num">2026/11/26 18:02</td><td class="r m">···</td></tr>
+            <tr><td>周会纪要 11-20</td><td><span class="a-chip">markdown</span></td><td><svg class="i"><use href="#i-lock"/></svg> 密码保护</td><td class="mono">······</td><td class="r num">17</td><td class="r m num">2026/11/20 10:30</td><td class="r m">···</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </article></div>
+  <div class="notes">
+    <section data-design-structure="A"><h3>骨架</h3><p>和现在完全一样：首页是居中的白色卡片，后台是标题加顶部分段导航，下面一张卡片装筛选和表格。只把筛选区收成一行。窄屏时按钮换行，表格横向滚动。</p></section>
+    <section data-design-foundation="A"><h3>视觉系统</h3><p>层级靠阴影：浅灰底上浮起白卡片。Inter 字体，10–16px 圆角，主按钮从青色改成黑色，状态不再用彩色标签。改动最小、风险最低，但看起来仍然是「灰底白卡片」。</p></section>
+  </div>
+</div>
+
+<!-- ============ B ============ -->
+<div class="cell">
+  <div class="cell-head"><b>B · 细线</b><span>纯白、纯黑、一条线；靠字号和比例</span></div>
+  <div class="fit"><article class="stage" data-design-option="B" data-design-name="细线" data-baseline="false" data-structure-archetype="catalogue">
+    <div class="screen b">
+      <div class="b-bar"><b>QuickShare</b></div>
+      <div class="b-home">
+        <h2>粘贴代码，一键分享</h2>
+        <div class="b-box">
+          <div class="b-bx-h"><span>分享内容</span><span class="b-k">MARKDOWN</span><span class="sp"></span><span class="b-u"><svg class="i"><use href="#i-up"/></svg>上传文件</span></div>
+          <pre class="b-ta mono"># 季度复盘报告
+
+本季度完成了发布流重构。
+
+- 幂等创建
+- 修订历史</pre>
+          <div class="b-set"><b style="font-weight:500">发布设置</b><span>持有链接可访问 · 长期有效 · 自动提取标题</span><span class="sp"></span><svg class="i"><use href="#i-down"/></svg></div>
+        </div>
+        <div class="b-act"><span class="st">准备发布</span><span class="sp"></span><span class="b-u">清除</span><span class="b-u">安全预览</span><span class="b-go">发布并生成链接</span></div>
+      </div>
+    </div>
+    <div class="screen b">
+      <div class="b-bar"><b>QuickShare</b><nav><span>统计</span><span class="on">分享</span><span>API</span><span>审计</span></nav><span class="sp"></span><span style="color:var(--mut);font-size:13px">北京时间</span><span class="b-u"><svg class="i"><use href="#i-plus"/></svg>新建</span></div>
+      <div class="b-adm">
+        <div class="b-th"><h2>分享<sup>6</sup></h2><span class="sp"></span><span class="b-u" style="font-size:13.5px"><svg class="i"><use href="#i-dl"/></svg>导出清单</span></div>
+        <div class="b-tabs"><span class="on">全部<i>6</i></span><span>公开<i>3</i></span><span>密码保护<i>2</i></span><span>已下架<i>1</i></span><span>收藏<i>1</i></span><span class="sp"></span><span class="t">类型<svg class="i"><use href="#i-down"/></svg></span><span class="t">日期<svg class="i"><use href="#i-down"/></svg></span><span class="t" style="color:var(--ink)"><svg class="i"><use href="#i-search"/></svg>搜索</span></div>
+        <div class="b-r h"><span>标题</span><span>类型</span><span>状态</span><span class="r">访问量</span><span class="r">创建时间</span><span></span></div>
+        <div class="b-r"><b>季度复盘报告</b><span class="mono m">markdown</span><span><i class="b-sq"></i>公开</span><span class="r num">128</span><span class="r m num">11/27 01:11</span><span></span></div>
+        <div class="b-r hov"><b>产品落地页原型</b><span class="mono m">html</span><span><i class="b-sq l"></i>密码 <span class="mono">878620</span></span><span class="r num">46</span><span class="r m num">11/27 01:11</span><span class="b-ic"><svg class="i"><use href="#i-ext"/></svg><svg class="i"><use href="#i-star"/></svg><svg class="i"><use href="#i-eyeoff"/></svg><svg class="i"><use href="#i-copy"/></svg><svg class="i"><use href="#i-trash"/></svg></span></div>
+        <div class="b-r"><b>访问流程图</b><span class="mono m">mermaid</span><span><i class="b-sq"></i>公开</span><span class="r num">9</span><span class="r m num">11/27 01:11</span><span></span></div>
+        <div class="b-r"><b style="color:var(--mut)">图标草稿</b><span class="mono m">svg</span><span class="m"><i class="b-sq o"></i>已下架</span><span class="r num m">0</span><span class="r m num">11/27 01:11</span><span></span></div>
+        <div class="b-r"><b>API 接入说明</b><span class="mono m">markdown</span><span><i class="b-sq"></i>公开</span><span class="r num">312</span><span class="r m num">11/26 18:02</span><span></span></div>
+        <div class="b-r"><b>周会纪要 11-20</b><span class="mono m">markdown</span><span><i class="b-sq l"></i>密码保护</span><span class="r num">17</span><span class="r m num">11/20 10:30</span><span></span></div>
+        <div class="b-pg"><span>第 1 / 1 页</span><span>上一页　下一页</span></div>
+      </div>
+    </div>
+  </article></div>
+  <div class="notes">
+    <section data-design-structure="B"><h3>骨架</h3><p>一条通栏顶部导航贯穿首页和后台。首页左对齐一句标题，下面是一个黑色细线框住的输入区。后台没有卡片：大标题、一行状态页签兼筛选，然后是铺满宽度的表格，行操作只在悬停行出现。窄屏时表格隐去类型和时间两列。</p></section>
+    <section data-design-foundation="B"><h3>视觉系统</h3><p>层级靠线和字号：纯白底、纯黑字、1px 线，没有阴影和灰色面板。Helvetica 式无衬线，标题大而紧，2px 圆角，方形黑色主按钮，状态用实心和空心小方块。最锋利、最有平面设计感；代价是显得冷，暗色下是纯黑。</p></section>
+  </div>
+</div>
+
+<!-- ============ C ============ -->
+<div class="cell">
+  <div class="cell-head"><b>C · 侧栏与抽屉</b><span>设置变成输入框里的一排小控件；后台点一行，右边出详情</span></div>
+  <div class="fit"><article class="stage" data-design-option="C" data-design-name="侧栏与抽屉" data-baseline="false" data-structure-archetype="workbench">
+    <div class="screen c"><div class="c-home">
+      <div class="c-logo" style="position:absolute;left:28px;top:24px"><i></i>QuickShare</div>
+      <div class="c-hh"><h2>粘贴代码，一键分享</h2><p>支持 HTML、Markdown、SVG 和 Mermaid</p></div>
+      <div class="c-comp">
+        <pre class="c-ta mono"># 季度复盘报告
+
+本季度完成了发布流重构。
+
+- 幂等创建
+- 修订历史</pre>
+        <div class="c-cb"><span class="c-ch">Markdown<svg class="i"><use href="#i-down"/></svg></span><span class="c-ch"><svg class="i"><use href="#i-link"/></svg>持有链接可访问<svg class="i"><use href="#i-down"/></svg></span><span class="c-ch"><svg class="i"><use href="#i-cal"/></svg>长期有效<svg class="i"><use href="#i-down"/></svg></span><span class="c-ch g">更多设置</span><span class="sp"></span><span class="c-ch g"><svg class="i"><use href="#i-up"/></svg>上传</span><span class="c-ch g"><svg class="i"><use href="#i-eye"/></svg>安全预览</span><span class="c-go">发布<span class="c-kbd">⌘↵</span></span></div>
+      </div>
+      <p class="c-hint">准备发布 · 标题会自动提取</p>
+    </div></div>
+    <div class="screen c"><div class="c-adm">
+      <div class="c-side"><div class="c-logo"><i></i>QuickShare</div>
+        <div class="c-new"><svg class="i"><use href="#i-plus"/></svg>新建分享</div>
+        <div class="c-nv on"><svg class="i"><use href="#i-list"/></svg>分享<em>6</em></div>
+        <div class="c-nv"><svg class="i"><use href="#i-chart"/></svg>统计</div>
+        <div class="c-nv"><svg class="i"><use href="#i-key"/></svg>API</div>
+        <div class="c-nv"><svg class="i"><use href="#i-clock"/></svg>审计</div>
+        <div class="ft">所有时间均为北京时间</div></div>
+      <div class="c-main">
+        <div class="c-tb"><h3>分享<span>6</span></h3><span class="sp"></span><div class="c-s"><svg class="i"><use href="#i-search"/></svg><span class="sp">搜索</span><span class="c-kbd">/</span></div><span class="c-ch">类型<svg class="i"><use href="#i-down"/></svg></span><span class="c-ch">状态<svg class="i"><use href="#i-down"/></svg></span><span class="c-ch">日期<svg class="i"><use href="#i-down"/></svg></span></div>
+        <div class="c-r h"><span><i class="c-ck" style="display:block"></i></span><span>标题</span><span>类型</span><span>状态</span><span class="r">访问</span><span class="r">创建</span></div>
+        <div class="c-r"><span><i class="c-ck" style="display:block"></i></span><b>季度复盘报告</b><span class="mono m">markdown</span><span><i class="c-d"></i>公开</span><span class="r num">128</span><span class="r m num">11/27 01:11</span></div>
+        <div class="c-r on"><span><i class="c-ck" style="display:block"></i></span><b>产品落地页原型</b><span class="mono m">html</span><span><i class="c-d l"></i>密码保护</span><span class="r num">46</span><span class="r m num">11/27 01:11</span></div>
+        <div class="c-r"><span><i class="c-ck" style="display:block"></i></span><b>访问流程图</b><span class="mono m">mermaid</span><span><i class="c-d"></i>公开</span><span class="r num">9</span><span class="r m num">11/27 01:11</span></div>
+        <div class="c-r"><span><i class="c-ck" style="display:block"></i></span><b style="color:var(--mut)">图标草稿</b><span class="mono m">svg</span><span class="m"><i class="c-d o"></i>已下架</span><span class="r num m">0</span><span class="r m num">11/27 01:11</span></div>
+        <div class="c-r"><span><i class="c-ck" style="display:block"></i></span><b>API 接入说明</b><span class="mono m">markdown</span><span><i class="c-d"></i>公开</span><span class="r num">312</span><span class="r m num">11/26 18:02</span></div>
+        <div class="c-r"><span><i class="c-ck" style="display:block"></i></span><b>周会纪要 11-20</b><span class="mono m">markdown</span><span><i class="c-d l"></i>密码保护</span><span class="r num">17</span><span class="r m num">11/20 10:30</span></div>
+      </div>
+      <div class="c-dr">
+        <div class="c-dh"><h3>产品落地页原型</h3><svg class="i"><use href="#i-star"/></svg><svg class="i"><use href="#i-x"/></svg></div>
+        <div class="c-db">
+          <div class="c-f"><small>公开链接</small><div class="c-fv mono"><span>/view/83ZU5nV3okL2</span><span style="display:flex;gap:10px"><svg class="i"><use href="#i-copy"/></svg><svg class="i"><use href="#i-ext"/></svg></span></div></div>
+          <div class="c-f"><small>访问密码</small><div class="c-fv mono"><span>878620</span><svg class="i"><use href="#i-copy"/></svg></div></div>
+          <div class="c-dl"><div><small>类型</small>html</div><div><small>状态</small><i class="c-d l"></i>密码保护 · 已发布</div><div><small>访问量</small><span class="num">46</span></div><div><small>创建时间</small><span class="num">2026/11/27 01:11</span></div></div>
+          <div><small style="color:var(--mut);font-size:12px;display:block;margin-bottom:6px">历史版本</small><div class="c-rv"><b style="font-weight:500">Revision 1</b><span>当前版本 · 网页创建</span><span class="sp"></span><span class="c-ch">查看全部</span></div></div>
+        </div>
+        <div class="c-df"><span class="c-ch">编辑</span><span class="c-ch">下架</span><span class="c-ch">克隆</span><span class="c-ch d">删除</span></div>
+      </div>
+    </div></div>
+  </article></div>
+  <div class="notes">
+    <section data-design-structure="C"><h3>骨架</h3><p>首页还是居中的输入卡片，但发布设置不再是一行折叠摘要，而是输入框底部的一排小控件（类型、访问方式、有效期），发布按钮也在这一排里。后台是固定左侧边栏加紧凑表格；点一行从右侧出详情抽屉，复制链接、看密码、下架都不用跳页。窄屏时侧边栏收成顶部菜单，抽屉变成整页。</p></section>
+    <section data-design-foundation="C"><h3>视觉系统</h3><p>层级靠面板和细边框：白色内容区、极浅灰的侧栏和页面底，1px 浅灰边。系统无衬线，数字等宽对齐，8–14px 圆角，黑色主按钮带快捷键提示；全局只有「删除」用红色。效率最高、最像成熟产品；代价是个性最弱。</p></section>
+  </div>
+</div>
+
+<!-- ============ D ============ -->
+<div class="cell">
+  <div class="cell-head"><b>D · 单栏留白</b><span>首页和后台同一根窄栏；没有线，只有留白和浅灰块</span></div>
+  <div class="fit"><article class="stage" data-design-option="D" data-design-name="单栏留白" data-baseline="false" data-structure-archetype="single-column-feed">
+    <div class="screen d">
+      <div class="d-col">
+        <div class="d-hh"><h2>QuickShare</h2><p>粘贴代码，一键分享</p></div>
+        <div class="d-in">
+          <pre class="d-ta mono"># 季度复盘报告
+
+本季度完成了发布流重构。
+
+- 幂等创建
+- 修订历史</pre>
+          <div style="display:flex;gap:8px"><span class="d-pl">Markdown</span><span class="sp"></span><span class="d-pl g"><svg class="i"><use href="#i-up"/></svg>上传文件</span></div>
+        </div>
+        <div class="d-set"><span>发布设置　<b>持有链接可访问 · 长期有效 · 自动提取标题</b><svg class="i"><use href="#i-down"/></svg></span></div>
+        <div class="d-act"><span class="d-b" style="color:var(--mut)">清除</span><span class="d-b f"><svg class="i"><use href="#i-eye"/></svg>安全预览</span><span class="d-b p">发布并生成链接</span></div>
+      </div>
+      <p class="d-ft">©2026 Namoo</p>
+    </div>
+    <div class="screen d">
+      <div class="d-nav"><b>QuickShare</b><div class="d-tabs"><span>统计</span><span class="on">分享</span><span>API</span><span>审计</span></div><div class="d-plus"><span><svg class="i"><use href="#i-plus"/></svg>新建</span></div></div>
+      <div class="d-col" style="width:760px">
+        <div class="d-t"><h2>分享</h2><span>6 个 · 北京时间</span></div>
+        <div class="d-s"><svg class="i"><use href="#i-search"/></svg><span class="sp">按标题、ID 或描述搜索</span><span class="d-pl">类型<svg class="i"><use href="#i-down"/></svg></span><span class="d-pl">状态<svg class="i"><use href="#i-down"/></svg></span><span class="d-pl"><svg class="i"><use href="#i-star"/></svg></span></div>
+        <p class="d-g">今天</p>
+        <div class="d-it"><span class="d-ty">MD</span><div class="sp"><b>季度复盘报告</b><small>公开 · 128 次访问</small></div><span class="tm num">01:11</span></div>
+        <div class="d-it hov"><span class="d-ty">HTML</span><div class="sp"><b>产品落地页原型</b><small>密码保护 · <span class="mono">878620</span> · 46 次访问</small></div><span class="ac"><svg class="i"><use href="#i-ext"/></svg><svg class="i"><use href="#i-star"/></svg><svg class="i"><use href="#i-eyeoff"/></svg><svg class="i"><use href="#i-copy"/></svg><svg class="i"><use href="#i-trash"/></svg></span></div>
+        <div class="d-it"><span class="d-ty">MMD</span><div class="sp"><b>访问流程图</b><small>公开 · 9 次访问</small></div><span class="tm num">01:11</span></div>
+        <div class="d-it off"><span class="d-ty">SVG</span><div class="sp"><b>图标草稿</b><small>已下架 · 0 次访问</small></div><span class="tm num">01:11</span></div>
+        <p class="d-g">更早</p>
+        <div class="d-it"><span class="d-ty">MD</span><div class="sp"><b>API 接入说明</b><small>公开 · 312 次访问 · 已收藏</small></div><span class="tm num">11/26 18:02</span></div>
+        <div class="d-it"><span class="d-ty">MD</span><div class="sp"><b>周会纪要 11-20</b><small>密码保护 · 17 次访问</small></div><span class="tm num">11/20 10:30</span></div>
+      </div>
+    </div>
+  </article></div>
+  <div class="notes">
+    <section data-design-structure="D"><h3>骨架</h3><p>首页和后台共用一根 700–760px 的居中窄栏，两边全是留白。首页是大号品牌名、一个浅灰圆角输入块、居中的一行设置和按钮。后台顶部是胶囊页签，分享不用表格，而是按日期分组的两行列表，操作在悬停行出现。窄屏几乎不用变，只是栏宽贴边。</p></section>
+    <section data-design-foundation="D"><h3>视觉系统</h3><p>层级靠色块和留白：没有任何边框和阴影，只有白底和两级浅灰填充。系统无衬线，标题粗而紧，大圆角和胶囊按钮，内容类型用等宽缩写小方块表示。最柔和、留白最多、手机上最自然；代价是一屏能看到的分享最少，不适合按列排序和比较。</p></section>
+  </div>
+</div>
+
+</main>
+
+<script>
+(function(){
+  var body=document.body;
+  function set(k,v){body.dataset[k]=v;document.querySelectorAll('[data-set-'+k+']').forEach(function(b){b.setAttribute('aria-pressed',b.getAttribute('data-set-'+k)===v)});fit()}
+  function fit(){document.querySelectorAll('.fit').forEach(function(f){
+    var st=f.firstElementChild,w=body.dataset.view==='full'?1280:2584,s=Math.min(1,Math.max(f.clientWidth/w,0.3));
+    st.style.setProperty('--s',s);f.style.height=Math.ceil(st.offsetHeight*s)+'px';})}
+  ['mode','view'].forEach(function(k){document.querySelectorAll('[data-set-'+k+']').forEach(function(b){b.onclick=function(){set(k,b.getAttribute('data-set-'+k))}})});
+  var h=location.hash;
+  set('mode',h.indexOf('dark')>-1||matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+  set('view',h.indexOf('full')>-1||innerWidth<1500?'full':'fit');
+  addEventListener('resize',fit);
+})();
+</script>
+</body>
+</html>

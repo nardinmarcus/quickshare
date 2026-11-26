@@ -67,6 +67,7 @@ module.exports = {
   MANAGEMENT_TIME_ZONE,
   buildManagementDailyStats,
   formatManagementDateTime,
+  managementDateKey,
   managementDateRange,
   managementRecentStart,
   parseManagementDateTimeLocal,

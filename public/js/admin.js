@@ -266,6 +266,23 @@ window.Toast = {
   var batchDeleteBtn = document.getElementById('batch-delete-btn');
   var batchCancelBtn = document.getElementById('batch-cancel-btn');
   var checkboxes = Array.from(document.querySelectorAll('.row-checkbox'));
+  var shareList = document.getElementById('share-list');
+  var selectModeBtn = document.getElementById('select-mode-btn');
+  var selecting = false;
+
+  // 选择模式：默认不显示勾选框；进入后每行的类型方块换成勾选框，底部出现批量操作条。
+  function setSelecting(next) {
+    selecting = next;
+    if (shareList) shareList.dataset.selecting = next ? 'true' : 'false';
+    if (selectModeBtn) {
+      selectModeBtn.setAttribute('aria-pressed', next ? 'true' : 'false');
+      selectModeBtn.textContent = next ? '完成' : '选择';
+    }
+    if (!next) {
+      checkboxes.forEach(function (checkbox) { checkbox.checked = false; });
+    }
+    updateToolbar();
+  }
 
   function selectedIds() {
     return checkboxes
@@ -279,7 +296,7 @@ window.Toast = {
     var count = selectedIds().length;
     countSpan.textContent = '已选择 ' + count + ' 项';
     batchDeleteBtn.disabled = count === 0;
-    toolbar.hidden = count === 0;
+    toolbar.hidden = !selecting;
     selectAll.checked = count > 0 && count === checkboxes.length;
     selectAll.indeterminate = count > 0 && count < checkboxes.length;
   }
@@ -297,12 +314,15 @@ window.Toast = {
     });
 
     batchCancelBtn.addEventListener('click', function () {
-      checkboxes.forEach(function (checkbox) {
-        checkbox.checked = false;
-      });
-      updateToolbar();
-      selectAll.focus();
+      setSelecting(false);
+      if (selectModeBtn) selectModeBtn.focus();
     });
+
+    if (selectModeBtn) {
+      selectModeBtn.addEventListener('click', function () {
+        setSelecting(!selecting);
+      });
+    }
 
     batchDeleteBtn.addEventListener('click', function () {
       var ids = selectedIds();

@@ -2,12 +2,12 @@
 
 <div class="main-container">
   <header class="app-header">
-    <h1 class="app-title">QuickShare<span class="brand-pulse"></span></h1>
+    <h1 class="app-title">QuickShare</h1>
     <p class="app-description">粘贴代码，一键分享</p>
   </header>
 
   <div class="content-area">
-    <div class="card input-card">
+    <div class="input-card">
       <div class="input-section">
         <div id="loading-indicator" class="loading-indicator">
           <div class="spinner"></div>
@@ -17,21 +17,18 @@
         <div id="publishing-workbench" class="publishing-workbench">
           <div class="publishing-editor">
             <div id="code-input-container" role="tabpanel">
-              <div class="content-input-toolbar">
-                <label for="html-input" class="content-label">分享内容</label>
-                <div class="content-input-actions">
-                  <div id="code-type-indicator" class="code-type-indicator html-type">
-                    <i class="fas fa-code" aria-hidden="true"></i>
-                    <span id="code-type-text">HTML</span>
-                  </div>
-                  <label id="upload-file-trigger" for="html-file" class="upload-file-trigger micro-interaction" aria-label="上传文件">
-                    <i class="fas fa-file-upload" aria-hidden="true"></i>
-                    <span>上传文件</span>
-                    <span class="upload-file-badge" aria-hidden="true">常用</span>
-                  </label>
-                </div>
-              </div>
+              <label for="html-input" class="sr-only">分享内容</label>
               <textarea id="html-input" class="cyber-input" placeholder="在这里粘贴你的 HTML / Markdown / SVG / Mermaid 代码..."></textarea>
+              <div class="content-input-toolbar">
+                <div id="code-type-indicator" class="code-type-indicator html-type">
+                  <i class="fas fa-code" aria-hidden="true"></i>
+                  <span id="code-type-text">HTML</span>
+                </div>
+                <label id="upload-file-trigger" for="html-file" class="upload-file-trigger" aria-label="上传文件">
+                  <i class="fas fa-file-upload" aria-hidden="true"></i>
+                  <span>上传文件</span>
+                </label>
+              </div>
             </div>
 
             <div class="hidden">
@@ -128,14 +125,14 @@
 
             <div class="button-row">
               <div class="button-group">
-                <button id="clear-button" class="cyber-btn cyber-btn-secondary tooltip micro-interaction" data-tooltip="清空内容" aria-label="清空内容">
-                  <i class="fas fa-eraser mr-1" aria-hidden="true"></i>清除
+                <button id="clear-button" class="text-control" type="button" aria-label="清空内容">
+                  清除
                 </button>
-                <button id="prepublish-preview-button" class="cyber-btn cyber-btn-secondary micro-interaction" type="button" aria-busy="false">
+                <button id="prepublish-preview-button" class="cyber-btn cyber-btn-secondary" type="button" aria-busy="false">
                   <i class="fas fa-eye mr-1" aria-hidden="true"></i>安全预览
                 </button>
-                <button id="generate-button" class="cyber-btn cyber-btn-primary tooltip micro-interaction" data-tooltip="发布并生成链接" aria-label="发布并生成链接" aria-busy="false">
-                  <i class="fas fa-link mr-1" aria-hidden="true"></i>发布并生成链接
+                <button id="generate-button" class="cyber-btn cyber-btn-primary" aria-label="发布并生成链接" aria-busy="false">
+                  发布并生成链接
                 </button>
               </div>
             </div>
@@ -155,7 +152,7 @@
       </div>
     </div>
 
-    <section id="publish-preview" class="card publish-preview" aria-labelledby="publish-preview-title" hidden>
+    <section id="publish-preview" class="publish-preview" aria-labelledby="publish-preview-title" hidden>
       <div class="publish-preview-header">
         <div>
           <p class="result-eyebrow">发布前检查</p>
@@ -185,7 +182,7 @@
       ></iframe>
     </section>
 
-    <section id="result-section" class="card result-card hidden" aria-labelledby="result-title">
+    <section id="result-section" class="result-card hidden" aria-labelledby="result-title">
       <div class="result-heading">
         <div>
           <p id="result-eyebrow" class="result-eyebrow">发布回执</p>

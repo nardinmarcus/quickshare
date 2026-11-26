@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QuickShare UI 重设计 · 四个方向</title>
+<style>
+*{box-sizing:border-box;margin:0}
+body{--s:1;font:14px/1.6 -apple-system,"SF Pro Text","PingFang SC","Noto Sans SC",sans-serif;background:#e8e8e4;color:#1b1b1a;padding:28px}
+body[data-mode=dark]{background:#0c0c0d;color:#e9e9e6}
+.top{display:flex;gap:24px;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;margin-bottom:22px}
+.top h1{font-size:22px;letter-spacing:-.01em}
+.top p{max-width:76ch;opacity:.72;font-size:13px}
+.modes{display:flex;border:1px solid currentColor;border-radius:8px;overflow:hidden}
+.modes button{font:inherit;font-size:13px;padding:6px 14px;background:none;border:0;color:inherit;cursor:pointer}
+.modes button[aria-pressed=true]{background:currentColor}
+.modes button[aria-pressed=true] span{color:#e8e8e4;mix-blend-mode:difference}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:28px}
+.cell{min-width:0}
+.cell.wide{grid-column:1/-1}
+@media(max-width:1100px){.grid{grid-template-columns:1fr}}
+.cell-head{display:flex;align-items:baseline;gap:10px;margin-bottom:8px}
+.cell-head b{font-size:16px}
+.cell-head span{opacity:.65;font-size:13px;flex:1}
+.cell-head button{font:inherit;font-size:12px;padding:3px 10px;border:1px solid currentColor;border-radius:6px;background:none;color:inherit;cursor:pointer;opacity:.75}
+.fit{overflow-x:auto;overflow-y:hidden;border-radius:10px;box-shadow:0 0 0 1px rgba(128,128,128,.35)}
+.stage{width:1280px;transform-origin:0 0;transform:scale(var(--s))}
+.screen{height:720px;position:relative;overflow:hidden}
+.screen+.screen{border-top:6px solid rgba(128,128,128,.35)}
+.tag{position:absolute;right:0;top:0;z-index:5;font:11px/1 ui-monospace,Menlo,monospace;padding:6px 9px;background:rgba(128,128,128,.28);color:inherit;border-bottom-left-radius:8px}
+.notes{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px;font-size:12.5px;line-height:1.65}
+.notes h3{font-size:11px;letter-spacing:.08em;opacity:.6;margin-bottom:2px}
+.notes p{opacity:.85}
+@media(max-width:640px){.notes{grid-template-columns:1fr}body{padding:14px}}
+button,input{font:inherit;color:inherit}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+
+/* ============ A 安静工作台（现状精修） ============ */
+[data-design-option=A]{--bg:#f3f4f6;--sf:#fff;--sub:#f1f1f3;--ink:#18181b;--mut:#71717a;--ln:rgba(24,24,27,.1);--pri:#0f766e;--pfg:#fff;--warn:#dc2626;
+  background:var(--bg);color:var(--ink);font-family:Inter,-apple-system,"PingFang SC",sans-serif}
+body[data-mode=dark] [data-design-option=A]{--bg:#0a0a0f;--sf:#17171a;--sub:#202025;--ink:#e8e8ed;--mut:#92929d;--ln:rgba(255,255,255,.1);--pri:#5eead4;--pfg:#083344;--warn:#fca5a5}
+.a-bar{display:flex;justify-content:space-between;align-items:center;padding:20px 48px}
+.a-logo{font-weight:700;font-size:20px}.a-logo i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--pri);margin-left:5px}
+.a-card{background:var(--sf);border-radius:16px;box-shadow:0 1px 2px rgba(15,23,42,.04),0 16px 40px rgba(15,23,42,.07)}
+.a-btn{padding:9px 16px;border-radius:10px;border:0;background:var(--sub);color:var(--mut);font-weight:500}
+.a-btn.p{background:var(--pri);color:var(--pfg);font-weight:600}
+.a-home{width:1120px;margin:22px auto 0;padding:20px;display:grid;grid-template-columns:1fr 320px;gap:20px;height:540px}
+.a-ed{display:flex;flex-direction:column;gap:10px;min-width:0}
+.a-row{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--mut)}
+.a-chip{padding:3px 10px;border-radius:99px;background:var(--sub);font-size:12px;font-weight:600;color:var(--ink)}
+.a-chip.g{color:#16a34a;background:rgba(34,197,94,.12)}.a-chip.r{color:var(--warn);background:rgba(239,68,68,.12)}
+.a-ta{flex:1;background:var(--sub);border:1px solid var(--ln);border-radius:10px;padding:14px;font-size:13px;line-height:1.8;white-space:pre}
+.a-side{display:flex;flex-direction:column;gap:14px;font-size:13px}
+.a-side label{display:block;color:var(--mut);font-size:12px;margin-bottom:4px}
+.a-in{background:var(--sub);border:1px solid var(--ln);border-radius:8px;padding:8px 10px;color:var(--mut)}
+.a-radio{display:flex;gap:9px;padding:9px 10px;border:1px solid var(--ln);border-radius:8px;margin-bottom:6px}
+.a-radio.on{border-color:var(--pri)}.a-radio i{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--mut);margin-top:3px;flex:none}.a-radio.on i{border:4px solid var(--pri)}
+.a-radio small{display:block;color:var(--mut)}
+.a-adm{padding:28px 150px}
+.a-h{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:18px}
+.a-h small{color:var(--mut);letter-spacing:.06em;font-size:11px}.a-h h2{font-size:26px}
+.a-seg{display:flex;background:var(--sub);border-radius:12px;padding:4px;font-size:14px;color:var(--mut)}
+.a-seg span{padding:7px 18px;border-radius:9px}.a-seg .on{background:var(--sf);color:var(--pri);font-weight:600}
+.a-filter{display:flex;gap:10px;align-items:center;padding:14px 18px;border-bottom:1px solid var(--ln);font-size:13px}
+.a-filter .a-in{flex:1}
+.a-t{width:100%;border-collapse:collapse;font-size:13.5px}
+.a-t th{text-align:left;font-weight:500;font-size:12px;color:var(--mut);padding:10px 18px}
+.a-t td{padding:11px 18px;border-top:1px solid var(--ln)}
+.a-t td:last-child{color:var(--mut);letter-spacing:.3em}
+
+/* ============ B 稿纸与登记簿 ============ */
+[data-design-option=B]{--bg:#f3eee4;--sf:#fffdf8;--ink:#211d18;--mut:#7a7166;--ln:#d6ccbb;--pri:#c0351e;--pfg:#fffdf8;
+  background:var(--bg);color:var(--ink);font-family:"Iowan Old Style","Palatino","Songti SC","Noto Serif SC",serif}
+body[data-mode=dark] [data-design-option=B]{--bg:#1a1714;--sf:#23201b;--ink:#ece5d9;--mut:#a39a8d;--ln:#3b352d;--pri:#f0745a;--pfg:#1a1714}
+.b-mast{display:flex;align-items:baseline;gap:22px;padding:30px 72px 14px;border-bottom:1px solid var(--ink);margin:0 0 0}
+.b-mast h2{font-size:34px;font-weight:600;letter-spacing:-.01em}
+.b-mast em{font-style:normal;color:var(--mut);font-size:15px;flex:1}
+.b-mast nav{display:flex;gap:26px;font-size:16px}.b-mast nav .on{border-bottom:2px solid var(--pri);color:var(--pri)}
+.b-home{display:grid;grid-template-columns:1fr 330px;gap:48px;padding:30px 72px 0;height:590px}
+.b-sheet{background:var(--sf);border:1px solid var(--ln);display:grid;grid-template-columns:54px 1fr;font:14px/2 ui-monospace,"SF Mono",Menlo,monospace}
+.b-sheet ol{list-style:none;padding:22px 0;text-align:right;color:var(--mut);border-right:1px solid var(--pri);padding-right:10px;opacity:.8}
+.b-sheet pre{padding:22px 24px;font:inherit;white-space:pre-wrap}
+.b-col h3{font-size:13px;letter-spacing:.2em;color:var(--mut);font-weight:400;margin-bottom:10px}
+.b-dl{font-size:16px}.b-dl div{display:flex;align-items:baseline;gap:8px;padding:9px 0;border-bottom:1px dotted var(--ln)}
+.b-dl dt{color:var(--mut)}.b-dl dd{margin-left:auto;border-bottom:1px solid var(--ink);padding:0 2px}
+.b-dl dd.auto{border-bottom-style:dashed;color:var(--mut)}
+.b-note{font-size:13.5px;color:var(--mut);margin:16px 0 20px;line-height:1.8}
+.b-pub{display:block;width:100%;padding:15px;background:var(--pri);color:var(--pfg);border:0;font-family:inherit;font-size:19px;letter-spacing:.3em;font-weight:600}
+.b-sub{display:flex;justify-content:space-between;font-size:14.5px;margin-top:14px}.b-sub span{border-bottom:1px solid var(--ink)}
+.b-adm{padding:24px 72px}
+.b-ttl{display:flex;align-items:baseline;gap:16px;margin-bottom:6px}.b-ttl h2{font-size:28px;font-weight:600}.b-ttl span{color:var(--mut)}
+.b-sent{font-size:16px;color:var(--mut);padding-bottom:14px;border-bottom:3px double var(--ink)}
+.b-sent u{color:var(--ink);text-decoration-thickness:1px;text-underline-offset:4px}
+.b-row{display:grid;grid-template-columns:44px 1fr 120px 90px 130px;gap:16px;align-items:baseline;padding:13px 0;border-bottom:1px solid var(--ln)}
+.b-row .n{color:var(--mut);font-size:13px}
+.b-row h4{font-size:19px;font-weight:600}.b-row h4 sup{color:var(--pri);font-size:12px;margin-left:4px}
+.b-row p{font:12px/1.7 ui-monospace,Menlo,monospace;color:var(--mut)}
+.b-row .st{font-size:14.5px}.b-row .st.lock{color:var(--pri)}.b-row .st.off{color:var(--mut);text-decoration:line-through}
+.b-row .num{text-align:right;font-size:17px;font-variant-numeric:tabular-nums}
+.b-row .dt{text-align:right;color:var(--mut);font-size:13.5px}
+.b-row.hov{background:var(--sf);margin:0 -16px;padding-left:16px;padding-right:16px}
+.b-acts{grid-column:2/-1;font-size:14px;display:flex;gap:18px;margin-top:4px}.b-acts span{border-bottom:1px solid var(--ink)}.b-acts .d{color:var(--pri);border-color:var(--pri)}
+
+/* ============ C 双栏工作室 ============ */
+[data-design-option=C]{--bg:#fbfbfc;--pn:#f2f3f6;--ink:#111318;--mut:#646b78;--ln:#dfe2e8;--pri:#2f4bd8;--pfg:#fff;--sel:#e8ecfd;
+  background:var(--bg);color:var(--ink);font-size:13px}
+body[data-mode=dark] [data-design-option=C]{--bg:#0f1115;--pn:#16191f;--ink:#e6e8ec;--mut:#8a92a0;--ln:#272b33;--pri:#93a5ff;--pfg:#0b1030;--sel:#1b2241}
+.c-top{height:44px;display:flex;align-items:center;gap:14px;padding:0 14px;border-bottom:1px solid var(--ln)}
+.c-mark{width:20px;height:20px;border-radius:5px;background:var(--pri)}
+.c-top b{font-size:13px}.c-top .sp{flex:1}
+.c-segs{display:flex;border:1px solid var(--ln);border-radius:6px;overflow:hidden;font:12px ui-monospace,Menlo,monospace}
+.c-segs span{padding:4px 10px;color:var(--mut);border-right:1px solid var(--ln)}.c-segs span:last-child{border:0}.c-segs .on{background:var(--sel);color:var(--pri)}
+.c-kbd{font:11px ui-monospace,Menlo,monospace;border:1px solid var(--ln);border-radius:4px;padding:1px 5px;color:var(--mut)}
+.c-split{display:grid;grid-template-columns:1fr 1fr;height:636px}
+.c-code{border-right:1px solid var(--ln);display:grid;grid-template-columns:46px 1fr;font:13px/1.9 ui-monospace,"SF Mono",Menlo,monospace;padding-top:12px}
+.c-code ol{list-style:none;padding:0 10px 0 0;text-align:right;color:var(--mut);opacity:.6}
+.c-code pre{font:inherit;white-space:pre-wrap}.c-code pre b{color:var(--pri);font-weight:600}
+.c-prev{background:var(--pn);display:flex;flex-direction:column}
+.c-ptab{display:flex;gap:16px;padding:9px 16px;border-bottom:1px solid var(--ln);font-size:12px;color:var(--mut)}.c-ptab .on{color:var(--ink);font-weight:600}
+.c-doc{margin:20px;background:var(--bg);border:1px solid var(--ln);border-radius:6px;flex:1;padding:36px 44px;font-size:15px;line-height:1.8}
+.c-doc h1{font-size:28px;margin-bottom:14px}.c-doc ul{padding-left:20px;margin-top:10px}
+.c-stat{height:40px;border-top:1px solid var(--ln);display:flex;align-items:center;gap:0;font-size:12px;color:var(--mut);padding-left:14px}
+.c-stat>span{padding:0 14px;border-right:1px solid var(--ln);height:100%;display:flex;align-items:center;gap:6px}.c-stat>span b{color:var(--ink);font-weight:500}
+.c-stat .sp{flex:1;border:0}
+.c-go{height:100%;padding:0 20px;background:var(--pri);color:var(--pfg);border:0;font-weight:600;display:flex;align-items:center;gap:8px}
+.c-go .c-kbd{border-color:currentColor;color:inherit;opacity:.8}
+.c-adm{display:grid;grid-template-columns:190px 430px 1fr;height:720px}
+.c-nav{background:var(--pn);border-right:1px solid var(--ln);padding:12px 10px;display:flex;flex-direction:column;gap:2px}
+.c-nav .br{display:flex;gap:8px;align-items:center;padding:4px 6px 14px;font-weight:600}
+.c-nav a{display:flex;justify-content:space-between;padding:6px 8px;border-radius:6px;color:var(--mut)}.c-nav a.on{background:var(--sel);color:var(--pri);font-weight:600}
+.c-nav .new{border:1px solid var(--ln);border-radius:6px;padding:6px 8px;margin-bottom:10px;display:flex;justify-content:space-between;background:var(--bg)}
+.c-nav .ft{margin-top:auto;font-size:11px;color:var(--mut);padding:6px 8px}
+.c-list{border-right:1px solid var(--ln);display:flex;flex-direction:column}
+.c-srch{margin:10px;padding:6px 10px;border:1px solid var(--ln);border-radius:6px;color:var(--mut);display:flex;justify-content:space-between}
+.c-fl{display:flex;gap:6px;padding:0 10px 10px;border-bottom:1px solid var(--ln);font-size:12px}
+.c-fl span{border:1px solid var(--ln);border-radius:5px;padding:2px 8px;color:var(--mut)}.c-fl .on{border-color:var(--pri);color:var(--pri)}
+.c-it{display:grid;grid-template-columns:54px 1fr auto;gap:10px;padding:9px 12px;border-bottom:1px solid var(--ln);align-items:center}
+.c-it.on{background:var(--sel);box-shadow:inset 2px 0 var(--pri)}
+.c-it .ty{font:11px ui-monospace,Menlo,monospace;color:var(--mut)}
+.c-it b{font-weight:500;font-size:13.5px}.c-it small{display:block;color:var(--mut);font:11px ui-monospace,Menlo,monospace}
+.c-it .v{font:12px ui-monospace,Menlo,monospace;color:var(--mut);text-align:right}
+.c-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#1f9d55;margin-right:5px}.c-dot.l{background:#d08a00}.c-dot.o{background:var(--mut)}
+.c-det{display:flex;flex-direction:column;min-width:0}
+.c-dh{padding:14px 20px;border-bottom:1px solid var(--ln);display:flex;align-items:center;gap:10px}
+.c-dh h3{font-size:17px;flex:1}
+.c-b{border:1px solid var(--ln);border-radius:6px;padding:4px 10px;background:var(--bg);font-size:12px}.c-b.d{color:#c62828}
+.c-meta{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--ln)}
+.c-meta div{padding:10px 20px;border-right:1px solid var(--ln)}.c-meta div:last-child{border:0}
+.c-meta small{display:block;color:var(--mut);font-size:11px}.c-meta b{font:500 12.5px ui-monospace,Menlo,monospace}
+.c-rev{padding:10px 20px;border-bottom:1px solid var(--ln);display:flex;gap:10px;align-items:center;font-size:12px;color:var(--mut)}
+.c-rev b{color:var(--ink)}
+
+/* ============ D 三步票根 ============ */
+[data-design-option=D]{--bg:#fff;--sf:#fff;--ink:#131313;--mut:#5a5a5a;--pri:#131313;--pfg:#fff;--html:#ff9b63;--md:#7db4ff;--svg:#63d6a2;--mm:#c9a5ff;--sun:#ffe37d;
+  background:var(--bg);color:var(--ink);font-family:ui-rounded,"SF Pro Rounded","Avenir Next","PingFang SC",sans-serif;font-size:15px}
+body[data-mode=dark] [data-design-option=D]{--bg:#141414;--sf:#1f1f1f;--ink:#f5f5f0;--mut:#a8a8a2;--pri:#f5f5f0;--pfg:#141414}
+.d-bx{border:2px solid var(--ink);border-radius:20px;background:var(--sf);box-shadow:5px 5px 0 var(--ink)}
+.d-top{display:flex;justify-content:space-between;align-items:center;padding:26px 44px 18px}
+.d-top h2{font-size:30px;font-weight:800;letter-spacing:-.02em}.d-top span{font-weight:600;border-bottom:2px solid var(--ink)}
+.d-flow{display:grid;grid-template-columns:1.5fr 34px 1fr 34px 1fr;padding:0 44px;height:560px;align-items:stretch}
+.d-arr{align-self:center;text-align:center;font-size:26px;font-weight:800}
+.d-st{padding:20px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.d-st h3{font-size:22px;font-weight:800;display:flex;gap:10px;align-items:center}
+.d-st h3 i{font-style:normal;width:30px;height:30px;border-radius:50%;background:var(--ink);color:var(--bg);font-size:15px;display:grid;place-items:center}
+.d-pill{display:inline-block;padding:3px 12px;border-radius:99px;border:2px solid var(--ink);font-weight:700;font-size:13px;color:#131313}
+.d-ta{flex:1;border:2px dashed var(--ink);border-radius:14px;padding:14px;font:13.5px/1.9 ui-monospace,Menlo,monospace;white-space:pre}
+.d-ch{border:2px solid var(--ink);border-radius:14px;padding:11px 14px;font-weight:700}
+.d-ch small{display:block;font-weight:500;color:var(--mut)}
+.d-ch.on{background:var(--sun);color:#131313}.d-ch.on small{color:#4a4322}
+.d-f{display:flex;justify-content:space-between;padding:9px 2px;border-bottom:2px dotted var(--ink);font-weight:600}.d-f span{color:var(--mut);font-weight:500}
+.d-tk{background:var(--sun);color:#131313}
+.d-tk .url{border:2px dashed #131313;border-radius:12px;padding:16px;text-align:center;font:600 15px ui-monospace,Menlo,monospace;opacity:.55}
+.d-tk p{font-size:14px;color:#4a4322}
+.d-cut{border-top:2px dashed #131313;margin:auto -20px 0;padding:16px 20px 0}
+.d-go{width:100%;padding:16px;border-radius:14px;border:2px solid #131313;background:#131313;color:#fff;font-weight:800;font-size:18px}
+.d-adm{padding:0 44px}
+.d-srch{flex:1;max-width:420px;border:2px solid var(--ink);border-radius:99px;padding:8px 18px;color:var(--mut);margin:0 24px}
+.d-board{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+.d-colh{display:flex;justify-content:space-between;font-weight:800;font-size:18px;padding:0 4px 10px;border-bottom:2px solid var(--ink);margin-bottom:14px}
+.d-card{padding:0;margin-bottom:14px;overflow:hidden;box-shadow:4px 4px 0 var(--ink);border-radius:16px}
+.d-card .tp{padding:5px 14px;font:700 12px ui-monospace,Menlo,monospace;color:#131313;border-bottom:2px solid var(--ink);display:flex;justify-content:space-between}
+.d-card .bd{padding:11px 14px}.d-card h4{font-size:17px;font-weight:800}
+.d-card p{font-size:13px;color:var(--mut);display:flex;justify-content:space-between;margin-top:3px}
+.d-card.off{opacity:.55;box-shadow:none;border-style:dashed}
+.d-dock{position:absolute;left:50%;bottom:20px;transform:translateX(-50%);display:flex;gap:6px;padding:7px;border-radius:99px;background:var(--bg)}
+.d-dock span{padding:8px 20px;border-radius:99px;font-weight:700}.d-dock .on{background:var(--ink);color:var(--bg)}.d-dock .nw{background:var(--sun);color:#131313;border:2px solid var(--ink)}
+</style>
+</head>
+<body data-namoo-design-preview data-variance="8" data-motion="3" data-density="6">
+
+<header class="top">
+  <div>
+    <h1>QuickShare UI 重设计 · 四个方向</h1>
+    <p>每个方向都画了首页（发布）和后台（分享管理）两屏，用的是真实的文案和功能；列表里的分享是示例数据。A 是现有设计的精修版，B、C、D 是全新的视觉世界，骨架、字体、配色和文案语气各不相同。先比骨架，再比外观。</p>
+  </div>
+  <div class="modes" role="group" aria-label="明暗模式">
+    <button type="button" data-set-mode="light"><span>亮色</span></button>
+    <button type="button" data-set-mode="dark"><span>暗色</span></button>
+  </div>
+</header>
+
+<main class="grid">
+
+<!-- ======================= A ======================= -->
+<div class="cell">
+  <div class="cell-head"><b>A · 安静工作台</b><span>现有设计，做到位</span><button type="button" data-wide>放大</button></div>
+  <div class="fit"><article class="stage" data-design-option="A" data-design-name="安静工作台" data-baseline="true" data-structure-archetype="incumbent-shell">
+    <div class="screen"><span class="tag">首页 /</span>
+      <div class="a-bar"><span class="a-logo">QuickShare<i></i></span><span style="color:var(--mut)">粘贴代码，一键分享</span></div>
+      <div class="a-card a-home">
+        <div class="a-ed">
+          <div class="a-row"><b style="color:var(--ink)">分享内容</b><span class="a-chip">Markdown · 自动识别</span><span style="flex:1"></span><span class="a-btn" style="padding:5px 12px">上传文件</span></div>
+          <div class="a-ta mono"># 季度复盘报告
+
+本季度完成了发布流重构。
+
+- 幂等创建
+- 修订历史</div>
+          <div class="a-row"><span style="flex:1">准备发布</span><span class="a-btn">清除</span><span class="a-btn">安全预览</span><span class="a-btn p">发布并生成链接</span></div>
+        </div>
+        <div class="a-side">
+          <b>发布设置</b>
+          <div><label>标题（可选）</label><div class="a-in">留空时自动提取标题</div></div>
+          <div><label>到期日期（可选）</label><div class="a-in">长期有效</div></div>
+          <div><label>访问方式</label>
+            <div class="a-radio on"><i></i><span>持有链接可访问<small>任何拿到链接的人都可以查看</small></span></div>
+            <div class="a-radio"><i></i><span>密码保护<small>查看前需要输入访问密码</small></span></div></div>
+          <div><label>Markdown 主题</label><div class="a-in" style="color:var(--ink)">bytedance ▾</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="screen"><span class="tag">后台 /admin/pages</span>
+      <div class="a-adm">
+        <div class="a-h"><div><small>QUICKSHARE</small><h2>分享管理</h2><span style="color:var(--mut)">共 6 个分享 · 所有时间均为北京时间</span></div>
+          <div class="a-seg"><span>统计</span><span class="on">分享</span><span>API</span><span>审计</span><span>＋ 新建</span></div></div>
+        <div class="a-card">
+          <div class="a-filter"><div class="a-in">按标题、ID 或描述搜索</div><span class="a-btn" style="padding:6px 12px">类型：全部 ▾</span><span class="a-btn" style="padding:6px 12px">状态：全部 ▾</span><span class="a-btn" style="padding:6px 12px">日期 ▾</span><span class="a-btn" style="padding:6px 12px">☆ 只看收藏</span></div>
+          <table class="a-t"><tr><th>标题</th><th>类型</th><th>创建时间</th><th>状态</th><th>访问量</th><th>密码</th><th>操作</th></tr>
+            <tr><td>API 接入说明 ★</td><td><span class="a-chip">markdown</span></td><td>2026/11/26 18:02</td><td><span class="a-chip g">公开</span></td><td>312</td><td>—</td><td>···</td></tr>
+            <tr><td>季度复盘报告</td><td><span class="a-chip">markdown</span></td><td>2026/11/27 01:11</td><td><span class="a-chip g">公开</span></td><td>128</td><td>—</td><td>···</td></tr>
+            <tr><td>产品落地页原型</td><td><span class="a-chip">html</span></td><td>2026/11/27 01:11</td><td><span class="a-chip r">密码保护</span></td><td>46</td><td class="mono">878620</td><td>···</td></tr>
+            <tr><td>周会纪要 11-20</td><td><span class="a-chip">markdown</span></td><td>2026/11/20 10:30</td><td><span class="a-chip r">密码保护</span></td><td>17</td><td class="mono">······</td><td>···</td></tr>
+            <tr><td>访问流程图</td><td><span class="a-chip">mermaid</span></td><td>2026/11/27 01:11</td><td><span class="a-chip g">公开</span></td><td>9</td><td>—</td><td>···</td></tr>
+            <tr><td style="color:var(--mut)">图标草稿</td><td><span class="a-chip">svg</span></td><td>2026/11/27 01:11</td><td><span class="a-chip">已下架</span></td><td>0</td><td>—</td><td>···</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </article></div>
+  <div class="notes">
+    <section data-design-structure="A"><h3>骨架</h3><p>居中的白色工作台卡片：左边编辑区，右边常驻的发布设置。后台沿用顶部分段导航，筛选收成一行，下面是表格。窄屏时设置栏落到编辑区下方，表格横向滚动。</p></section>
+    <section data-design-foundation="A"><h3>视觉系统</h3><p>Inter 无衬线、冷灰底、白卡片、单一青色强调、柔和阴影、10–16px 圆角。改动最小，能解决筛选臃肿和操作层级，但「没辨识度」这一条基本不动。</p></section>
+  </div>
+</div>
+
+<!-- ======================= B ======================= -->
+<div class="cell">
+  <div class="cell-head"><b>B · 稿纸与登记簿</b><span>像排版一页纸，不像用一个后台</span><button type="button" data-wide>放大</button></div>
+  <div class="fit"><article class="stage" data-design-option="B" data-design-name="稿纸与登记簿" data-baseline="false" data-structure-archetype="ledger-document">
+    <div class="screen"><span class="tag">首页 /</span>
+      <div class="b-mast"><h2>QuickShare</h2><em>粘贴代码，一键分享</em><nav><span>登记簿</span></nav></div>
+      <div class="b-home">
+        <div class="b-sheet"><ol><li>1</li><li>2</li><li>3</li><li>4</li><li>5</li><li>6</li></ol><pre># 季度复盘报告
+
+本季度完成了发布流重构。
+
+- 幂等创建
+- 修订历史</pre></div>
+        <div class="b-col">
+          <h3>发 布 设 置</h3>
+          <dl class="b-dl">
+            <div><dt>类型</dt><dd class="auto">Markdown（自动识别）</dd></div>
+            <div><dt>标题</dt><dd class="auto">自动提取</dd></div>
+            <div><dt>访问</dt><dd>持有链接可访问</dd></div>
+            <div><dt>到期</dt><dd>长期有效</dd></div>
+            <div><dt>主题</dt><dd>bytedance</dd></div>
+          </dl>
+          <p class="b-note">带下划线的都能点开改。虚线表示自动取值。</p>
+          <button class="b-pub" type="button">发布</button>
+          <div class="b-sub"><span>安全预览</span><span>上传文件</span><span>清除</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="screen"><span class="tag">后台 /admin/pages</span>
+      <div class="b-mast" style="padding-top:22px"><h2 style="font-size:24px">QuickShare</h2><em>所有时间均为北京时间</em><nav><span>统计</span><span class="on">分享</span><span>API</span><span>审计</span><span>新建</span></nav></div>
+      <div class="b-adm">
+        <div class="b-ttl"><h2>分享登记簿</h2><span>共 6 个</span></div>
+        <p class="b-sent">显示 <u>全部类型</u>、<u>全部状态</u> 的分享，按 <u>创建时间</u> 从新到旧。<u>搜索</u> · <u>只看收藏</u> · <u>导出清单</u></p>
+        <div class="b-row"><span class="n">06</span><div><h4>季度复盘报告</h4><p>markdown · xJEF_6s2Y4h2</p></div><span class="st">公开</span><span class="num">128</span><span class="dt">11/27 01:11</span></div>
+        <div class="b-row hov"><span class="n">☑</span><div><h4>产品落地页原型</h4><p>html · 83ZU5nV3okL2 · 密码 878620</p></div><span class="st lock">密码保护</span><span class="num">46</span><span class="dt">11/27 01:11</span>
+          <div class="b-acts"><span>打开</span><span>收藏</span><span>下架</span><span>克隆</span><span class="d">删除</span></div></div>
+        <div class="b-row"><span class="n">04</span><div><h4>访问流程图</h4><p>mermaid · KyMhcZ5hSklE</p></div><span class="st">公开</span><span class="num">9</span><span class="dt">11/27 01:11</span></div>
+        <div class="b-row"><span class="n">03</span><div><h4>图标草稿</h4><p>svg · PRD-uvBzbQw0</p></div><span class="st off">已下架</span><span class="num">0</span><span class="dt">11/27 01:11</span></div>
+        <div class="b-row"><span class="n">02</span><div><h4>API 接入说明<sup>★ 收藏</sup></h4><p>markdown</p></div><span class="st">公开</span><span class="num">312</span><span class="dt">11/26 18:02</span></div>
+        <div class="b-row"><span class="n">01</span><div><h4>周会纪要 11-20</h4><p>markdown</p></div><span class="st lock">密码保护</span><span class="num">17</span><span class="dt">11/20 10:30</span></div>
+      </div>
+    </div>
+  </article></div>
+  <div class="notes">
+    <section data-design-structure="B"><h3>骨架</h3><p>报头式顶栏，文字链接导航。首页是一张带行号的稿纸，发布设置写在右侧页边，像版权页的条目。后台没有卡片和筛选面板：筛选是一句可点的话，分享是一行行带编号的登记条目，操作只在选中行展开。窄屏时页边栏移到稿纸下方，登记行改成两行堆叠。</p></section>
+    <section data-design-foundation="B"><h3>视觉系统</h3><p>衬线字（中文宋体）做标题和正文，等宽字只用于代码和 ID。暖纸色底、墨色字、朱红只给「发布」和需要注意的状态。零圆角、零阴影，层级靠细线、双线和字号。语气偏文气、安静。代价：信息密度最低，暗色下需要认真校准纸色。</p></section>
+  </div>
+</div>
+
+<!-- ======================= C ======================= -->
+<div class="cell">
+  <div class="cell-head"><b>C · 双栏工作室</b><span>左边写，右边看，底栏发布</span><button type="button" data-wide>放大</button></div>
+  <div class="fit"><article class="stage" data-design-option="C" data-design-name="双栏工作室" data-baseline="false" data-structure-archetype="split-studio">
+    <div class="screen"><span class="tag">首页 /</span>
+      <div class="c-top"><span class="c-mark"></span><b>QuickShare</b><span style="color:var(--mut)">/ 新建分享</span><span class="sp"></span>
+        <div class="c-segs"><span class="on">自动 · Markdown</span><span>HTML</span><span>SVG</span><span>Mermaid</span></div><span style="color:var(--mut)">上传文件</span><span style="color:var(--mut);margin-right:90px">清除</span></div>
+      <div class="c-split">
+        <div class="c-code"><ol><li>1</li><li>2</li><li>3</li><li>4</li><li>5</li><li>6</li></ol><pre><b># 季度复盘报告</b>
+
+本季度完成了发布流重构。
+
+<b>-</b> 幂等创建
+<b>-</b> 修订历史</pre></div>
+        <div class="c-prev"><div class="c-ptab"><span class="on">安全预览</span><span>主题：bytedance ▾</span><span style="margin-left:auto">新标签打开 ↗</span></div>
+          <div class="c-doc"><h1>季度复盘报告</h1><p>本季度完成了发布流重构。</p><ul><li>幂等创建</li><li>修订历史</li></ul></div></div>
+      </div>
+      <div class="c-stat"><span>访问 <b>持有链接可访问 ▾</b></span><span>到期 <b>长期有效 ▾</b></span><span>标题 <b>自动提取</b></span><span class="sp">准备发布</span><button class="c-go" type="button">发布并生成链接 <span class="c-kbd">⌘↵</span></button></div>
+    </div>
+    <div class="screen"><span class="tag">后台 /admin/pages</span>
+      <div class="c-adm">
+        <div class="c-nav"><div class="br"><span class="c-mark"></span>QuickShare</div><div class="new"><span>新建分享</span><span class="c-kbd">N</span></div>
+          <a class="on"><span>分享</span><span>6</span></a><a><span>统计</span></a><a><span>API</span></a><a><span>审计</span></a><div class="ft">所有时间均为北京时间</div></div>
+        <div class="c-list">
+          <div class="c-srch"><span>按标题、ID 或描述搜索</span><span class="c-kbd">/</span></div>
+          <div class="c-fl"><span class="on">全部</span><span>公开</span><span>密码保护</span><span>已下架</span><span>★ 收藏</span><span>类型 ▾</span></div>
+          <div class="c-it"><span class="ty">md</span><div><b>季度复盘报告</b><small><i class="c-dot"></i>公开 · 11/27 01:11</small></div><span class="v">128</span></div>
+          <div class="c-it on"><span class="ty">html</span><div><b>产品落地页原型</b><small><i class="c-dot l"></i>密码保护 · 11/27 01:11</small></div><span class="v">46</span></div>
+          <div class="c-it"><span class="ty">mermaid</span><div><b>访问流程图</b><small><i class="c-dot"></i>公开 · 11/27 01:11</small></div><span class="v">9</span></div>
+          <div class="c-it"><span class="ty">svg</span><div><b style="color:var(--mut)">图标草稿</b><small><i class="c-dot o"></i>已下架 · 11/27 01:11</small></div><span class="v">0</span></div>
+          <div class="c-it"><span class="ty">md</span><div><b>API 接入说明 ★</b><small><i class="c-dot"></i>公开 · 11/26 18:02</small></div><span class="v">312</span></div>
+          <div class="c-it"><span class="ty">md</span><div><b>周会纪要 11-20</b><small><i class="c-dot l"></i>密码保护 · 11/20 10:30</small></div><span class="v">17</span></div>
+        </div>
+        <div class="c-det">
+          <div class="c-dh"><h3>产品落地页原型</h3><span class="c-b">☆ 收藏</span><span class="c-b">编辑</span><span class="c-b">下架</span><span class="c-b">克隆</span><span class="c-b d" style="margin-right:120px">删除</span></div>
+          <div class="c-meta"><div><small>公开链接</small><b>/view/83ZU5nV3okL2 ⧉</b></div><div><small>访问密码</small><b>878620 ⧉</b></div><div><small>访问量</small><b>46</b></div><div><small>内容版本</small><b>Revision 1</b></div></div>
+          <div class="c-rev"><b>历史版本</b><span>Revision 1 · 当前版本 · 网页创建</span><span style="margin-left:auto" class="c-b">对比</span><span class="c-b">恢复</span></div>
+          <div class="c-ptab"><span class="on">预览</span><span>原始内容</span><span style="margin-left:auto">新标签打开 ↗</span></div>
+          <div class="c-prev" style="flex:1"><div class="c-doc"><h1>Hello</h1><p style="color:var(--mut)">沙箱内渲染的分享内容</p></div></div>
+        </div>
+      </div>
+    </div>
+  </article></div>
+  <div class="notes">
+    <section data-design-structure="C"><h3>骨架</h3><p>首页铺满整个视口：左边代码，右边实时安全预览，发布设置和发布按钮收在底部状态栏。后台是固定侧边栏加三栏主从视图：点列表里的一条，右边直接看详情、历史版本和预览，不用跳页。窄屏时预览变成可切换的标签页，后台三栏逐级下钻。</p></section>
+    <section data-design-foundation="C"><h3>视觉系统</h3><p>系统无衬线配等宽字做标签和数据，近白或石墨底，单一钴蓝强调。全靠 1px 发丝线分区，6px 圆角，没有阴影和卡片。带键盘快捷键提示，语气简短。密度最高、效率最好；代价是对首次访客最不亲切，也最接近常见开发者工具的样子。</p></section>
+  </div>
+</div>
+
+<!-- ======================= D ======================= -->
+<div class="cell">
+  <div class="cell-head"><b>D · 三步票根</b><span>粘贴、设置、拿链接，一眼看完</span><button type="button" data-wide>放大</button></div>
+  <div class="fit"><article class="stage" data-design-option="D" data-design-name="三步票根" data-baseline="false" data-structure-archetype="narrative-workflow">
+    <div class="screen"><span class="tag">首页 /</span>
+      <div class="d-top"><h2>QuickShare</h2><span>我的分享</span></div>
+      <div class="d-flow">
+        <div class="d-bx d-st"><h3><i>1</i>粘贴内容</h3>
+          <div><span class="d-pill" style="background:var(--md)">认出来了：Markdown</span> <span class="d-pill" style="background:none;color:var(--ink)">上传文件</span></div>
+          <div class="d-ta"># 季度复盘报告
+
+本季度完成了发布流重构。
+
+- 幂等创建
+- 修订历史</div></div>
+        <div class="d-arr">→</div>
+        <div class="d-bx d-st"><h3><i>2</i>谁能看？</h3>
+          <div class="d-ch on">有链接就能看<small>任何拿到链接的人都可以查看</small></div>
+          <div class="d-ch">要输密码<small>自动生成 6 位数字密码</small></div>
+          <div class="d-f"><span>标题</span>自动提取</div>
+          <div class="d-f"><span>到期</span>长期有效</div>
+          <div class="d-f"><span>主题</span>bytedance</div>
+          <span style="font-weight:700;border-bottom:2px solid var(--ink);align-self:flex-start;margin-top:auto">先安全预览一下</span></div>
+        <div class="d-arr">→</div>
+        <div class="d-bx d-st d-tk"><h3><i style="background:#131313;color:#ffe37d">3</i>拿好链接</h3>
+          <div class="url">/view/············</div>
+          <p>发布后，链接和密码会出现在这张票上，可以直接复制。</p>
+          <div class="d-cut"><button class="d-go" type="button">发布并生成链接</button></div></div>
+      </div>
+    </div>
+    <div class="screen"><span class="tag">后台 /admin/pages</span>
+      <div class="d-top"><h2>所有分享 <span style="border:0;color:var(--mut);font-size:18px">6</span></h2><div class="d-srch">按标题、ID 或描述搜索</div><span>类型 · 日期 · 只看收藏</span></div>
+      <div class="d-adm"><div class="d-board">
+        <div><div class="d-colh"><span>公开</span><span>3</span></div>
+          <div class="d-bx d-card"><div class="tp" style="background:var(--md)"><span>MARKDOWN</span><span>★</span></div><div class="bd"><h4>API 接入说明</h4><p><span>312 次访问</span><span>11/26 18:02</span></p></div></div>
+          <div class="d-bx d-card"><div class="tp" style="background:var(--md)"><span>MARKDOWN</span></div><div class="bd"><h4>季度复盘报告</h4><p><span>128 次访问</span><span>11/27 01:11</span></p></div></div>
+          <div class="d-bx d-card"><div class="tp" style="background:var(--mm)"><span>MERMAID</span></div><div class="bd"><h4>访问流程图</h4><p><span>9 次访问</span><span>11/27 01:11</span></p></div></div></div>
+        <div><div class="d-colh"><span>密码保护</span><span>2</span></div>
+          <div class="d-bx d-card"><div class="tp" style="background:var(--html)"><span>HTML</span><span>密码 878620</span></div><div class="bd"><h4>产品落地页原型</h4><p><span>46 次访问</span><span>11/27 01:11</span></p><p style="color:var(--ink);font-weight:700;margin-top:8px"><span>打开</span><span>收藏</span><span>下架</span><span>克隆</span><span>删除</span></p></div></div>
+          <div class="d-bx d-card"><div class="tp" style="background:var(--md)"><span>MARKDOWN</span><span>密码 ······</span></div><div class="bd"><h4>周会纪要 11-20</h4><p><span>17 次访问</span><span>11/20 10:30</span></p></div></div></div>
+        <div><div class="d-colh"><span>已下架</span><span>1</span></div>
+          <div class="d-bx d-card off"><div class="tp" style="background:var(--svg)"><span>SVG</span></div><div class="bd"><h4>图标草稿</h4><p><span>0 次访问</span><span>11/27 01:11</span></p></div></div></div>
+      </div></div>
+      <div class="d-bx d-dock"><span>统计</span><span class="on">分享</span><span>API</span><span>审计</span><span class="nw">＋ 新建</span></div>
+    </div>
+  </article></div>
+  <div class="notes">
+    <section data-design-structure="D"><h3>骨架</h3><p>首页把发布拆成从左到右三格：粘贴、谁能看、拿链接。结果票根从一开始就摆在那里，发布后原地填上链接和密码。后台按访问状态分三列看板，每条分享是一张按内容类型上色的票，导航是底部悬浮坞。窄屏时三格竖排成步骤，看板改成可横滑的列。</p></section>
+    <section data-design-foundation="D"><h3>视觉系统</h3><p>圆体粗字、白底、2px 黑描边加硬投影，四种内容类型各有一个纯色，票根用黄色。大圆角，口语化文案（「谁能看？」「拿好链接」）。辨识度最强，对首次访客最友好；代价是分享多了以后看板不如表格好扫，批量操作和排序要另外设计。</p></section>
+  </div>
+</div>
+
+</main>
+
+<script>
+(function(){
+  var body=document.body;
+  function mode(m){body.dataset.mode=m;document.querySelectorAll('[data-set-mode]').forEach(function(b){b.setAttribute('aria-pressed',b.dataset.setMode===m)})}
+  mode(location.hash==='#dark'||matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+  document.querySelectorAll('[data-set-mode]').forEach(function(b){b.onclick=function(){mode(b.dataset.setMode)}});
+  function fit(){document.querySelectorAll('.fit').forEach(function(f){
+    var st=f.firstElementChild,s=Math.max(f.clientWidth/1280,0.5);
+    st.style.setProperty('--s',s);f.style.height=Math.ceil(st.offsetHeight*s)+'px';})}
+  document.querySelectorAll('[data-wide]').forEach(function(b){b.onclick=function(){
+    var on=b.closest('.cell').classList.toggle('wide');b.textContent=on?'缩小':'放大';fit();}});
+  addEventListener('resize',fit);fit();
+})();
+</script>
+</body>
+</html>

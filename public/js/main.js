@@ -1324,7 +1324,7 @@ document.addEventListener('DOMContentLoaded', () => {
         generateButton,
         true,
         '发布中…',
-        '<i class="fas fa-link mr-1" aria-hidden="true"></i>发布并生成链接'
+        '发布并生成链接'
       );
 
       const headers = jsonHeaders();
@@ -1373,7 +1373,7 @@ document.addEventListener('DOMContentLoaded', () => {
         generateButton,
         false,
         '发布中…',
-        '<i class="fas fa-link mr-1" aria-hidden="true"></i>发布并生成链接'
+        '发布并生成链接'
       );
       if (prepublishPreviewButton) prepublishPreviewButton.disabled = false;
     }

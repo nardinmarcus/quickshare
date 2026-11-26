@@ -3,14 +3,14 @@
 <div class="main-container">
   <header class="app-header">
     <div class="title-container">
-      <h1 class="app-title">QuickShare<span class="brand-pulse"></span></h1>
+      <h1 class="app-title">QuickShare</h1>
     </div>
     <p class="app-description"><%= typeof loginDescription !== 'undefined' ? loginDescription : '粘贴代码，一键分享' %></p>
   </header>
 
   <div class="content-area">
     <div class="login-card">
-      <h2 class="card-title"><i class="fas fa-lock" style="margin-right: 10px; color: var(--accent);" aria-hidden="true"></i><%= typeof heading !== 'undefined' ? heading : '请输入访问密码' %></h2>
+      <h2 class="card-title"><%= typeof heading !== 'undefined' ? heading : '请输入访问密码' %></h2>
 
       <% if (error) { %>
         <div id="login-error" class="error-message" role="alert"><%= error %></div>

@@ -441,22 +441,22 @@ test('Favorite Shares combine with all filters and keep totals, pagination, and 
     .match(/<a[^>]+href="([^"]+)"[^>]*>上一页<\/a>/)?.[1]
     .replaceAll('&amp;', '&');
   const sortHref = firstPage.text
-    .match(/<a class="admin-sortable[^"]*" href="([^"]+)"[^>]*>\s*创建时间/)?.[1]
+    .match(/<a class="menu-item" href="([^"]+)"[^>]*>创建时间，从新到旧<\/a>/)?.[1]
     .replaceAll('&amp;', '&');
   const searchClearHref = firstPage.text
-    .match(/<form class="admin-search-form"[\s\S]*?<a class="cyber-btn cyber-btn-secondary" href="([^"]+)">清除<\/a>[\s\S]*?<\/form>/)?.[1]
+    .match(/<form class="share-search"[\s\S]*?<a class="text-control share-search-clear" href="([^"]+)">清除<\/a>[\s\S]*?<\/form>/)?.[1]
     .replaceAll('&amp;', '&');
   const dateClearHref = firstPage.text
-    .match(/<div class="admin-date-range">[\s\S]*?<a class="cyber-btn cyber-btn-secondary" href="([^"]+)">清除<\/a>/)?.[1]
+    .match(/<div class="admin-date-range">[\s\S]*?<a class="text-control" href="([^"]+)">清除日期<\/a>/)?.[1]
     .replaceAll('&amp;', '&');
   const typeHtmlHref = firstPage.text
-    .match(/<span class="admin-filter-label">类型<\/span>[\s\S]*?<a class="admin-filter-btn[^"]*" href="([^"]+)">html<\/a>/)?.[1]
+    .match(/<a class="menu-item" href="([^"]+)"[^>]*>html<\/a>/)?.[1]
     .replaceAll('&amp;', '&');
   const statusPublicHref = firstPage.text
-    .match(/<span class="admin-filter-label">状态<\/span>[\s\S]*?<a class="admin-filter-btn[^"]*" href="([^"]+)">公开<\/a>/)?.[1]
+    .match(/<a class="menu-item" href="([^"]+)"[^>]*>公开<\/a>/)?.[1]
     .replaceAll('&amp;', '&');
   const allSharesHref = firstPage.text
-    .match(/<span class="admin-filter-label">收藏<\/span>[\s\S]*?<a class="admin-filter-btn[^"]*" href="([^"]+)">全部 Shares<\/a>/)?.[1]
+    .match(/<a class="menu-item" href="([^"]+)"[^>]*>全部 Shares<\/a>/)?.[1]
     .replaceAll('&amp;', '&');
 
   assert.equal(firstPage.status, 200);
@@ -659,7 +659,7 @@ test('admin Share list and detail render Beijing time under a UTC process', asyn
 
   assert.match(
     list.text,
-    /datetime="2026-07-22T10:53:32\.000Z">2026\/7\/22 18:53:32<\/time>/
+    /datetime="2026-07-22T10:53:32\.000Z" title="2026\/7\/22 18:53:32">07\/22 18:53<\/time>/
   );
   assert.match(
     detail.text,

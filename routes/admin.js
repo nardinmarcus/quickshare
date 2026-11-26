@@ -22,6 +22,7 @@ const {
   parseIdempotencyKey
 } = require('../utils/idempotency');
 const { formatManagementDateTime } = require('../utils/management-time');
+const { formatShareListTime, groupSharesForList, shareTypeAbbreviation } = require('../utils/shareListGroups');
 const { getMarkdownThemeOptions, resolveMarkdownThemeId } = require('../utils/markdownThemeCatalog');
 const { prepareSandboxContent, renderSandboxedDocument } = require('../utils/sandboxDocument');
 const {
@@ -211,6 +212,9 @@ function createAdminRouter({ config, pageRepository, auth, publicUrls, shareOps,
         page: 'admin-pages',
         csrfToken: config.authEnabled ? createCsrfToken(sessionToken) : '',
         pages: visiblePages,
+        groups: groupSharesForList(visiblePages, sortBy),
+        formatShareListTime,
+        shareTypeAbbreviation,
         pagination: {
           ...pagination,
           total,

@@ -1,0 +1,180 @@
+{
+  "schema_version": 4,
+  "status": "approved",
+  "target": "route:/",
+  "related_targets": [
+    "route:/admin/pages"
+  ],
+  "mode": "replace",
+  "incumbent_exists": true,
+  "foundation_state": "documented",
+  "reference_mode": "none",
+  "references": [],
+  "visitor_mode": "operate",
+  "dials": {
+    "variance": 5,
+    "motion": 2,
+    "density": 5
+  },
+  "directions": [
+    {
+      "id": "A",
+      "name": "现有结构，黑白净化",
+      "thesis": "骨架完全不动，只把青色换成黑色、理清按钮层级、把筛选收成一行。",
+      "hard_constraint": "沿用现有卡片骨架和阴影层级",
+      "baseline": true,
+      "structure": {
+        "archetype": "incumbent-shell",
+        "source": "incumbent",
+        "fingerprint": {
+          "opening": "居中的品牌名和一句说明",
+          "body": "浅灰底上的白色卡片：输入区、折叠的发布设置、按钮行；后台是一张卡片装筛选行和表格",
+          "navigation": "后台标题右侧的分段导航",
+          "ending": "首页页脚版权行；后台表格结束即止",
+          "responsive": "按钮换行，表格横向滚动"
+        }
+      },
+      "axes": {
+        "typography": "Inter 加系统中文无衬线",
+        "color": "浅灰底白卡片黑色主按钮",
+        "layout": "居中卡片加顶部分段导航表格"
+      },
+      "foundation": {
+        "typography": "Inter 加系统中文无衬线，等宽只在代码区",
+        "color": "浅灰底、白卡片、黑色主按钮，状态不用彩色",
+        "spacing": "16–20px 卡片内距，50px 表格行",
+        "shape": "10–16px 圆角",
+        "depth": "柔和阴影抬起卡片",
+        "layout": "居中卡片；分段导航加卡片内表格",
+        "components": "灰色填充次按钮、黑色主按钮、胶囊类型标签",
+        "imagery": "1.5px 线性图标",
+        "motion": "短时背景过渡",
+        "accessibility": "黑白对比度充足，沿用现有焦点环"
+      }
+    },
+    {
+      "id": "B",
+      "name": "细线",
+      "thesis": "纯白纯黑加一条线：层级只靠字号、字重和 1px 线。",
+      "hard_constraint": "不用阴影、不用灰色面板、圆角不超过 2px",
+      "baseline": false,
+      "structure": {
+        "archetype": "catalogue",
+        "source": "curated",
+        "fingerprint": {
+          "opening": "通栏顶部导航，首页左对齐一句大标题",
+          "body": "黑色细线框住的输入区；后台是大标题、状态页签行和无卡片的全宽表格",
+          "navigation": "顶部通栏文字导航，当前项下划线",
+          "ending": "首页以右对齐的操作行收尾；后台以分页文字收尾",
+          "responsive": "表格隐去类型和时间列，页签横向滚动"
+        }
+      },
+      "axes": {
+        "typography": "Helvetica 式无衬线，大而紧的标题",
+        "color": "纯白纯黑加发丝线",
+        "layout": "通栏导航加全宽无卡片表格"
+      },
+      "foundation": {
+        "typography": "Helvetica Neue 加苹方，标题 34–44px 字重 500 紧字距",
+        "color": "纯白底纯黑字，仅一档浅灰线和一档灰字",
+        "spacing": "48px 页边距，56px 表格行",
+        "shape": "0–2px 圆角",
+        "depth": "无阴影无面板，只有 1px 线",
+        "layout": "左对齐内容栏；全宽表格",
+        "components": "下划线文字按钮、方形黑色主按钮、实心与空心方块状态",
+        "imagery": "1.5px 线性图标，只在悬停行出现",
+        "motion": "仅悬停行背景变化",
+        "accessibility": "纯黑白最高对比度；下划线表示可点"
+      }
+    },
+    {
+      "id": "C",
+      "name": "侧栏与抽屉",
+      "thesis": "发布设置变成输入框里的一排小控件；后台点一行就在右侧抽屉里看详情，不跳页。",
+      "hard_constraint": "白色内容区加极浅灰面板和细边框，全局只有删除用红色",
+      "baseline": false,
+      "structure": {
+        "archetype": "workbench",
+        "source": "curated",
+        "fingerprint": {
+          "opening": "左上角品牌标记，居中一句标题和支持的格式",
+          "body": "居中输入卡片，底部一排设置控件和发布按钮；后台是紧凑表格加右侧详情抽屉",
+          "navigation": "固定左侧边栏，含新建按钮和计数",
+          "ending": "输入卡片下方一行状态提示；抽屉底部是操作条",
+          "responsive": "侧边栏收成顶部菜单，抽屉变成整页"
+        }
+      },
+      "axes": {
+        "typography": "系统无衬线加等宽数据",
+        "color": "白色内容区加极浅灰面板",
+        "layout": "侧边栏加表格加右侧抽屉"
+      },
+      "foundation": {
+        "typography": "系统无衬线 13.5px，数字和 ID 等宽对齐",
+        "color": "白色内容区、极浅灰侧栏与页面底、浅灰细边，删除用红色",
+        "spacing": "8–12px 间距，44px 表格行",
+        "shape": "8–14px 圆角",
+        "depth": "面板与 1px 边框，输入卡片有极轻阴影",
+        "layout": "居中输入卡片；侧边栏、表格、抽屉三区",
+        "components": "描边小控件、黑色主按钮带快捷键、圆点状态",
+        "imagery": "1.5px 线性图标配文字",
+        "motion": "抽屉滑入约 150ms",
+        "accessibility": "12px 字号下限，行和抽屉全键盘可达"
+      }
+    },
+    {
+      "id": "D",
+      "name": "单栏留白",
+      "thesis": "首页和后台共用一根居中窄栏；没有线和阴影，只有留白和浅灰色块。",
+      "hard_constraint": "不用任何边框和阴影，层级只靠填充色和留白",
+      "baseline": false,
+      "structure": {
+        "archetype": "single-column-feed",
+        "source": "custom",
+        "fingerprint": {
+          "opening": "居中的大号品牌名和一句说明",
+          "body": "浅灰圆角输入块，下方居中的设置摘要和胶囊按钮；后台是搜索胶囊加按日期分组的两行列表",
+          "navigation": "后台顶部居中的胶囊页签",
+          "ending": "首页页脚版权行；列表自然结束",
+          "responsive": "栏宽贴边，其余不变"
+        }
+      },
+      "axes": {
+        "typography": "系统无衬线，粗而紧的标题",
+        "color": "白底加两级浅灰填充",
+        "layout": "700–760px 居中单栏加分组列表"
+      },
+      "foundation": {
+        "typography": "SF Pro Display 加苹方，标题 32–38px 字重 650",
+        "color": "白底、两级浅灰填充、黑色主按钮",
+        "spacing": "24px 以上留白，60px 列表行",
+        "shape": "16–24px 圆角加胶囊",
+        "depth": "无边框无阴影，只有填充色",
+        "layout": "居中单栏；按日期分组的列表",
+        "components": "胶囊按钮、填充输入块、等宽缩写类型方块",
+        "imagery": "1.5px 线性图标，只在悬停行出现",
+        "motion": "悬停填充色过渡",
+        "accessibility": "灰字在浅灰块上需校准到 4.5:1，触控目标 44px 以上"
+      }
+    }
+  ],
+  "design_contract": {
+    "action": "replace",
+    "artifact": "DESIGN.proposed.md"
+  },
+  "artifacts": {
+    "design_read": "design-read.md",
+    "design_foundation": "design-foundation.md",
+    "preview": "index.html",
+    "design_contract": "DESIGN.proposed.md",
+    "selection": "selection.json",
+    "surface_brief": "surface-brief.md"
+  },
+  "revision_history": [
+    {
+      "round": 2,
+      "note": "用户否决第一轮全部方向：风格太极端、骨架不对、不够精致。期望极简黑白；首页保持居中输入区加折叠设置，后台骨架由设计方决定。重做为四个黑白方向，差异放在层级手段（阴影、线、面板、色块）和后台骨架上；第一轮预览存档在 round-1/。",
+      "at": "2026-11-27T01:50:00+08:00"
+    }
+  ]
+}

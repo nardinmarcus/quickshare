@@ -1,13 +1,7 @@
 (function() {
   const root = document.documentElement;
-  const currentTheme = root.getAttribute('data-theme') || 'default';
 
-  // Custom themes (hacker, cyberpunk) are locked by server — do nothing
-  if (currentTheme !== 'default') {
-    return;
-  }
-
-  // Default theme: follow system prefers-color-scheme
+  // 界面只有一套视觉，明暗跟随系统 prefers-color-scheme
   function applyScheme() {
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     root.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
