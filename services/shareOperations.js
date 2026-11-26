@@ -16,7 +16,12 @@ const {
   hashSecret,
   parseCustomPassword
 } = require('../utils/security');
-const { accessRevisionMatches, parseAccessIfMatch } = require('../utils/shareAccess');
+const {
+  accessRevisionMatches,
+  parseAccessIfMatch,
+  parseExpectedAccessRevision,
+  toAccessRevisionString
+} = require('../utils/shareAccess');
 
 // --- Idempotent create pipeline (T08, issue #32) --------------------------
 //
@@ -47,6 +52,40 @@ class CreateValidationError extends Error {
 }
 
 function createShareOperations({ config, pageRepository }) {
+  // Shared expectedAccessRevision precondition handling for access-policy
+  // writes (T01): a missing precondition is 428, a stale one is 412, and an
+  // invalid format is 400. The latest revision is never filled in silently.
+  function checkAccessPrecondition(req, res, page) {
+    const expected = parseExpectedAccessRevision(req.body?.expectedAccessRevision);
+
+    if (!expected.provided) {
+      res.status(428).json({
+        success: false,
+        error: '缺少 expectedAccessRevision，请刷新后重试'
+      });
+      return null;
+    }
+
+    if (!expected.valid) {
+      res.status(400).json({
+        success: false,
+        error: 'expectedAccessRevision 必须为十进制字符串'
+      });
+      return null;
+    }
+
+    if (!accessRevisionMatches(page.access_revision, expected.value)) {
+      res.status(412).json({
+        success: false,
+        error: '访问策略已被更新，请刷新后重试',
+        accessRevision: toAccessRevisionString(page.access_revision)
+      });
+      return null;
+    }
+
+    return expected.value;
+  }
+
   // If-None-Match evaluation for the conditional resource reads (T12).
   // GET requests use the RFC 7232 WEAK comparison: a candidate matches
   // when it is `*`, or when its opaque tag — ignoring a `W/` prefix —
@@ -532,6 +571,7 @@ function createShareOperations({ config, pageRepository }) {
   }
 
   return {
+    checkAccessPrecondition,
     ifNoneMatchMatches,
     instanceOrigin,
     isCreateValidationError,
