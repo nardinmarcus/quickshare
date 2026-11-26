@@ -102,7 +102,6 @@ api/              Vercel function 入口
 app.js            Express app 工厂和全部路由
 config.js         环境变量聚合
 server.js         本地服务器入口
-vercel-app.js     仓库内无引用（Vercel 入口是 api/index.js），待确认项目设置后删除
 models/           数据层（Repository 选择器 + Postgres / 内存实现）
 db/migrations/    按编号执行的 Postgres schema 迁移
 views/            EJS 模板（含 admin-* 管理后台页面）

@@ -46,7 +46,6 @@ api/             Vercel function 入口（api/index.js）
 app.js           Express app，所有路由与鉴权中间件定义在此
 config.js        环境变量聚合与生产启动校验
 server.js        本地服务器入口
-vercel-app.js    仓库内无引用；确认 Vercel 项目设置未使用后可删除
 models/          数据层（pageRepository 选择器 + Postgres / 内存仓储 + 迁移、连接配置、publishing）
 db/migrations/   编号 SQL 迁移；应用部署前显式执行，已应用的迁移不可修改（checksum 校验）
 views/           EJS 模板（index / login / password / admin-* / error / partials/）
