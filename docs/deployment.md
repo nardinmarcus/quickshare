@@ -203,4 +203,3 @@ docker compose --env-file .env.production up -d --build   # 更新并重启
 | `SHARE_API_KEY` | 否 | `POST /api/v1/share` 的 API Key 鉴权，未设置则该端点返回 503 |
 | `SMALL_BODY_LIMIT` | 否 | 登录、密码及小型 JSON/form 请求上限，默认 `16kb` |
 | `SHARE_BODY_LIMIT` | 否 | 分享正文和后台正文更新上限，默认 `4mb`；调整前先核对生产内容分布，且不得超过 Vercel Function 约 4.5 MB 的平台请求体上限 |
-| `UI_THEME` | 否 | UI 主题，可选 `default` / `hacker` / `cyberpunk` / `popart`，默认 `default` |

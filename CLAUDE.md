@@ -20,7 +20,8 @@ Express 4 + EJS + PostgreSQL (生产) / 内存 (开发)。部署在 Vercel。
 - 内容类型限 `html`、`markdown`、`svg`、`mermaid` 四种（见 `VALID_CODE_TYPES`）。
 - 入口分两个：`server.js`（本地）和 `api/index.js`（Vercel function），都指向 `app.js`。
 - Markdown 渲染支持多主题（`markdown_theme` 字段），主题 CSS 在 `public/css/markdown-*.css`。
-- UI 主题系统（`UI_THEME` 环境变量）支持 `default`、`hacker`、`cyberpunk`、`popart`。
+- 界面只有一套视觉（黑白灰单栏，见 `DESIGN.md`），明暗跟随系统；`UI_THEME` 与 `hacker`/`cyberpunk`/`popart` 已退役。图标是 `styles.css` 里自带的线性图标（沿用 `.fa-*` 类名），不加载 Font Awesome 和 Web 字体。
+- `public/css/styles.css` 分两段：`@layer legacy` 里是尚未重写的旧组件规则，文件末尾不分层的「单栏留白」规则无条件覆盖它们；新样式写在末尾，不要往 legacy 层里加。
 - 管理后台支持审计日志（`createAuditLog`）、批量删除、页面克隆、页面导出（JSON）、浏览量统计。
 - Favorite Share 是 PostgreSQL 持久化的管理端全局二元状态；列表与详情共用 `PUT /admin/pages/:id/favorite`，公开页面和 Share API 不投影该字段。
 
@@ -55,12 +56,12 @@ db/migrations/   编号 SQL 迁移；应用部署前显式执行，已应用的�
 views/           EJS 模板（index / login / password / admin-* / error / partials/）
 public/          静态资源（css/ js/ icon/）
   css/           styles.css + login.css + markdown-<preset>.css（目录见 utils/markdownThemeCatalog.js）
-  js/            首页 main.js / publish-intent.js，后台 admin*.js / source-diff.js / diff-worker.js，公开页 password.js / view-event.js，vendor/
-utils/           security、contentRenderer、codeDetector、sandboxDocument（沙箱文档与内容类型）、publicUrls（公开地址与社交图）、publicProjection、shareAccess、shareGrants、idempotency、contentRevision 等
+  js/            首页 main.js / publish-intent.js，后台 admin*.js（admin-list.js 管列表行高与菜单）/ source-diff.js / diff-worker.js，公开页 password.js / view-event.js，vendor/
+utils/           security、contentRenderer、shareListGroups（后台列表分组与短时间）、codeDetector、sandboxDocument（沙箱文档与内容类型）、publicUrls（公开地址与社交图）、publicProjection、shareAccess、shareGrants、idempotency、contentRevision 等
 scripts/         运维 CLI（db:migrate / maintenance / backup / restore / verify-backup 等，见 package.json scripts）与回填脚本
 test/            Node test runner（HTTP/Repository/UI 行为测试 + integration/ PostgreSQL 套件）
 docs/            部署、备份恢复、维护、API 能力、spec #24 摘录、ADR，以及已完成发布的 rollout/handover 记录
-DESIGN.md        后台 UI 设计稿（Toast / Tab / Markdown 主题选择器 + 4 套主题规范）
+DESIGN.md        界面视觉规范（颜色、字体、布局、形状、组件与禁忌）；定稿过程在 design-packs/
 Dockerfile       Docker 构建文件
 docker-compose.yml
 ```

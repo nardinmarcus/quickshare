@@ -3,7 +3,6 @@
 <div class="admin-container">
   <header class="admin-header">
     <div>
-      <p class="admin-kicker">QuickShare</p>
       <h1 class="admin-title">审计日志</h1>
       <p class="admin-subtitle">已记录 <%= pagination.total %> 条操作事件</p>
     </div>
@@ -32,13 +31,13 @@
             <%
               const auditActionLabels = {
                 'admin.login': '后台登录',
-                'key.create': '创建密钥',
-                'key.delete': '删除密钥',
-                'key.rotate': '轮换密钥',
-                'key.scopes': '修改密钥范围',
-                'key.grant': '授予 Share 权限',
-                'key.grant_revoke': '撤销 Share 权限',
-                'key.auto_grant': '修改自动授权',
+                'api_key.create': '创建密钥',
+                'api_key.delete': '删除密钥',
+                'api_key.rotate': '轮换密钥',
+                'api_key.scopes': '修改密钥范围',
+                'api_key.grant': '授予 Share 权限',
+                'api_key.grant_revoke': '撤销 Share 权限',
+                'api_key.auto_grant': '修改自动授权',
                 'page.create': '创建分享',
                 'page.update': '更新分享',
                 'page.content.update': '更新内容',

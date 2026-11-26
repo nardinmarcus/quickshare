@@ -13,8 +13,6 @@ const {
 const isProduction = isProductionRuntime();
 const env = isProduction ? 'production' : process.env.NODE_ENV || 'development';
 const defaultPort = isProduction ? 3000 : 5678;
-const VALID_THEMES = ['default', 'hacker', 'cyberpunk', 'popart'];
-const uiTheme = VALID_THEMES.includes(process.env.UI_THEME) ? process.env.UI_THEME : 'default';
 const authEnabled = process.env.AUTH_ENABLED !== 'false';
 const adminPasswordHash = process.env.ADMIN_PASSWORD_HASH || '';
 const configuredAuthPassword = process.env.AUTH_PASSWORD || '';
@@ -74,5 +72,4 @@ module.exports = {
   shareApiKey: process.env.SHARE_API_KEY || '',
   smallBodyLimit: process.env.SMALL_BODY_LIMIT || '16kb',
   shareBodyLimit: process.env.SHARE_BODY_LIMIT || '4mb',
-  uiTheme
 };

@@ -1,268 +1,267 @@
 <%- include('partials/header', { title, page, csrfToken }) %>
+<%
+  const typeLabel = filters.type || '类型';
+  const statusLabel = filters.status === 'public' ? '公开' : (filters.status === 'protected' ? '密码保护' : '状态');
+  const sortOptions = [
+    { sort: 'created_at', order: 'desc', label: '创建时间，从新到旧' },
+    { sort: 'created_at', order: 'asc', label: '创建时间，从旧到新' },
+    { sort: 'code_type', order: 'asc', label: '按类型' },
+    { sort: 'is_protected', order: 'desc', label: '按状态' }
+  ];
+  const activeSort = sortOptions.find((option) => option.sort === filters.sort && (option.sort !== 'created_at' || option.order === filters.order)) || sortOptions[0];
+  const hasDateFilter = Boolean(filters.dateFrom || filters.dateTo);
+%>
 
 <div class="admin-container" id="admin-pages-context" data-admin-pages-url="<%= favoriteRefreshUrl %>">
   <header class="admin-header">
-    <div>
-      <p class="admin-kicker">QuickShare</p>
-      <h1 class="admin-title">分享管理</h1>
+    <div class="admin-heading">
+      <h1 class="admin-title">分享</h1>
       <p class="admin-subtitle">共 <%= pagination.total %> 个分享</p>
     </div>
     <%- include('partials/admin-nav', { current: 'pages' }) %>
   </header>
 
-  <div class="admin-header-utility">
-    <a class="cyber-btn cyber-btn-secondary" href="/admin/pages/export" title="仅包含分享元信息，不含正文，不能用于恢复；完整备份见 docs/backup-restore.md">
-      <i class="fas fa-download" aria-hidden="true"></i>
-      <span>导出清单（不含正文）</span>
-    </a>
-  </div>
+  <% if (!hasAnyPages) { %>
+    <div class="admin-empty">
+      <h2>还没有分享</h2>
+      <p>可以从首页或 Share API 创建第一个分享。</p>
+      <a class="cyber-btn cyber-btn-primary" href="/">新建分享</a>
+    </div>
+  <% } else { %>
+    <div class="share-toolbar">
+      <form class="share-search" id="admin-search-form" method="get" action="/admin/pages" role="search">
+        <i class="fas fa-search" aria-hidden="true"></i>
+        <input
+          type="search"
+          id="admin-search-input"
+          name="search"
+          value="<%= filters.search %>"
+          placeholder="按标题、ID 或描述搜索"
+          aria-label="搜索分享"
+        >
+        <% if (filters.type) { %><input type="hidden" name="type" value="<%= filters.type %>"><% } %>
+        <% if (filters.status) { %><input type="hidden" name="status" value="<%= filters.status %>"><% } %>
+        <% if (filters.favorite) { %><input type="hidden" name="favorite" value="true"><% } %>
+        <input type="hidden" name="sort" value="<%= filters.sort %>">
+        <input type="hidden" name="order" value="<%= filters.order %>">
+        <% if (filters.dateFrom) { %><input type="hidden" name="dateFrom" value="<%= filters.dateFrom %>"><% } %>
+        <% if (filters.dateTo) { %><input type="hidden" name="dateTo" value="<%= filters.dateTo %>"><% } %>
+        <button type="submit" class="sr-only">搜索</button>
+        <% if (filters.search) { %>
+          <a class="text-control share-search-clear" href="<%= adminPagesUrl({ search: '', page: '' }) %>">清除</a>
+        <% } %>
+      </form>
 
-  <section class="card admin-card">
-    <% if (!hasAnyPages) { %>
-      <div class="admin-empty">
-        <h2>还没有分享</h2>
-        <p>可以从首页或 Share API 创建第一个分享。</p>
-      </div>
-    <% } else { %>
-      <div class="admin-filter-bar">
-        <form class="admin-search-form" id="admin-search-form" method="get" action="/admin/pages">
-          <div class="admin-search-box">
-            <i class="fas fa-search" aria-hidden="true"></i>
-            <input
-              type="text"
-              id="admin-search-input"
-              name="search"
-              value="<%= filters.search %>"
-              placeholder="按标题、ID 或描述搜索"
-              aria-label="搜索分享"
-            >
-          </div>
-          <% if (filters.type) { %><input type="hidden" name="type" value="<%= filters.type %>"><% } %>
-          <% if (filters.status) { %><input type="hidden" name="status" value="<%= filters.status %>"><% } %>
-          <% if (filters.favorite) { %><input type="hidden" name="favorite" value="true"><% } %>
-          <input type="hidden" name="sort" value="<%= filters.sort %>">
-          <input type="hidden" name="order" value="<%= filters.order %>">
-          <% if (filters.dateFrom) { %><input type="hidden" name="dateFrom" value="<%= filters.dateFrom %>"><% } %>
-          <% if (filters.dateTo) { %><input type="hidden" name="dateTo" value="<%= filters.dateTo %>"><% } %>
-          <button type="submit" class="cyber-btn cyber-btn-secondary">搜索</button>
-          <% if (filters.search) { %>
-            <a class="cyber-btn cyber-btn-secondary" href="<%= adminPagesUrl({ search: '', page: '' }) %>">清除</a>
-          <% } %>
-        </form>
-
-        <div class="admin-filter-group">
-          <span class="admin-filter-label">日期</span>
-          <div class="admin-date-range">
-            <input type="date" id="filter-date-from" value="<%= filters.dateFrom || '' %>" aria-label="开始日期">
-            <span aria-hidden="true">–</span>
-            <input type="date" id="filter-date-to" value="<%= filters.dateTo || '' %>" aria-label="结束日期">
-            <button type="button" class="cyber-btn cyber-btn-secondary" id="date-filter-btn">筛选</button>
-            <% if (filters.dateFrom || filters.dateTo) { %>
-              <a class="cyber-btn cyber-btn-secondary" href="<%= adminPagesUrl({ dateFrom: '', dateTo: '', page: '' }) %>">清除</a>
-            <% } %>
-          </div>
-        </div>
-
-        <div class="admin-filter-group">
-          <span class="admin-filter-label">类型</span>
-          <div class="admin-filter-buttons">
-            <a class="admin-filter-btn <%= !filters.type ? 'active' : '' %>" href="<%= adminPagesUrl({ type: '', page: '' }) %>">全部</a>
+      <div class="share-filters">
+        <details class="menu" data-menu>
+          <summary class="chip <%= filters.type ? 'is-active' : '' %>"><span><%= typeLabel %></span><i class="fas fa-chevron-down" aria-hidden="true"></i></summary>
+          <div class="menu-panel">
+            <a class="menu-item" href="<%= adminPagesUrl({ type: '', page: '' }) %>" <% if (!filters.type) { %>aria-current="true"<% } %>>全部类型</a>
             <% ['html', 'markdown', 'svg', 'mermaid'].forEach(function(t) { %>
-              <a class="admin-filter-btn <%= filters.type === t ? 'active' : '' %>" href="<%= adminPagesUrl({ type: t, page: '' }) %>"><%= t %></a>
+              <a class="menu-item" href="<%= adminPagesUrl({ type: t, page: '' }) %>" <% if (filters.type === t) { %>aria-current="true"<% } %>><%= t %></a>
             <% }); %>
           </div>
-        </div>
+        </details>
 
-        <div class="admin-filter-group">
-          <span class="admin-filter-label">状态</span>
-          <div class="admin-filter-buttons">
-            <a class="admin-filter-btn <%= !filters.status ? 'active' : '' %>" href="<%= adminPagesUrl({ status: '', page: '' }) %>">全部</a>
-            <a class="admin-filter-btn <%= filters.status === 'public' ? 'active' : '' %>" href="<%= adminPagesUrl({ status: 'public', page: '' }) %>">公开</a>
-            <a class="admin-filter-btn <%= filters.status === 'protected' ? 'active' : '' %>" href="<%= adminPagesUrl({ status: 'protected', page: '' }) %>">密码保护</a>
+        <details class="menu" data-menu>
+          <summary class="chip <%= filters.status ? 'is-active' : '' %>"><span><%= statusLabel %></span><i class="fas fa-chevron-down" aria-hidden="true"></i></summary>
+          <div class="menu-panel">
+            <a class="menu-item" href="<%= adminPagesUrl({ status: '', page: '' }) %>" <% if (!filters.status) { %>aria-current="true"<% } %>>全部状态</a>
+            <a class="menu-item" href="<%= adminPagesUrl({ status: 'public', page: '' }) %>" <% if (filters.status === 'public') { %>aria-current="true"<% } %>>公开</a>
+            <a class="menu-item" href="<%= adminPagesUrl({ status: 'protected', page: '' }) %>" <% if (filters.status === 'protected') { %>aria-current="true"<% } %>>密码保护</a>
           </div>
-        </div>
+        </details>
 
-        <div class="admin-filter-group">
-          <span class="admin-filter-label">收藏</span>
-          <div class="admin-filter-buttons">
-            <a class="admin-filter-btn <%= !filters.favorite ? 'active' : '' %>" href="<%= adminPagesUrl({ favorite: '', page: '' }) %>">全部 Shares</a>
-            <a class="admin-filter-btn <%= filters.favorite ? 'active' : '' %>" href="<%= adminPagesUrl({ favorite: 'true', page: '' }) %>">Favorite Shares</a>
+        <details class="menu menu-end" data-menu>
+          <summary class="chip chip-icon <%= filters.favorite ? 'is-active' : '' %>" aria-label="收藏筛选" title="收藏筛选"><i class="<%= filters.favorite ? 'fas' : 'far' %> fa-star" aria-hidden="true"></i></summary>
+          <div class="menu-panel">
+            <a class="menu-item" href="<%= adminPagesUrl({ favorite: '', page: '' }) %>" <% if (!filters.favorite) { %>aria-current="true"<% } %>>全部 Shares</a>
+            <a class="menu-item" href="<%= adminPagesUrl({ favorite: 'true', page: '' }) %>" <% if (filters.favorite) { %>aria-current="true"<% } %>>Favorite Shares</a>
           </div>
-        </div>
+        </details>
       </div>
+    </div>
 
-      <% if (pages.length === 0) { %>
-        <div class="admin-empty">
-          <p>没有符合条件的分享，<a href="/admin/pages">清除全部筛选条件</a>。</p>
+    <div class="share-options">
+      <details class="menu" data-menu>
+        <summary class="text-control"><span>排序：<%= activeSort.label %></span><i class="fas fa-chevron-down" aria-hidden="true"></i></summary>
+        <div class="menu-panel">
+          <% sortOptions.forEach(function(option) { %>
+            <a class="menu-item" href="<%= adminPagesUrl({ sort: option.sort, order: option.order, page: '' }) %>" <% if (option === activeSort) { %>aria-current="true"<% } %>><%= option.label %></a>
+          <% }); %>
         </div>
-      <% } else { %>
-        <div id="batch-toolbar" class="batch-toolbar" hidden>
-          <span id="batch-count">已选择 0 项</span>
-          <button type="button" class="cyber-btn" id="batch-delete-btn" disabled>
-            <i class="fas fa-trash-alt" aria-hidden="true"></i>
-            <span>删除所选</span>
-          </button>
-          <button type="button" class="cyber-btn cyber-btn-secondary" id="batch-cancel-btn">取消选择</button>
-        </div>
-        <div class="admin-table-wrap" tabindex="0" aria-label="分享列表，可横向滚动">
-          <table class="admin-table">
-            <caption class="sr-only">分享列表</caption>
-            <thead>
-              <tr>
-                <th scope="col" class="admin-checkbox-cell">
-                  <label class="admin-checkbox-target">
-                    <input type="checkbox" id="select-all">
-                    <span class="sr-only">选择全部分享</span>
-                  </label>
-                </th>
-                <th scope="col">标题</th>
-                <th scope="col" aria-sort="<%= filters.sort === 'code_type' ? (filters.order === 'asc' ? 'ascending' : 'descending') : 'none' %>">
-                  <a class="admin-sortable <%= filters.sort === 'code_type' ? filters.order : '' %>" href="<%= adminPagesUrl({ sort: 'code_type', order: filters.sort === 'code_type' && filters.order === 'desc' ? 'asc' : 'desc', page: '' }) %>">
-                    类型 <i class="fas fa-sort<%= filters.sort === 'code_type' ? (filters.order === 'asc' ? '-up' : '-down') : '' %>" aria-hidden="true"></i>
-                  </a>
-                </th>
-                <th scope="col" aria-sort="<%= filters.sort === 'created_at' ? (filters.order === 'asc' ? 'ascending' : 'descending') : 'none' %>">
-                  <a class="admin-sortable <%= filters.sort === 'created_at' ? filters.order : '' %>" href="<%= adminPagesUrl({ sort: 'created_at', order: filters.sort === 'created_at' && filters.order === 'desc' ? 'asc' : 'desc', page: '' }) %>">
-                    创建时间 <i class="fas fa-sort<%= filters.sort === 'created_at' ? (filters.order === 'asc' ? '-up' : '-down') : '' %>" aria-hidden="true"></i>
-                  </a>
-                </th>
-                <th scope="col" aria-sort="<%= filters.sort === 'is_protected' ? (filters.order === 'asc' ? 'ascending' : 'descending') : 'none' %>">
-                  <a class="admin-sortable <%= filters.sort === 'is_protected' ? filters.order : '' %>" href="<%= adminPagesUrl({ sort: 'is_protected', order: filters.sort === 'is_protected' && filters.order === 'desc' ? 'asc' : 'desc', page: '' }) %>">
-                    状态 <i class="fas fa-sort<%= filters.sort === 'is_protected' ? (filters.order === 'asc' ? '-up' : '-down') : '' %>" aria-hidden="true"></i>
-                  </a>
-                </th>
-                <th scope="col">访问量</th>
-                <th scope="col">密码</th>
-                <th scope="col">链接</th>
-                <th scope="col" class="admin-actions-col">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <% pages.forEach((sharedPage) => { %>
+      </details>
+
+      <span class="share-options-end">
+        <button type="button" class="text-control" id="select-mode-btn" aria-pressed="false">选择</button>
+
+        <details class="menu menu-end" data-menu>
+          <summary class="text-control <%= hasDateFilter ? 'is-active' : '' %>"><span>更多</span><i class="fas fa-chevron-down" aria-hidden="true"></i></summary>
+          <div class="menu-panel menu-panel-wide">
+            <p class="menu-label">创建日期</p>
+            <div class="admin-date-range">
+              <input type="date" id="filter-date-from" value="<%= filters.dateFrom || '' %>" aria-label="开始日期">
+              <span aria-hidden="true">至</span>
+              <input type="date" id="filter-date-to" value="<%= filters.dateTo || '' %>" aria-label="结束日期">
+            </div>
+            <div class="menu-row">
+              <button type="button" class="cyber-btn cyber-btn-secondary" id="date-filter-btn">筛选</button>
+              <% if (hasDateFilter) { %>
+                <a class="text-control" href="<%= adminPagesUrl({ dateFrom: '', dateTo: '', page: '' }) %>">清除日期</a>
+              <% } %>
+            </div>
+
+            <p class="menu-label">行高</p>
+            <div class="segmented" role="group" aria-label="行高">
+              <button type="button" data-density-option="comfortable" aria-pressed="true">宽松</button>
+              <button type="button" data-density-option="compact" aria-pressed="false">紧凑</button>
+            </div>
+
+            <a class="menu-item" href="/admin/pages/export" title="仅包含分享元信息，不含正文，不能用于恢复；完整备份见 docs/backup-restore.md">
+              <i class="fas fa-download" aria-hidden="true"></i>
+              <span>导出清单（不含正文）</span>
+            </a>
+          </div>
+        </details>
+      </span>
+    </div>
+
+    <% if (pages.length === 0) { %>
+      <div class="admin-empty">
+        <p>没有符合条件的分享，<a href="/admin/pages">清除全部筛选条件</a>。</p>
+      </div>
+    <% } else { %>
+      <div class="share-groups" id="share-list" data-density="comfortable" data-selecting="false">
+        <% const now = Date.now(); %>
+        <% groups.forEach((group, groupIndex) => { %>
+          <section class="share-group" aria-labelledby="share-group-<%= groupIndex %>">
+            <h2 class="share-group-title" id="share-group-<%= groupIndex %>"><%= group.label %></h2>
+            <ul class="share-list">
+              <% group.pages.forEach((sharedPage) => { %>
                 <%
-                  const now = Date.now();
                   const isExpired = sharedPage.expires_at && Number(sharedPage.expires_at) < now;
                   const isExpiringSoon = sharedPage.expires_at && !isExpired && Number(sharedPage.expires_at) < now + 24 * 60 * 60 * 1000;
+                  const isUnpublished = sharedPage.published === false;
+                  const shareName = sharedPage.title || sharedPage.id;
                 %>
-                <tr class="<%= isExpired ? 'admin-expired' : '' %> <%= isExpiringSoon ? 'admin-expiring' : '' %>" data-page-id="<%= sharedPage.id %>">
-                  <td class="admin-checkbox-cell">
-                    <label class="admin-checkbox-target">
-                      <input type="checkbox" class="row-checkbox" data-id="<%= sharedPage.id %>">
-                      <span class="sr-only">选择 <%= sharedPage.title || sharedPage.id %></span>
-                    </label>
-                  </td>
-                  <td>
-                    <a class="admin-page-title" href="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>">
-                      <%= sharedPage.title || sharedPage.id %>
-                    </a>
-                    <% if (sharedPage.description) { %>
-                      <p class="admin-page-description"><%= sharedPage.description %></p>
-                    <% } %>
-                    <% if (isExpired) { %>
-                      <span class="admin-expired-badge">已过期</span>
-                    <% } else if (isExpiringSoon) { %>
-                      <span class="admin-expiring-badge">即将过期</span>
-                    <% } %>
-                  </td>
-                  <td><span class="admin-pill"><%= sharedPage.code_type || 'html' %></span></td>
-                  <td><time datetime="<%= new Date(Number(sharedPage.created_at)).toISOString() %>"><%= formatManagementDateTime(sharedPage.created_at) %></time></td>
-                  <td>
-                    <% if (sharedPage.is_protected === 1) { %>
-                      <span class="admin-status protected">密码保护</span>
-                    <% } else { %>
-                      <span class="admin-status public">公开</span>
-                    <% } %>
-                    <% if (sharedPage.published === false) { %>
-                      <span class="admin-status protected">已下架</span>
-                    <% } %>
-                  </td>
-                  <td><%= sharedPage.view_count || 0 %></td>
-                  <td>
-                    <% if (sharedPage.is_protected === 1 && sharedPage.visiblePassword) { %>
-                      <code class="admin-password-value"><%= sharedPage.visiblePassword %></code>
-                    <% } else if (sharedPage.is_protected === 1) { %>
-                      <span class="admin-muted">不可查看</span>
-                    <% } else { %>
-                      <span class="admin-muted">—</span>
-                    <% } %>
-                  </td>
-                  <td>
-                    <a class="admin-icon-link" href="<%= publicPageUrl(sharedPage.id) %>" target="_blank" rel="noopener noreferrer" aria-label="打开公开页面">
+                <li class="share-row <%= isUnpublished ? 'is-unpublished' : '' %> <%= isExpired ? 'admin-expired' : '' %> <%= isExpiringSoon ? 'admin-expiring' : '' %>" data-page-id="<%= sharedPage.id %>">
+                  <label class="share-check admin-checkbox-target">
+                    <input type="checkbox" class="row-checkbox" data-id="<%= sharedPage.id %>">
+                    <span class="sr-only">选择 <%= shareName %></span>
+                  </label>
+                  <span class="share-type" title="<%= sharedPage.code_type || 'html' %>"><%= shareTypeAbbreviation(sharedPage.code_type) %></span>
+                  <div class="share-main">
+                    <a class="share-title admin-page-title" href="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>"><%= shareName %></a>
+                    <p class="share-meta">
+                      <% if (isUnpublished) { %><span>已下架</span><% } %>
+                      <span><%= sharedPage.is_protected === 1 ? '密码保护' : '公开' %></span>
+                      <% if (sharedPage.is_protected === 1 && sharedPage.visiblePassword) { %>
+                        <code class="admin-password-value"><%= sharedPage.visiblePassword %></code>
+                      <% } else if (sharedPage.is_protected === 1) { %>
+                        <span>密码不可查看</span>
+                      <% } %>
+                      <span><%= sharedPage.view_count || 0 %> 次访问</span>
+                      <% if (isExpired) { %>
+                        <span class="admin-expired-badge">已过期</span>
+                      <% } else if (isExpiringSoon) { %>
+                        <span class="admin-expiring-badge">即将过期</span>
+                      <% } %>
+                      <% if (sharedPage.description) { %><span class="admin-page-description"><%= sharedPage.description %></span><% } %>
+                    </p>
+                  </div>
+                  <time class="share-time" datetime="<%= new Date(Number(sharedPage.created_at)).toISOString() %>" title="<%= formatManagementDateTime(sharedPage.created_at) %>"><%= formatShareListTime(sharedPage.created_at, now) %></time>
+                  <div class="share-actions">
+                    <a class="icon-btn" href="<%= publicPageUrl(sharedPage.id) %>" target="_blank" rel="noopener noreferrer" aria-label="打开公开页面 <%= shareName %>" title="打开公开页面">
                       <i class="fas fa-external-link-alt" aria-hidden="true"></i>
                     </a>
-                  </td>
-                  <td class="admin-actions-col">
                     <button
                       type="button"
-                      class="admin-favorite-toggle admin-list-favorite-toggle"
+                      class="icon-btn admin-favorite-toggle admin-list-favorite-toggle"
                       data-favorite-toggle
                       data-page-id="<%= sharedPage.id %>"
-                      data-page-title="<%= sharedPage.title || sharedPage.id %>"
+                      data-page-title="<%= shareName %>"
                       data-is-favorite="<%= sharedPage.is_favorite ? 'true' : 'false' %>"
                       <% if (filters.favorite) { %>data-refresh-url="<%= favoriteRefreshUrl %>"<% } %>
                       aria-pressed="<%= sharedPage.is_favorite ? 'true' : 'false' %>"
                       aria-busy="false"
-                      aria-label="<%= sharedPage.is_favorite ? `取消收藏 ${sharedPage.title || sharedPage.id}` : `收藏分享 ${sharedPage.title || sharedPage.id}` %>"
+                      aria-label="<%= sharedPage.is_favorite ? `取消收藏 ${shareName}` : `收藏分享 ${shareName}` %>"
                     >
                       <i class="<%= sharedPage.is_favorite ? 'fas' : 'far' %> fa-star admin-favorite-icon" aria-hidden="true"></i>
                       <span class="sr-only admin-favorite-label"><%= sharedPage.is_favorite ? '取消收藏' : '收藏' %></span>
                     </button>
                     <button
                       type="button"
-                      class="admin-publish-toggle"
+                      class="icon-btn admin-publish-toggle"
                       data-publish-toggle
                       data-page-id="<%= sharedPage.id %>"
-                      data-page-title="<%= sharedPage.title || sharedPage.id %>"
-                      data-published="<%= sharedPage.published === false ? 'false' : 'true' %>"
+                      data-page-title="<%= shareName %>"
+                      data-published="<%= isUnpublished ? 'false' : 'true' %>"
                       data-access-revision="<%= sharedPage.access_revision || '1' %>"
-                      aria-pressed="<%= sharedPage.published === false ? 'false' : 'true' %>"
-                      aria-label="<%= sharedPage.published === false ? `重新发布分享 ${sharedPage.title || sharedPage.id}` : `下架分享 ${sharedPage.title || sharedPage.id}` %>"
+                      aria-pressed="<%= isUnpublished ? 'false' : 'true' %>"
+                      aria-label="<%= isUnpublished ? `重新发布分享 ${shareName}` : `下架分享 ${shareName}` %>"
+                      title="<%= isUnpublished ? '重新发布' : '下架' %>"
                     >
-                      <i class="<%= sharedPage.published === false ? 'fas fa-eye' : 'fas fa-eye-slash' %>" aria-hidden="true"></i>
+                      <i class="<%= isUnpublished ? 'fas fa-eye' : 'fas fa-eye-slash' %>" aria-hidden="true"></i>
                     </button>
                     <form method="post" action="/admin/pages/<%= encodeURIComponent(sharedPage.id) %>/clone" class="admin-inline-form">
                       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-                      <button type="submit" class="admin-clone-btn" aria-label="克隆分享 <%= sharedPage.title || sharedPage.id %>">
+                      <button type="submit" class="icon-btn admin-clone-btn" aria-label="克隆分享 <%= shareName %>" title="克隆">
                         <i class="fas fa-copy" aria-hidden="true"></i>
                       </button>
                     </form>
                     <button
                       type="button"
-                      class="admin-delete-btn"
+                      class="icon-btn admin-delete-btn"
                       data-page-id="<%= sharedPage.id %>"
-                      data-page-title="<%= sharedPage.title || sharedPage.id %>"
-                      aria-label="删除分享 <%= sharedPage.title || sharedPage.id %>"
+                      data-page-title="<%= shareName %>"
+                      aria-label="删除分享 <%= shareName %>"
+                      title="删除"
                     >
                       <i class="fas fa-trash-alt" aria-hidden="true"></i>
                     </button>
-                  </td>
-                </tr>
+                  </div>
+                </li>
               <% }) %>
-            </tbody>
-          </table>
-        </div>
+            </ul>
+          </section>
+        <% }) %>
+      </div>
 
-        <nav class="admin-pagination" aria-label="分享列表分页">
-          <% if (pagination.hasPrevious) { %>
-            <a class="cyber-btn cyber-btn-secondary" href="<%= adminPagesUrl({ page: pagination.page - 1 }) %>">上一页</a>
-          <% } else { %>
-            <span class="cyber-btn cyber-btn-secondary disabled" aria-disabled="true">上一页</span>
-          <% } %>
-          <span class="admin-page-count">第 <%= pagination.page %> / <%= pagination.totalPages %> 页</span>
-          <span class="admin-page-jump">
-            <label class="sr-only" for="jump-page-input">跳转到页码</label>
-            <input type="number" id="jump-page-input" min="1" max="<%= pagination.totalPages %>" placeholder="#" aria-label="跳转到页码">
-            <button type="button" class="cyber-btn cyber-btn-secondary" id="jump-page-btn">前往</button>
-          </span>
-          <% if (pagination.hasNext) { %>
-            <a class="cyber-btn cyber-btn-secondary" href="<%= adminPagesUrl({ page: pagination.page + 1 }) %>">下一页</a>
-          <% } else { %>
-            <span class="cyber-btn cyber-btn-secondary disabled" aria-disabled="true">下一页</span>
-          <% } %>
-        </nav>
-      <% } %>
+      <div id="batch-toolbar" class="batch-toolbar" role="region" aria-label="批量操作" hidden>
+        <label class="admin-checkbox-target batch-select-all">
+          <input type="checkbox" id="select-all">
+          <span>全选本页</span>
+        </label>
+        <span id="batch-count" aria-live="polite">已选择 0 项</span>
+        <button type="button" class="cyber-btn cyber-btn-danger" id="batch-delete-btn" disabled>
+          <i class="fas fa-trash-alt" aria-hidden="true"></i>
+          <span>删除所选</span>
+        </button>
+        <button type="button" class="cyber-btn cyber-btn-secondary" id="batch-cancel-btn">取消</button>
+      </div>
+
+      <nav class="admin-pagination" aria-label="分享列表分页">
+        <% if (pagination.hasPrevious) { %>
+          <a class="text-control" href="<%= adminPagesUrl({ page: pagination.page - 1 }) %>">上一页</a>
+        <% } else { %>
+          <span class="text-control disabled" aria-disabled="true">上一页</span>
+        <% } %>
+        <span class="admin-page-count">第 <%= pagination.page %> / <%= pagination.totalPages %> 页</span>
+        <% if (pagination.totalPages > 1) { %>
+        <span class="admin-page-jump">
+          <label class="sr-only" for="jump-page-input">跳转到页码</label>
+          <input type="number" id="jump-page-input" min="1" max="<%= pagination.totalPages %>" placeholder="页码" aria-label="跳转到页码">
+          <button type="button" class="text-control" id="jump-page-btn">前往</button>
+        </span>
+        <% } %>
+        <% if (pagination.hasNext) { %>
+          <a class="text-control" href="<%= adminPagesUrl({ page: pagination.page + 1 }) %>">下一页</a>
+        <% } else { %>
+          <span class="text-control disabled" aria-disabled="true">下一页</span>
+        <% } %>
+      </nav>
     <% } %>
-  </section>
+  <% } %>
 </div>
 
 <div id="delete-modal" class="admin-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title" aria-describedby="delete-modal-description" aria-busy="false" hidden>
@@ -274,11 +273,12 @@
     <p id="delete-modal-status" class="admin-modal-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p>
     <div class="admin-modal-actions">
       <button type="button" class="cyber-btn cyber-btn-secondary" id="delete-modal-cancel">取消</button>
-      <button type="button" class="cyber-btn" id="delete-modal-confirm">删除</button>
+      <button type="button" class="cyber-btn cyber-btn-danger" id="delete-modal-confirm">删除</button>
     </div>
   </div>
 </div>
 
 <script src="/js/admin.js"></script>
 <script src="/js/admin-favorite.js"></script>
+<script src="/js/admin-list.js"></script>
 <%- include('partials/footer', { page }) %>

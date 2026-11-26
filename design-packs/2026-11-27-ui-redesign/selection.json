@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "direction_id": "D",
+  "direction_name": "单栏留白",
+  "dials": {
+    "variance": 5,
+    "motion": 2,
+    "density": 5
+  },
+  "adjustments": "",
+  "source": "user",
+  "approved_at": "2026-11-26T17:52:15.829Z"
+}

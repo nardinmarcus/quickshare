@@ -211,7 +211,7 @@ test('each trusted route loads only the scripts it uses', async () => {
 
   for (const response of [homepage, loginPage, passwordPage, errorPage, statsPage, auditPage, apiPage]) {
     assert.match(response.text, /src="\/js\/theme\.js"/);
-    assert.match(response.text, /font-awesome/);
+    assert.doesNotMatch(response.text, /font-awesome|fonts\.googleapis/);
     assertHasUmamiTracker(response.text);
   }
 });

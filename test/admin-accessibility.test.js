@@ -111,10 +111,12 @@ test('admin tables expose captions, column scopes, sorting state, and bounded sc
   const audit = await adminRequest('/admin/audit');
   const apis = await adminRequest('/admin/apis');
 
-  assert.match(pages.text, /class="admin-table-wrap"[^>]+tabindex="0"[^>]+aria-label="分享列表，可横向滚动"/);
-  assert.match(pages.text, /<caption class="sr-only">分享列表<\/caption>/);
-  assert.match(pages.text, /<th scope="col" aria-sort="descending">/);
-  assert.doesNotMatch(pages.text, /<th\b(?![^>]*scope="col")[^>]*>/);
+  // 分享列表是按分组的列表而不是表格：每组有标题，排序通过菜单里的当前项表达。
+  assert.match(pages.text, /<section class="share-group" aria-labelledby="share-group-0">/);
+  assert.match(pages.text, /<h2 class="share-group-title" id="share-group-0">/);
+  assert.match(pages.text, /<ul class="share-list">/);
+  assert.match(pages.text, /<a class="menu-item" href="[^"]+" aria-current="true">创建时间，从新到旧<\/a>/);
+  assert.doesNotMatch(pages.text, /<table\b/);
 
   assert.match(audit.text, /<caption class="sr-only">审计日志<\/caption>/);
   assert.doesNotMatch(audit.text, /<th\b(?![^>]*scope="col")[^>]*>/);

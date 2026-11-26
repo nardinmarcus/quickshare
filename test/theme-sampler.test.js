@@ -271,20 +271,11 @@ test('site CSS keeps the sampler compact and focused at 375 px', () => {
   assert.doesNotMatch(script, /theme-sampler-(?:diagram|image|assets|grid)/);
 });
 
-test('homepage CSS gives the visible Theme Sampler a bounded 1024 px workbench column', () => {
+test('homepage CSS keeps the visible Theme Sampler inside the single publishing column', () => {
   const css = fs.readFileSync(path.join(__dirname, '../public/css/styles.css'), 'utf8');
 
-  assert.match(
-    css,
-    /@media \(min-width:\s*1024px\)[\s\S]*?\.publishing-workbench:has\(\.markdown-theme-selector:not\(\.hidden\)\)\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) minmax\(300px,\s*320px\)/s
-  );
-  assert.match(
-    css,
-    /@media \(min-width:\s*1024px\)[\s\S]*?\.markdown-theme-selector\s*\{[^}]*position:\s*sticky[^}]*max-width:\s*340px/s
-  );
-  assert.match(
-    css,
-    /\[data-page="home-page"\] \.markdown-theme-selector \.theme-sampler-frame\s*\{[^}]*height:\s*200px/s
-  );
+  assert.match(css, /\.publishing-workbench\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column/s);
+  assert.match(css, /\.theme-sampler-settings\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)[^}]*background:\s*var\(--fill\)/s);
+  assert.match(css, /\.theme-sampler-frame\s*\{[^}]*height:\s*200px/s);
   assert.doesNotMatch(css, /\.theme-sampler-frame\s*\{[^}]*height:\s*(?:440|650)px/s);
 });

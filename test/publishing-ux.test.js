@@ -71,8 +71,10 @@ test('homepage exposes preview, explicit publish states, and a complete handoff 
 
   assert.equal(homepage.status, 200);
   assert.match(homepage.text, /<label[^>]+for="html-input"/);
+  // 上传入口在输入块内部、输入区之后，不在发布按钮行里
   assert.ok(uploadPosition >= 0);
-  assert.ok(uploadPosition < editorPosition);
+  assert.ok(editorPosition < uploadPosition);
+  assert.ok(uploadPosition < homepage.text.indexOf('class="publishing-controls"'));
   assert.doesNotMatch(actionRowMarkup, /for="html-file"/);
   assert.ok(previewPosition >= 0);
   assert.ok(previewPosition < publishPosition);
@@ -124,22 +126,22 @@ test('homepage folds publish settings into a summary and keeps one result copy a
   assert.match(css, /@keyframes publishReveal/);
 });
 
-test('homepage layout uses desktop width to keep the idle publishing flow compact', () => {
+test('homepage layout keeps the publishing flow in one centered column', () => {
   const css = fs.readFileSync(path.join(__dirname, '../public/css/styles.css'), 'utf8');
 
-  assert.match(css, /--home-content-width:\s*1120px/);
-  assert.match(css, /\[data-page="home-page"\] \.main-container\s*\{[^}]*max-width:\s*var\(--home-content-width\)/s);
-  assert.match(css, /@media \(min-width:\s*960px\)[\s\S]*?\[data-page="home-page"\] \.publish-settings-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1\.05fr\) minmax\(0, 1\.7fr\) minmax\(0, 1\.15fr\)/s);
-  assert.match(css, /\[data-page="home-page"\] \.publish-field:nth-child\(2\)\s*\{[^}]*grid-column:\s*auto/s);
-  assert.match(css, /@media \(max-width:\s*720px\)[\s\S]*?\[data-page="home-page"\] \.card\s*\{[^}]*padding-inline:\s*1rem/s);
-  assert.match(css, /\.main-container\s*\{[^}]*max-width:\s*720px/s);
-  assert.match(css, /\[data-page="home-page"\] \.upload-file-trigger\s*\{[^}]*min-height:\s*44px[^}]*background:\s*rgba\(var\(--primary-rgb\),\s*0\.07\)[^}]*color:\s*var\(--text-primary\)/s);
-  // 垂直平衡：页眉与页脚的自动边距平分多余高度，短内容居中、长内容自然顶起
-  assert.match(css, /\[data-page="home-page"\] \.app-header\s*\{[^}]*margin-top:\s*auto/s);
-  assert.match(css, /\[data-page="home-page"\] \.app-footer\s*\{[^}]*margin-top:\s*auto/s);
-  assert.match(css, /\[data-page="home-page"\] \.main-container\s*\{[^}]*min-height:\s*100dvh/s);
-  assert.doesNotMatch(css, /\[data-page="home-page"\] \.upload-file-trigger\s*\{[^}]*background:\s*var\(--primary\)/s);
-  assert.match(css, /\[data-page="home-page"\] \.button-row\s*\{[^}]*justify-content:\s*flex-end/s);
+  // 单栏：首页内容栏固定 700px，视口再宽也不变宽（DESIGN.md）
+  assert.match(css, /--col-home:\s*700px/);
+  assert.match(css, /\.main-container\s*\{[^}]*max-width:\s*calc\(var\(--col-home\) \+ 40px\)[^}]*min-height:\s*100dvh/s);
+  // 内容从顶部按视口比例下移，不做垂直居中：展开发布设置时只向下生长，不把页面往上推
+  assert.match(css, /\.app-header\s*\{[^}]*margin:\s*0;[^}]*padding:\s*clamp\(40px, 15vh, 150px\) 0 30px/s);
+  assert.match(css, /\.app-footer\s*\{[^}]*margin:\s*auto 0 0/s);
+  // 输入块是填充色块，不画边框；上传入口是块内的文字控件，触控目标不小于 44px
+  assert.match(css, /\.publishing-editor\s*\{[^}]*background:\s*var\(--fill\)[^}]*border-radius:\s*var\(--radius-block\)/s);
+  assert.match(css, /\.upload-file-trigger\s*\{[^}]*min-height:\s*44px[^}]*background:\s*none[^}]*color:\s*var\(--muted\)/s);
+  assert.match(css, /\.button-row\s*\{[^}]*justify-content:\s*center/s);
+  assert.match(css, /@media \(max-width:\s*640px\)[\s\S]*?\.publish-settings-grid,\s*\.access-mode-options,\s*\.result-summary\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
+  // 旧的可选 UI 主题与强调色已退役
+  assert.doesNotMatch(css, /data-theme="(?:hacker|cyberpunk|popart)"/);
 });
 
 test('browser script uses one clipboard path and manages preview and busy state', async () => {
