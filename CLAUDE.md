@@ -8,7 +8,7 @@ Express 4 + EJS + PostgreSQL (生产) / 内存 (开发)。部署在 Vercel。
 
 - 仓库选择在 `models/pageRepository.js`；本地无 `DATABASE_URL` 时可用内存，生产缺失持久数据库时必须启动失败。
 - 数据库 schema 只通过 `db/migrations/` 与 `npm run db:migrate` 更新，业务请求和服务启动不得执行 DDL。
-- 认证分两层（全部鉴权中间件均定义于 `app.js` 内，无独立 middleware 文件）：
+- 认证分两层（鉴权中间件、会话与 cookie 逻辑在 `middleware/auth.js` 的 `createAuth({ config, pageRepository })`，由 `app.js` 注入使用）：
   - **前端登录**（`/login`）：签名 cookie `admin_session`，用于首页创建分享。首页走 `requireHomepageAccess`，浏览器发布走 `requireBrowserPublishAccess` + `requireBrowserPublishCsrf`；后台站点设置可把首页切为公开模式，此时浏览器发布改为要求同源。
   - **管理后台**（`/admin/login`）：签名 cookie `dashboard_admin_session`。页面与较早的写接口用 `requireDashboardAdmin`（未登录重定向），较新的 JSON 接口用 `requireDashboardApiAdmin`（未登录 401 JSON），写操作再加 `requireDashboardCsrf`。
 - 两层密码独立配置（`AUTH_PASSWORD` / `ADMIN_PASSWORD_HASH` vs `ADMIN_DASHBOARD_PASSWORD` / `ADMIN_DASHBOARD_PASSWORD_HASH`）；明文形式只允许本地开发，生产只接受 scrypt hash。
@@ -43,7 +43,8 @@ Express 4 + EJS + PostgreSQL (生产) / 内存 (开发)。部署在 Vercel。
 
 ```text
 api/             Vercel function 入口（api/index.js）
-app.js           Express app，所有路由与鉴权中间件定义在此
+app.js           Express app，所有路由定义在此
+middleware/      auth.js：两层登录会话、CSRF、页面访问 cookie、API Key/scope 鉴权中间件
 config.js        环境变量聚合与生产启动校验
 server.js        本地服务器入口
 models/          数据层（pageRepository 选择器 + Postgres / 内存仓储 + 迁移、连接配置、publishing）
