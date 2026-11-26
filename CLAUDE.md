@@ -45,7 +45,7 @@ Express 4 + EJS + PostgreSQL (生产) / 内存 (开发)。部署在 Vercel。
 ```text
 api/             Vercel function 入口（api/index.js）
 app.js           Express app 装配与尚未拆出的路由（拆分计划见 #79）
-routes/          Router 工厂，由 app.js 挂载：view.js（公开查看、解锁、浏览事件、公开元信息）、apiV1.js（`/api/v1/*` Share API）
+routes/          Router 工厂，由 app.js 挂载：view.js（公开查看、解锁、浏览事件、公开元信息）、apiV1.js（`/api/v1/*` Share API）、adminApiKeys.js（`/admin/apis*` Key、scope、grant 管理）
 services/        shareOperations.js：创建流水线（含幂等）、操作回执、内容/访问前置条件等跨路由共享的 Share 操作
 middleware/      auth.js：两层登录会话、CSRF、页面访问 cookie、API Key/scope 鉴权；responsePolicy.js：no-store、CSP 与维护 503 响应；bodyParsers.js：按路由的请求体上限
 config.js        环境变量聚合与生产启动校验
