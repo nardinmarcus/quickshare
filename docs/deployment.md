@@ -29,6 +29,7 @@ npm run hash-password -- "your-admin-password"
 - 未设置 `DATABASE_URL` 时，本地开发会使用内存仓库；生产环境会立即启动失败，绝不把内存仓库当持久数据源。
 - 应用运行时不执行 `CREATE` / `ALTER`；schema 只能通过 `npm run db:migrate` 变更。
 - Vercel Git 集成会在 `main` 更新后自动部署。凡应用代码会读取新字段，必须在合并或推送该代码前，先让旧应用保持在线并完成兼容性迁移与回读；部署显示 `READY` 不能替代 schema 验证。
+- Preview 环境与生产隔离：Vercel 运行时对 Preview 同样设置 `NODE_ENV=production`，所以 Preview 也会做生产启动校验，必须有自己的 `SESSION_SECRET`、`ADMIN_PASSWORD_HASH`、`ADMIN_DASHBOARD_PASSWORD_HASH`（仅限 Preview 的测试值，不复用生产值），缺任何一个函数都会以 `FUNCTION_INVOCATION_FAILED` 起不来。数据库相关变量（`DATABASE_URL`、`POSTGRES_*`、`PG*` 等）只配给 Production 和 Development，不要勾选 Preview：Preview 没有数据库 URL 时使用内存仓库，未合并的代码就碰不到生产数据。Preview 还受 Vercel 部署保护，需在已登录 Vercel 的浏览器中访问。
 
 ### 步骤
 
