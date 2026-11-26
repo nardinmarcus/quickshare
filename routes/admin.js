@@ -18,6 +18,7 @@ const {
   computeRequestHmac,
   dashboardNamespace,
   isIdempotencyConflictError,
+  namespaceKind,
   parseIdempotencyKey
 } = require('../utils/idempotency');
 const { formatManagementDateTime } = require('../utils/management-time');
@@ -1870,6 +1871,53 @@ function createAdminRouter({ config, pageRepository, auth, publicUrls, shareOps,
         return;
       }
       return res.status(500).json({ success: false, error: 'Failed to clone page' });
+    }
+  });
+
+  // Owner operation lookup (T08): the signed-in owner confirms an
+  // operation by request identifier across namespaces from the dashboard
+  // API. Reports only the actor KIND (never a credential identity beyond
+  // its kind) plus the same restricted identifiers as the Key endpoint.
+  router.get('/admin/operations/:requestId', requireDashboardApiAdmin, async (req, res) => {
+    const parsed = parseIdempotencyKey(req.params.requestId);
+
+    if (!parsed.provided || !parsed.valid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid request id',
+        code: 'invalid_request_id',
+        retryable: false
+      });
+    }
+
+    try {
+      const record = await pageRepository.getOperationByRequestId(parsed.value);
+
+      if (!record) {
+        return res.status(404).json({
+          success: false,
+          error: 'Operation not found',
+          code: 'operation_not_found',
+          requestId: parsed.value,
+          retryable: false
+        });
+      }
+
+      return res.json({
+        success: true,
+        requestId: record.requestId,
+        action: record.action,
+        actorKind: namespaceKind(record.actorNamespace),
+        status: record.resultState,
+        shareId: record.resultShareId,
+        targetId: record.targetId,
+        contentRevision: record.resultRevision,
+        accessRevision: record.resultAccessRevision,
+        createdAt: record.createdAt
+      });
+    } catch (error) {
+      console.error('Admin operation lookup failed:', error);
+      return res.status(500).json({ success: false, error: '服务器错误' });
     }
   });
 
