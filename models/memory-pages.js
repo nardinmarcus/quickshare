@@ -1517,20 +1517,6 @@ class MemoryPageRepository {
     };
   }
 
-  async listRecent(limit = 10) {
-    return Array.from(this.pages.values())
-      .sort((left, right) => right.created_at - left.created_at)
-      .slice(0, limit)
-      .map((page) => ({
-        id: page.id,
-        created_at: page.created_at,
-        code_type: page.code_type,
-        title: page.title,
-        description: page.description,
-        is_protected: page.is_protected
-      }));
-  }
-
   async listAdminPages(options = {}) {
     const isUnpaginated = options.limit === null;
     const limit = Number.isInteger(options.limit) ? options.limit : 50;

@@ -5598,24 +5598,6 @@ app.post('/api/v1/share', privateNoStore, requireApiKey, parseShareJson, async (
   }
 });
 
-app.get('/api/pages/list/recent', requireApiAdmin, async (req, res) => {
-  try {
-    const limit = Math.min(Number.parseInt(req.query.limit || '10', 10), 50);
-    const pages = await pageRepository.listRecent(Number.isFinite(limit) ? limit : 10);
-
-    return res.json({
-      success: true,
-      pages
-    });
-  } catch (error) {
-    console.error('List recent pages failed:', error);
-    return res.status(500).json({
-      success: false,
-      error: '服务器错误'
-    });
-  }
-});
-
 app.get('/api/pages/:id', async (req, res) => {
   try {
     const publicPage = await pageRepository.getPublicById(req.params.id, Date.now());

@@ -1367,20 +1367,6 @@ class PostgresPageRepository {
     };
   }
 
-  async listRecent(limit = 10) {
-    const result = await this.pool.query(
-      `
-        SELECT id, created_at, code_type, title, description, is_protected
-        FROM pages
-        ORDER BY created_at DESC
-        LIMIT $1
-      `,
-      [limit]
-    );
-
-    return result.rows;
-  }
-
   async listAdminPages(options = {}) {
     const isUnpaginated = options.limit === null;
     const limit = Number.isInteger(options.limit) ? options.limit : 50;

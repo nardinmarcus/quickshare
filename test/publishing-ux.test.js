@@ -164,13 +164,13 @@ test('browser script uses one clipboard path and manages preview and busy state'
 });
 
 test('preview renders through the existing sandbox without storing a page', async () => {
-  const before = await app.locals.pageRepository.listRecent(1000);
+  const before = await app.locals.pageRepository.countPages();
   const payload = '<!doctype html><h1>Preview</h1></iframe><script>window.top.compromised = true</script>';
   const response = await jsonRequest('/api/pages/preview', {
     htmlContent: payload,
     codeType: 'html'
   });
-  const after = await app.locals.pageRepository.listRecent(1000);
+  const after = await app.locals.pageRepository.countPages();
 
   assert.equal(response.status, 200);
   assert.equal(response.body.success, true);
@@ -178,7 +178,7 @@ test('preview renders through the existing sandbox without storing a page', asyn
   assert.match(response.body.document, /sandbox="allow-downloads allow-forms allow-modals allow-popups allow-scripts"/);
   assert.match(response.body.document, /&lt;\/iframe&gt;&lt;script&gt;/);
   assert.doesNotMatch(response.body.document, /<\/iframe><script>window\.top\.compromised/);
-  assert.equal(after.length, before.length);
+  assert.equal(after, before);
 });
 
 test('preview supports markdown and rejects empty content', async () => {

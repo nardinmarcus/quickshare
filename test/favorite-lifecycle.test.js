@@ -337,7 +337,7 @@ test('deleting a Favorite Share removes the entity and its favorite state from m
   assert.equal(exportPayload.pages.some(page => page.id === sharedPage.urlId), false);
 });
 
-test('public routes, recent data, view events, and statistics never expose Favorite Share state', async () => {
+test('public routes, view events, and statistics never expose Favorite Share state', async () => {
   const sharedPage = await createViaShareApi({
     htmlContent: '<h1>Public boundary content</h1>',
     title: 'Public boundary content',
@@ -346,16 +346,12 @@ test('public routes, recent data, view events, and statistics never expose Favor
     isFavorite: true
   });
   await app.locals.pageRepository.setFavorite(sharedPage.urlId, true);
-  const homepageCookie = await loginHomepage();
   const dashboardCookie = await loginDashboard();
   const storedBeforeView = await app.locals.pageRepository.getById(sharedPage.urlId);
   const viewCountBefore = storedBeforeView.view_count;
 
   const passwordGate = await request(`/view/${sharedPage.urlId}`);
   const metadataResponse = await request(`/api/pages/${sharedPage.urlId}`);
-  const recentResponse = await request('/api/pages/list/recent?limit=50', {
-    headers: { Cookie: homepageCookie }
-  });
   const passwordResponse = await request(`/view/${sharedPage.urlId}/password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -379,7 +375,6 @@ test('public routes, recent data, view events, and statistics never expose Favor
   });
   const storedAfterView = await app.locals.pageRepository.getById(sharedPage.urlId);
   const metadata = JSON.parse(metadataResponse.text);
-  const recent = JSON.parse(recentResponse.text).pages.find(page => page.id === sharedPage.urlId);
   const password = JSON.parse(passwordResponse.text);
   const favoriteFieldPattern = /isFavorite|is_favorite|data-favorite-toggle|admin-favorite/;
 
@@ -390,9 +385,6 @@ test('public routes, recent data, view events, and statistics never expose Favor
   assert.equal(metadataResponse.status, 200);
   assert.equal(Object.hasOwn(metadata.page, 'isFavorite'), false);
   assert.equal(Object.hasOwn(metadata.page, 'is_favorite'), false);
-  assert.ok(recent);
-  assert.equal(Object.hasOwn(recent, 'isFavorite'), false);
-  assert.equal(Object.hasOwn(recent, 'is_favorite'), false);
   assert.deepEqual(password, {
     valid: true,
     redirectUrl: `/view/${sharedPage.urlId}`
